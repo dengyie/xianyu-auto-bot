@@ -176,6 +176,10 @@ function showSection(sectionName) {
         stopOrdersStream();
     }
 
+    if (sectionName !== 'online-im') {
+        stopChatStream();
+    }
+
     // 如果切换到非日志页面，停止自动刷新
     if (sectionName !== 'logs' && window.autoRefreshInterval) {
     clearInterval(window.autoRefreshInterval);
@@ -197,6 +201,11 @@ function showSection(sectionName) {
         clearTimeout(aboutRuntimeRetryTimer);
         aboutRuntimeRetryTimer = null;
     }
+}
+
+function getAuthToken() {
+    authToken = localStorage.getItem('auth_token');
+    return authToken || '';
 }
 
 // 移动端侧边栏切换
@@ -3319,9 +3328,10 @@ async function fetchJSON(url, opts = {}) {
     toggleLoading(true);
     try {
     // 添加认证头
-    if (authToken) {
+    const token = getAuthToken();
+    if (token) {
         opts.headers = opts.headers || {};
-        opts.headers['Authorization'] = `Bearer ${authToken}`;
+        opts.headers['Authorization'] = `Bearer ${token}`;
     }
 
     const res = await fetch(url, opts);
@@ -5368,7 +5378,8 @@ async function logout() {
 
 // 检查认证状态
 async function checkAuth() {
-    if (!authToken) {
+    const token = getAuthToken();
+    if (!token) {
     window.location.href = '/';
     return false;
     }
@@ -5376,7 +5387,7 @@ async function checkAuth() {
     try {
     const response = await fetch('/verify', {
         headers: {
-        'Authorization': `Bearer ${authToken}`
+        'Authorization': `Bearer ${token}`
         }
     });
     const result = await response.json();
@@ -9047,10 +9058,12 @@ async function deleteDeliveryRule(ruleId) {
 
 // 加载用户设置
 async function loadUserSettings() {
+    const token = getAuthToken();
+    if (!token) return;
     try {
         const response = await fetch(`${apiBase}/user-settings`, {
             headers: {
-                'Authorization': `Bearer ${authToken}`
+                'Authorization': `Bearer ${token}`
             }
         });
 
@@ -9421,10 +9434,12 @@ function applyMenuVisibility() {
 
 // 加载菜单设置
 async function loadMenuSettings() {
+    const token = getAuthToken();
+    if (!token) return;
     try {
         const response = await fetch(`${apiBase}/user-settings`, {
             headers: {
-                'Authorization': `Bearer ${authToken}`
+                'Authorization': `Bearer ${token}`
             }
         });
 
@@ -20200,259 +20215,954 @@ document.head.appendChild(hotUpdateStyle);
 
 // ==================== 在线客服IM功能 ====================
 
-// 存储IM账号数据
-let imAccountsData = [];
+let chatCurrentCookieId = '';
+let chatCurrentChatId = '';
+let chatCurrentToUserId = '';
+let chatCurrentSenderName = '';
+let chatCurrentItemId = '';
+let chatSessionsCache = [];
+let chatOldestMsgId = null;
+let chatSseAbortController = null;
+let chatSseRetryCount = 0;
+let chatSseShouldRun = false;
 
-/**
- * 加载IM账号列表
- */
-async function loadImAccountList() {
+function buildSafeCheckboxId(prefix, rawValue) {
+    const normalized = String(rawValue || '')
+        .trim()
+        .replace(/[^a-zA-Z0-9_-]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    return `${prefix}_${normalized || 'item'}`;
+}
+
+function normalizeChatSessionPreview(content, contentType) {
+    if (Number(contentType) === 2) return '[图片]';
+    const text = String(content || '').trim();
+    if (!text) return '[暂无文本内容]';
+    const hiddenMarkers = new Set(['[系统消息]', '[空消息]', '点击补拉该会话历史消息']);
+    if (hiddenMarkers.has(text)) return '[系统/占位消息]';
+    return text;
+}
+
+function resolveSessionDisplayName(session) {
+    return session?.fish_nick
+        || session?.buyer_name_resolved
+        || session?.buyer_name
+        || (session?.direction === 2 ? (session?.sender_name || session?.sender_id || session?.chat_id) : (session?.sender_name || session?.chat_id))
+        || session?.chat_id
+        || '-';
+}
+
+function resolveSessionAvatar(session) {
+    if (session?.avatar) {
+        return { type: 'image', value: session.avatar };
+    }
+    const displayName = resolveSessionDisplayName(session);
+    return { type: 'text', value: (displayName || '?').charAt(0).toUpperCase() };
+}
+
+function resolveSessionPreview(session) {
+    return session?.item_title
+        || session?.order_status_name
+        || normalizeChatSessionPreview(session?.content, session?.content_type);
+}
+
+function getChatSessionState(session) {
+    const status = String(session?.remote_history_status || '').trim();
+    if (status === 'empty') {
+        return {
+            tag: '无历史',
+            preview: '该订单候选会话未发现可补拉的闲鱼聊天历史',
+            submeta: session?.remote_history_checked_at ? `最近验证: ${session.remote_history_checked_at}` : '已验证为空历史',
+            className: 'empty-history'
+        };
+    }
+    if (status === 'unrenderable') {
+        return {
+            tag: '待适配',
+            preview: '闲鱼返回了历史，但当前版本暂未成功解析成可展示消息',
+            submeta: session?.remote_history_checked_at ? `最近验证: ${session.remote_history_checked_at}` : '历史已返回但不可展示',
+            className: 'unrenderable-history'
+        };
+    }
+    if (session?.hydration_source === 'orders') {
+        return {
+            tag: '候选',
+            preview: '订单推断会话，可尝试补拉闲鱼聊天历史',
+            submeta: session?.remote_history_note || '当前仅根据订单信息推断，未确认存在真实聊天历史',
+            className: 'candidate-only'
+        };
+    }
+    return {
+        tag: '',
+        preview: resolveSessionPreview(session),
+        submeta: session?.order_status_name || session?.item_tips || '',
+        className: ''
+    };
+}
+
+function updateChatHeaderMeta(session) {
+    const headerItemId = document.getElementById('chatHeaderItemId');
+    const headerMeta = document.getElementById('chatHeaderMeta');
+    if (headerItemId) {
+        headerItemId.textContent = session?.item_id ? `商品: ${session.item_id}` : '';
+    }
+    if (!headerMeta) return;
+    const parts = [];
+    if (session?.item_title) parts.push(session.item_title);
+    if (session?.item_price) parts.push(`￥${session.item_price}`);
+    if (session?.order_status_name) parts.push(session.order_status_name);
+    if (session?.item_tips) parts.push(session.item_tips);
+    headerMeta.textContent = parts.join(' · ');
+}
+
+function scoreChatSession(session) {
+    const preview = normalizeChatSessionPreview(session?.content, session?.content_type);
+    let score = 0;
+    if (session?.hydration_source === 'orders') score += 5;
+    if (preview !== '[系统/占位消息]' && preview !== '[暂无文本内容]') score += 20;
+    if (String(session?.buyer_name || '').trim()) score += 8;
+    if (String(session?.item_id || '').trim()) score += 4;
+    if (String(session?.created_at || '').trim()) score += 2;
+    return score;
+}
+
+function sortChatSessions(sessions) {
+    return [...(sessions || [])].sort((a, b) => {
+        const scoreDiff = scoreChatSession(b) - scoreChatSession(a);
+        if (scoreDiff !== 0) return scoreDiff;
+        return String(b?.created_at || '').localeCompare(String(a?.created_at || ''));
+    });
+}
+
+function mergeChatSessionLists(primarySessions, secondarySessions) {
+    const merged = [];
+    const seen = new Set();
+    [...(primarySessions || []), ...(secondarySessions || [])].forEach(session => {
+        const chatId = String(session?.chat_id || '').trim();
+        if (!chatId || seen.has(chatId)) return;
+        seen.add(chatId);
+        merged.push(session);
+    });
+    return sortChatSessions(merged);
+}
+
+async function refreshChatAccounts() {
+    const body = document.getElementById('chatAccountsBody');
+    if (!body) return;
+    body.innerHTML = '<div class="text-center text-muted py-4 small"><div class="spinner-border spinner-border-sm"></div></div>';
     try {
-        // 重置账号密码显示为默认值
-        const usernameEl = document.getElementById('imDisplayUsername');
-        const passwordEl = document.getElementById('imDisplayPassword');
-        if (usernameEl) usernameEl.textContent = '-';
-        if (passwordEl) passwordEl.textContent = '-';
-
-        const response = await fetch(`${apiBase}/cookies/details`, {
-            headers: {
-                'Authorization': `Bearer ${authToken}`
-            }
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            imAccountsData = data || [];
-
-            const select = document.getElementById('imAccountSelect');
-            if (select) {
-                select.innerHTML = '<option value="">-- 选择账号 --</option>';
-
-                imAccountsData.forEach(account => {
-                    const option = document.createElement('option');
-                    option.value = account.id;
-                    option.textContent = account.id;
-                    // 仅缓存非敏感账号信息，敏感字段按需拉取
-                    option.dataset.username = account.username || '';
-                    select.appendChild(option);
-                });
-            }
-        } else {
-            console.error('加载IM账号列表失败:', response.status);
+        const result = await fetchJSON(`${apiBase}/api/chat/accounts`);
+        if (!result.success) {
+            body.innerHTML = '<div class="text-center text-muted py-4 small">加载失败</div>';
+            return;
         }
+        const accounts = result.accounts || [];
+        if (!accounts.length) {
+            body.innerHTML = '<div class="text-center text-muted py-4 small">暂无可用账号</div>';
+            return;
+        }
+        body.innerHTML = '';
+        accounts.forEach(account => {
+            const div = document.createElement('div');
+            div.className = 'chat-account-item' + (account.id === chatCurrentCookieId ? ' active' : '');
+            div.innerHTML = `<div class="chat-account-dot ${account.connected ? 'online' : 'offline'}"></div><div class="chat-account-name" title="${escapeHtml(account.id)}">${escapeHtml(account.name || account.id)}</div>`;
+            div.onclick = () => selectChatAccount(account.id);
+            body.appendChild(div);
+        });
     } catch (error) {
-        console.error('加载IM账号列表失败:', error);
+        console.error('加载账号列表失败:', error);
+        body.innerHTML = '<div class="text-center text-muted py-4 small">加载失败</div>';
     }
 }
 
-/**
- * 账号选择变化时的处理
- */
-async function fetchImAccountDetails(accountId) {
-    const response = await fetch(`${apiBase}/cookie/${encodeURIComponent(accountId)}/details?include_secrets=true`, {
-        headers: {
-            'Authorization': `Bearer ${authToken}`
+async function selectChatAccount(cookieId) {
+    chatCurrentCookieId = cookieId;
+    chatCurrentChatId = '';
+    chatCurrentToUserId = '';
+    chatCurrentSenderName = '';
+    chatCurrentItemId = '';
+    chatOldestMsgId = null;
+    const placeholder = document.getElementById('chatMainPlaceholder');
+    const active = document.getElementById('chatActiveArea');
+    if (placeholder) placeholder.classList.remove('d-none');
+    if (active) active.classList.add('d-none');
+    hideReplyPanel();
+    await refreshChatAccounts();
+    await refreshChatSessions();
+}
+
+async function refreshChatSessions() {
+    const body = document.getElementById('chatSessionsBody');
+    if (!body) return;
+    if (!chatCurrentCookieId) {
+        body.innerHTML = '<div class="text-center text-muted py-4 small">请先选择账号</div>';
+        chatSessionsCache = [];
+        return;
+    }
+    body.innerHTML = '<div class="text-center text-muted py-4 small"><div class="spinner-border spinner-border-sm"></div></div>';
+    try {
+        const result = await fetchJSON(`${apiBase}/api/chat/sessions?cookie_id=${encodeURIComponent(chatCurrentCookieId)}&include_order_fallback=true&limit=120`);
+        if (!result.success) {
+            body.innerHTML = '<div class="text-center text-muted py-4 small">加载失败</div>';
+            return;
+        }
+        chatSessionsCache = sortChatSessions(result.sessions || []);
+        chatSessionsCache = await enrichSessionsWithOrdersFallback(chatSessionsCache);
+        if (!chatSessionsCache.length) {
+            body.innerHTML = '<div class="text-center text-muted py-4 small">暂无会话记录；若该账号已有订单，会自动显示可补拉历史的会话入口</div>';
+            return;
+        }
+        renderChatSessions(chatSessionsCache);
+        mergeHydrationFallbackSessions();
+    } catch (error) {
+        console.error('获取会话列表失败:', error);
+        body.innerHTML = '<div class="text-center text-muted py-4 small">加载失败</div>';
+    }
+}
+
+function buildChatSessionsFromOrdersData(orders, cookieId) {
+    const sessions = [];
+    const seen = new Set();
+    (orders || []).forEach(order => {
+        if (String(order.cookie_id || '') !== String(cookieId || '')) return;
+        const sid = String(order.sid || '').trim();
+        if (!sid) return;
+        const chatId = sid.split('@')[0];
+        if (!chatId || seen.has(chatId)) return;
+        seen.add(chatId);
+        sessions.push({
+            chat_id: chatId,
+            sender_id: order.buyer_id || '',
+            buyer_id: order.buyer_id || '',
+            sender_name: order.buyer_nick || order.buyer_id || chatId,
+            buyer_name: order.buyer_nick || '',
+            content: '点击补拉该会话历史消息',
+            content_type: 1,
+            item_id: order.item_id || '',
+            direction: 2,
+            created_at: order.updated_at || order.platform_created_at || order.created_at || '',
+            hydration_source: 'orders',
+        });
+    });
+    sessions.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    return sessions;
+}
+
+async function enrichSessionsWithOrdersFallback(existingSessions) {
+    const sessions = Array.isArray(existingSessions) ? [...existingSessions] : [];
+    if (!chatCurrentCookieId) return sessions;
+    const hasOnlySparseLocalSessions = sessions.length <= 1;
+    if (!hasOnlySparseLocalSessions) {
+        return sortChatSessions(sessions);
+    }
+    try {
+        const ordersResult = await fetchJSON(`${apiBase}/api/orders`);
+        const orderSessions = buildChatSessionsFromOrdersData(ordersResult?.data || [], chatCurrentCookieId);
+        return mergeChatSessionLists(sessions, orderSessions);
+    } catch (error) {
+        console.debug('从订单补充会话列表失败:', error);
+    }
+    return sortChatSessions(sessions);
+}
+
+function renderChatSessions(sessions) {
+    const body = document.getElementById('chatSessionsBody');
+    if (!body) return;
+    if (!sessions.length) {
+        body.innerHTML = '<div class="text-center text-muted py-4 small">暂无会话</div>';
+        return;
+    }
+    body.innerHTML = '';
+    sessions.forEach(session => {
+        const div = document.createElement('div');
+        div.className = 'chat-session-item' + (session.chat_id === chatCurrentChatId ? ' active' : '');
+        const displayName = resolveSessionDisplayName(session);
+        const avatar = resolveSessionAvatar(session);
+        const sessionState = getChatSessionState(session);
+        const preview = String(sessionState.preview || resolveSessionPreview(session)).substring(0, 30);
+        const hydrationHint = sessionState.tag ? `<span class="chat-session-tag ${escapeHtml(sessionState.className)}">${escapeHtml(sessionState.tag)}</span>` : '';
+        const baseSubMeta = String(sessionState.submeta || '').trim();
+        const priceMeta = session.item_price ? `<span class="chat-session-price">￥${escapeHtml(String(session.item_price))}</span>` : '';
+        div.innerHTML = `
+            <div class="chat-session-avatar">${avatar.type === 'image' ? `<img src="${escapeHtml(avatar.value)}" alt="avatar" class="chat-session-avatar-image">` : escapeHtml(avatar.value)}</div>
+            <div class="chat-session-info">
+                <div class="chat-session-name">${escapeHtml(displayName)}${hydrationHint}</div>
+                <div class="chat-session-preview">${escapeHtml(preview)}</div>
+                <div class="chat-session-submeta">${escapeHtml(baseSubMeta)}${priceMeta}</div>
+            </div>
+            <div class="chat-session-time">${escapeHtml(formatChatTime(session.created_at))}</div>
+        `;
+        div.onclick = () => selectChatSession(session);
+        body.appendChild(div);
+    });
+}
+
+function mergeHydrationFallbackSessions() {
+    if (!chatCurrentCookieId) return;
+    fetchJSON(`${apiBase}/api/chat/sessions?cookie_id=${encodeURIComponent(chatCurrentCookieId)}&include_order_fallback=true&limit=120`)
+        .then(result => {
+            if (!result?.success || !Array.isArray(result.sessions)) return;
+            const mergedSessions = mergeChatSessionLists(chatSessionsCache, result.sessions);
+            if (mergedSessions.length !== chatSessionsCache.length) {
+                chatSessionsCache = mergedSessions;
+                renderChatSessions(chatSessionsCache);
+            }
+
+            if (chatSessionsCache.length <= 1) {
+                enrichSessionsWithOrdersFallback(chatSessionsCache)
+                    .then(mergedSessions => {
+                        if (Array.isArray(mergedSessions) && mergedSessions.length > chatSessionsCache.length) {
+                            chatSessionsCache = sortChatSessions(mergedSessions);
+                            renderChatSessions(chatSessionsCache);
+                        }
+                    })
+                    .catch(error => {
+                        console.debug('订单会话增强失败:', error);
+                    });
+            }
+        })
+        .catch(error => {
+            console.debug('补充可补拉会话失败:', error);
+        });
+}
+
+function filterChatSessions() {
+    const keyword = (document.getElementById('chatSearchInput')?.value || '').toLowerCase();
+    if (!keyword) {
+        renderChatSessions(sortChatSessions(chatSessionsCache));
+        return;
+    }
+    renderChatSessions(sortChatSessions(chatSessionsCache.filter(session =>
+        String(session.sender_name || '').toLowerCase().includes(keyword)
+        || String(session.buyer_name || '').toLowerCase().includes(keyword)
+        || String(session.chat_id || '').includes(keyword)
+        || String(normalizeChatSessionPreview(session.content, session.content_type) || '').toLowerCase().includes(keyword)
+    )));
+}
+
+async function selectChatSession(session) {
+    session = { ...session, content: normalizeChatSessionPreview(session?.content, session?.content_type) };
+    chatCurrentChatId = session.chat_id;
+    chatCurrentToUserId = session.buyer_id || (session.direction === 2 ? (session.sender_id || '') : '');
+    chatCurrentSenderName = resolveSessionDisplayName(session);
+    chatCurrentItemId = session.item_id || '';
+    chatOldestMsgId = null;
+
+    const placeholder = document.getElementById('chatMainPlaceholder');
+    const active = document.getElementById('chatActiveArea');
+    if (placeholder) placeholder.classList.add('d-none');
+    if (active) active.classList.remove('d-none');
+
+    const headerName = document.getElementById('chatHeaderName');
+    if (headerName) headerName.textContent = chatCurrentSenderName;
+    updateChatHeaderMeta(session);
+
+    renderChatSessions(chatSessionsCache);
+    await loadChatMessages(false, shouldForceHydrateSession(session));
+
+    try {
+        const result = await fetchJSON(`${apiBase}/api/chat/messages?cookie_id=${encodeURIComponent(chatCurrentCookieId)}&chat_id=${encodeURIComponent(chatCurrentChatId)}&limit=50`);
+        if (result.success && Array.isArray(result.messages)) {
+            const buyerMessage = result.messages.find(message => message.direction === 2);
+            if (buyerMessage) {
+                if (!chatCurrentToUserId) chatCurrentToUserId = buyerMessage.sender_id;
+                if (!chatCurrentSenderName || chatCurrentSenderName === chatCurrentChatId) {
+                    chatCurrentSenderName = buyerMessage.sender_name || buyerMessage.sender_id || chatCurrentChatId;
+                    if (headerName) headerName.textContent = chatCurrentSenderName;
+                }
+            }
+            const messageWithItem = [...result.messages].reverse().find(message => {
+                const itemId = String(message.item_id || '');
+                return itemId && itemId !== 'None' && !itemId.startsWith('auto_');
+            });
+            if (messageWithItem) {
+                chatCurrentItemId = messageWithItem.item_id;
+                updateChatHeaderMeta({ ...session, item_id: chatCurrentItemId });
+            }
+        }
+    } catch (error) {
+        console.debug('补充会话信息失败:', error);
+    }
+
+    if (!document.getElementById('chatReplyPanel')?.classList.contains('d-none') && chatCurrentItemId) {
+        await loadItemKeywords();
+    }
+
+    document.getElementById('chatInputBox')?.focus();
+}
+
+function shouldForceHydrateSession(session) {
+    if (!session) return false;
+    if (session.remote_history_status === 'empty') return false;
+    if (session.hydration_source === 'orders') return true;
+    const content = String(session.content || '').trim();
+    if (!content || content === '点击补拉该会话历史消息' || content === '[系统消息]') return true;
+    return false;
+}
+
+function shouldRebuildEmptySession(messages) {
+    if (!Array.isArray(messages) || !messages.length) return false;
+    let renderableCount = 0;
+    for (const message of messages) {
+        const content = String(message?.content || '').trim();
+        const imageUrl = String(message?.image_url || '').trim();
+        if (imageUrl) {
+            renderableCount += 1;
+            continue;
+        }
+        if (content && content !== '[空消息]') {
+            renderableCount += 1;
+        }
+    }
+    return renderableCount === 0;
+}
+
+function renderChatEmptyState(session, debug) {
+    const status = String(debug?.remote_history_status || session?.remote_history_status || '').trim();
+    const checkedAt = String(debug?.remote_history_checked_at || session?.remote_history_checked_at || '').trim();
+    const detail = String(debug?.message || '').trim();
+    if (status === 'empty') {
+        const checkedText = checkedAt ? `最近验证时间：${checkedAt}` : '该会话已验证为空历史';
+        return `<div class="text-center text-muted py-4"><div class="small mb-2">这是订单推断出来的候选会话，当前未发现可补拉的闲鱼聊天历史</div><div class="small text-warning">${escapeHtml(checkedText)}</div></div>`;
+    }
+    if (status === 'unrenderable') {
+        return `<div class="text-center text-muted py-4"><div class="small mb-2">闲鱼返回了历史消息，但当前版本还不能完整展示该会话内容</div><div class="small text-warning">${escapeHtml(detail || '请查看后端日志继续适配消息结构')}</div></div>`;
+    }
+    return `<div class="text-center text-muted py-4"><div class="small mb-2">暂无本地消息记录，也未能从闲鱼补拉到该会话历史</div><div class="small text-warning">${escapeHtml(detail || '补拉诊断已输出到控制台')}</div></div>`;
+}
+
+async function loadChatMessages(append = false, forceHydrate = false) {
+    if (!chatCurrentCookieId || !chatCurrentChatId) return;
+    const area = document.getElementById('chatMessagesArea');
+    if (!area) return;
+    if (!append) {
+        area.innerHTML = '<div class="text-center text-muted py-4"><div class="spinner-border spinner-border-sm"></div></div>';
+    }
+
+    try {
+        let url = `${apiBase}/api/chat/messages?cookie_id=${encodeURIComponent(chatCurrentCookieId)}&chat_id=${encodeURIComponent(chatCurrentChatId)}&limit=50`;
+        if (append && chatOldestMsgId) {
+            url += `&before_id=${chatOldestMsgId}`;
+        }
+        if (!append && forceHydrate) {
+            url += '&hydrate_remote=true';
+        }
+        const result = await fetchJSON(url);
+        if (!result.success) {
+            if (!append) area.innerHTML = '<div class="text-center text-muted py-4">加载失败</div>';
+            return;
+        }
+        if (!append && shouldRebuildEmptySession(result.messages) && chatCurrentCookieId && chatCurrentChatId) {
+            try {
+                const rebuilt = await fetchJSON(`${apiBase}/api/chat/messages/hydrate?cookie_id=${encodeURIComponent(chatCurrentCookieId)}&chat_id=${encodeURIComponent(chatCurrentChatId)}&limit=50&rebuild=true`, {
+                    method: 'POST'
+                });
+                if (rebuilt?.success && Array.isArray(rebuilt.messages) && rebuilt.messages.length) {
+                    const rebuiltMessages = rebuilt.messages || [];
+                    if (rebuiltMessages.length > 0) {
+                        chatOldestMsgId = rebuiltMessages[0].id;
+                    }
+                    area.innerHTML = renderChatMessages(rebuiltMessages);
+                    area.scrollTop = area.scrollHeight;
+                    return;
+                }
+            } catch (rebuildError) {
+                console.warn('重建聊天历史失败:', rebuildError);
+            }
+        }
+
+        if (!append && shouldRebuildEmptySession(result.messages) && chatCurrentCookieId && chatCurrentChatId) {
+            try {
+                const debug = await fetchJSON(`${apiBase}/api/chat/messages/hydrate-debug?cookie_id=${encodeURIComponent(chatCurrentCookieId)}&chat_id=${encodeURIComponent(chatCurrentChatId)}&limit=50&rebuild=true`);
+                console.warn('聊天历史补拉调试信息:', debug);
+                area.innerHTML = renderChatEmptyState(chatSessionsCache.find(item => item.chat_id === chatCurrentChatId) || {}, debug);
+                return;
+            } catch (debugError) {
+                console.error('获取聊天历史调试信息失败:', debugError);
+            }
+        }
+
+        if (!append && result.messages && result.messages.length === 0 && chatCurrentCookieId && chatCurrentChatId) {
+            try {
+                const debug = await fetchJSON(`${apiBase}/api/chat/messages/hydrate-debug?cookie_id=${encodeURIComponent(chatCurrentCookieId)}&chat_id=${encodeURIComponent(chatCurrentChatId)}&limit=50`);
+                console.warn('聊天历史补拉调试信息:', debug);
+                area.innerHTML = renderChatEmptyState(chatSessionsCache.find(item => item.chat_id === chatCurrentChatId) || {}, debug);
+                return;
+            } catch (debugError) {
+                console.error('获取聊天历史调试信息失败:', debugError);
+            }
+        }
+        const messages = result.messages || [];
+        if (messages.length > 0) {
+            chatOldestMsgId = messages[0].id;
+        }
+        if (append) {
+            const previousHeight = area.scrollHeight;
+            area.insertAdjacentHTML('afterbegin', renderChatMessages(messages));
+            area.scrollTop = area.scrollHeight - previousHeight;
+        } else {
+            if (messages.length) {
+                area.innerHTML = renderChatMessages(messages);
+            } else {
+                const currentSession = chatSessionsCache.find(item => item.chat_id === chatCurrentChatId) || {};
+                area.innerHTML = renderChatEmptyState(currentSession, currentSession);
+            }
+            area.scrollTop = area.scrollHeight;
+        }
+    } catch (error) {
+        console.error('加载消息失败:', error);
+        if (!append && chatCurrentCookieId && chatCurrentChatId) {
+            try {
+                const debug = await fetchJSON(`${apiBase}/api/chat/messages/hydrate-debug?cookie_id=${encodeURIComponent(chatCurrentCookieId)}&chat_id=${encodeURIComponent(chatCurrentChatId)}&limit=50`);
+                console.warn('聊天历史补拉调试信息:', debug);
+            } catch (debugError) {
+                console.error('获取聊天历史调试信息失败:', debugError);
+            }
+        }
+        if (!append) area.innerHTML = '<div class="text-center text-muted py-4">加载失败</div>';
+    }
+}
+
+function loadMoreChatMessages() {
+    loadChatMessages(true);
+}
+
+function renderChatMessages(messages) {
+    let html = '';
+    let lastDate = '';
+    messages.forEach(message => {
+        const dateStr = String(message.created_at || '').substring(0, 10);
+        if (dateStr && dateStr !== lastDate) {
+            lastDate = dateStr;
+            html += `<div class="chat-date-divider"><span>${escapeHtml(dateStr)}</span></div>`;
+        }
+        const isOutgoing = message.direction === 1;
+        const timeStr = String(message.created_at || '').substring(11, 16);
+        let contentHtml = '';
+        const extra = (() => {
+            try {
+                return message.extra_json ? JSON.parse(message.extra_json) : null;
+            } catch (error) {
+                return null;
+            }
+        })();
+        const itemShare = extra?.item_share || null;
+        if (message.content_type === 2 && message.image_url) {
+            contentHtml = `<img src="${escapeHtml(message.image_url)}" class="chat-msg-image" onclick="window.open(this.src, '_blank')">`;
+            if (message.content && message.content !== '[图片]') {
+                contentHtml += `<div class="mt-1">${escapeHtml(message.content)}</div>`;
+            }
+        } else if (message.content_type === 3) {
+            const poster = message.image_url ? `<img src="${escapeHtml(message.image_url)}" class="chat-msg-image mb-2" onclick="window.open('${escapeHtml(message.media_url || message.image_url)}', '_blank')">` : '';
+            const link = message.media_url ? `<a href="${escapeHtml(message.media_url)}" target="_blank" rel="noopener noreferrer" class="chat-rich-link">打开视频</a>` : '';
+            contentHtml = `<div class="chat-rich-card">${poster}<div class="chat-rich-title">${escapeHtml(message.content || '[视频]')}</div>${link}</div>`;
+        } else if (message.content_type === 4) {
+            const linkTarget = message.link_url || extra?.payload?.targetUrl || '#';
+            contentHtml = `<div class="chat-rich-card"><div class="chat-rich-title">${escapeHtml(message.content || '[链接]')}</div><a href="${escapeHtml(linkTarget)}" target="_blank" rel="noopener noreferrer" class="chat-rich-link">打开链接</a></div>`;
+        } else if (message.content_type === 5) {
+            const linkTarget = message.link_url || '#';
+            const image = itemShare?.image_url || message.image_url;
+            contentHtml = `<div class="chat-rich-card chat-item-share-card">${image ? `<img src="${escapeHtml(image)}" class="chat-msg-image mb-2" onclick="window.open('${escapeHtml(linkTarget === '#' ? image : linkTarget)}', '_blank')">` : ''}<div class="chat-rich-title">${escapeHtml(itemShare?.title || message.content || '[商品分享]')}</div>${itemShare?.item_id ? `<div class="chat-rich-subtitle">商品ID: ${escapeHtml(String(itemShare.item_id))}</div>` : ''}${linkTarget && linkTarget !== '#' ? `<a href="${escapeHtml(linkTarget)}" target="_blank" rel="noopener noreferrer" class="chat-rich-link">查看商品</a>` : ''}</div>`;
+        } else if (message.content_type === 6) {
+            const buttonText = extra?.button_text;
+            const linkTarget = message.link_url || '#';
+            contentHtml = `<div class="chat-rich-card"><div class="chat-rich-title">${escapeHtml(extra?.title || message.content || '[系统卡片]')}</div>${buttonText ? `<div class="chat-rich-subtitle">${escapeHtml(buttonText)}</div>` : ''}${linkTarget && linkTarget !== '#' ? `<a href="${escapeHtml(linkTarget)}" target="_blank" rel="noopener noreferrer" class="chat-rich-link">打开卡片</a>` : ''}</div>`;
+        } else {
+            const normalizedContent = String(message.content || '').trim() || '[空消息]';
+            contentHtml = escapeHtml(normalizedContent).replace(/\n/g, '<br>');
+        }
+        const sourceHtml = message.reply_source ? `<span class="chat-msg-source">${escapeHtml(message.reply_source)}</span>` : '';
+        html += `<div class="chat-msg-row ${isOutgoing ? 'outgoing' : 'incoming'}"><div><div class="chat-msg-bubble">${contentHtml}</div><div class="chat-msg-meta">${escapeHtml(timeStr)}${sourceHtml}</div></div></div>`;
+    });
+    return html;
+}
+
+async function sendChatMessage() {
+    const input = document.getElementById('chatInputBox');
+    const message = String(input?.value || '').trim();
+    if (!message) return;
+    if (!chatCurrentCookieId || !chatCurrentChatId || !chatCurrentToUserId) {
+        showToast('无法发送：缺少会话信息', 'warning');
+        return;
+    }
+    const button = document.getElementById('chatSendBtn');
+    if (button) {
+        button.disabled = true;
+        button.textContent = '...';
+    }
+    try {
+        const result = await fetchJSON(`${apiBase}/api/chat/send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                cookie_id: chatCurrentCookieId,
+                chat_id: chatCurrentChatId,
+                to_user_id: chatCurrentToUserId,
+                message,
+            })
+        });
+        if (result.success) {
+            if (input) input.value = '';
+        } else {
+            showToast(result.detail || result.message || '发送失败', 'danger');
+        }
+    } catch (error) {
+        console.error('发送消息失败:', error);
+        showToast('发送消息失败', 'danger');
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.textContent = '发送';
+        }
+    }
+}
+
+function appendChatMessage(message) {
+    const area = document.getElementById('chatMessagesArea');
+    if (!area) return;
+    const emptyHint = area.querySelector('.text-center.text-muted');
+    if (emptyHint) emptyHint.remove();
+    area.insertAdjacentHTML('beforeend', renderChatMessages([message]));
+    area.scrollTop = area.scrollHeight;
+}
+
+function handleChatInputKeydown(event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        sendChatMessage();
+    }
+}
+
+function initChatSSE() {
+    if (chatSseAbortController) {
+        chatSseAbortController.abort();
+        chatSseAbortController = null;
+    }
+    chatSseShouldRun = true;
+    chatSseRetryCount = 0;
+    connectChatStream();
+}
+
+async function connectChatStream() {
+    if (!chatSseShouldRun) return;
+    const controller = new AbortController();
+    chatSseAbortController = controller;
+    try {
+        const token = getAuthToken();
+        if (!token) {
+            stopChatStream();
+            return;
+        }
+        const response = await fetch(`${apiBase}/api/chat/stream`, {
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Accept': 'text/event-stream'
+            },
+            cache: 'no-store',
+            signal: controller.signal
+        });
+        if (!response.ok) {
+            if (response.status === 401) {
+                stopChatStream();
+                localStorage.removeItem('auth_token');
+                showToast('登录已失效，请重新登录', 'warning');
+                window.location.href = '/';
+                return;
+            }
+            throw new Error(`HTTP ${response.status}`);
+        }
+        chatSseRetryCount = 0;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split('\n\n');
+            buffer = parts.pop() || '';
+            for (const part of parts) {
+                processChatSSEEvent(part);
+            }
+        }
+    } catch (error) {
+        if (!controller.signal.aborted) {
+            chatSseRetryCount += 1;
+            setTimeout(() => connectChatStream(), Math.min(chatSseRetryCount * 3000, 30000));
+        }
+    }
+}
+
+function stopChatStream() {
+    chatSseShouldRun = false;
+    if (chatSseAbortController) {
+        chatSseAbortController.abort();
+        chatSseAbortController = null;
+    }
+}
+
+function processChatSSEEvent(raw) {
+    let eventType = 'message';
+    let dataStr = '';
+    for (const line of raw.split('\n')) {
+        if (line.startsWith('event: ')) {
+            eventType = line.substring(7).trim();
+        } else if (line.startsWith('data: ')) {
+            dataStr = line.substring(6);
+        }
+    }
+    if (eventType === 'ping' || !dataStr) return;
+
+    try {
+        const event = JSON.parse(dataStr);
+        const data = event.data || {};
+        data.cookie_id = data.cookie_id || event.cookie_id;
+        if (data.cookie_id !== chatCurrentCookieId) {
+            return;
+        }
+        updateSessionFromSSE(data);
+        if (data.chat_id === chatCurrentChatId) {
+            appendChatMessage({
+                msg_id: data.msg_id,
+                chat_id: data.chat_id,
+                sender_id: data.sender_id,
+                sender_name: data.sender_name,
+                content: data.content,
+                content_type: data.content_type,
+                image_url: data.image_url,
+                item_id: data.item_id,
+                direction: data.direction,
+                reply_source: data.reply_source,
+                media_url: data.media_url,
+                link_url: data.link_url,
+                extra_json: data.extra_json,
+                created_at: data.created_at || new Date().toISOString().replace('T', ' ').substring(0, 19)
+            });
+        }
+    } catch (error) {
+        console.error('SSE解析失败:', error);
+    }
+}
+
+function updateSessionFromSSE(data) {
+    const preview = {
+        chat_id: data.chat_id,
+        sender_id: data.sender_id,
+        sender_name: data.sender_name,
+        buyer_id: data.direction === 2 ? data.sender_id : undefined,
+        buyer_name: data.direction === 2 ? data.sender_name : undefined,
+        content: data.content,
+        content_type: data.content_type,
+        image_url: data.image_url,
+        item_id: data.item_id,
+        direction: data.direction,
+        created_at: data.created_at || new Date().toISOString().replace('T', ' ').substring(0, 19),
+    };
+    const index = chatSessionsCache.findIndex(session => session.chat_id === data.chat_id);
+    if (index >= 0) {
+        chatSessionsCache[index] = { ...chatSessionsCache[index], ...preview };
+        chatSessionsCache.unshift(chatSessionsCache.splice(index, 1)[0]);
+    } else {
+        chatSessionsCache.unshift(preview);
+    }
+    renderChatSessions(chatSessionsCache);
+}
+
+function toggleReplyPanel() {
+    const panel = document.getElementById('chatReplyPanel');
+    if (!panel) return;
+    panel.classList.toggle('d-none');
+    if (!panel.classList.contains('d-none') && chatCurrentItemId) {
+        loadItemKeywords();
+    }
+}
+
+function hideReplyPanel() {
+    document.getElementById('chatReplyPanel')?.classList.add('d-none');
+}
+
+async function loadItemKeywords() {
+    const replyItemId = document.getElementById('replyItemId');
+    const replyKeywordsList = document.getElementById('replyKeywordsList');
+    const replyItemReply = document.getElementById('replyItemReply');
+    if (!replyItemId || !replyKeywordsList || !replyItemReply) return;
+
+    if (!chatCurrentCookieId || !chatCurrentItemId) {
+        replyItemId.value = '未检测到商品';
+        replyKeywordsList.innerHTML = '<div class="text-muted small">无商品ID</div>';
+        replyItemReply.value = '';
+        return;
+    }
+
+    replyItemId.value = chatCurrentItemId;
+    replyKeywordsList.innerHTML = '<div class="text-muted small">加载中...</div>';
+
+    try {
+        const result = await fetchJSON(`${apiBase}/api/chat/keywords/${encodeURIComponent(chatCurrentCookieId)}/item/${encodeURIComponent(chatCurrentItemId)}`);
+        if (!result.success) {
+            replyKeywordsList.innerHTML = '<div class="text-danger small">加载失败</div>';
+            return;
+        }
+        replyItemReply.value = result.item_reply || '';
+        const keywords = result.keywords || [];
+        replyKeywordsList.innerHTML = '';
+        if (!keywords.length) {
+            replyKeywordsList.innerHTML = '<div class="text-muted small">暂无关键词，点击“添加”创建</div>';
+        } else {
+            keywords.forEach(keyword => addKeywordRowWithData(keyword.keyword, keyword.reply || ''));
+        }
+        await loadCopyTargetItems();
+    } catch (error) {
+        console.error('加载商品关键词失败:', error);
+        replyKeywordsList.innerHTML = '<div class="text-danger small">加载失败</div>';
+    }
+}
+
+function addKeywordRow() {
+    addKeywordRowWithData('', '');
+}
+
+function addKeywordRowWithData(keyword, reply) {
+    const list = document.getElementById('replyKeywordsList');
+    if (!list) return;
+    const hint = list.querySelector('.text-muted');
+    if (hint) hint.remove();
+    const row = document.createElement('div');
+    row.className = 'kw-row';
+    row.innerHTML = `
+        <input type="text" class="form-control form-control-sm" placeholder="关键词" value="${escapeHtml(keyword)}" style="flex:1;">
+        <input type="text" class="form-control form-control-sm" placeholder="回复内容" value="${escapeHtml(reply)}" style="flex:2;">
+        <button class="btn btn-outline-danger btn-sm" onclick="this.parentElement.remove()" title="删除"><i class="bi bi-trash"></i></button>
+    `;
+    list.appendChild(row);
+}
+
+async function saveItemKeywords() {
+    if (!chatCurrentCookieId || !chatCurrentItemId) {
+        showToast('缺少商品信息', 'warning');
+        return;
+    }
+    const itemReply = document.getElementById('replyItemReply')?.value || '';
+    const rows = document.querySelectorAll('#replyKeywordsList .kw-row');
+    const keywords = [];
+    rows.forEach(row => {
+        const inputs = row.querySelectorAll('input');
+        const keyword = inputs[0]?.value.trim();
+        const reply = inputs[1]?.value.trim();
+        if (keyword) {
+            keywords.push({ keyword, reply, type: 'text' });
         }
     });
 
-    if (!response.ok) {
-        throw new Error('获取账号详情失败');
-    }
-
-    return await response.json();
-}
-
-/**
- * 账号选择变化时的处理
- */
-async function onImAccountChange() {
-    const select = document.getElementById('imAccountSelect');
-    const usernameEl = document.getElementById('imDisplayUsername');
-    const passwordEl = document.getElementById('imDisplayPassword');
-
-    if (!select) return;
-
-    const selectedOption = select.selectedOptions[0];
-
-    if (selectedOption && selectedOption.value) {
-        const username = selectedOption.dataset.username || '未配置';
-
-        if (usernameEl) usernameEl.textContent = username;
-        if (passwordEl) {
-            passwordEl.textContent = '加载中...';
+    try {
+        const result = await fetchJSON(`${apiBase}/api/chat/keywords/${encodeURIComponent(chatCurrentCookieId)}/item/${encodeURIComponent(chatCurrentItemId)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ keywords, item_reply: itemReply })
+        });
+        if (result.success) {
+            showToast(`保存成功，${result.count} 条关键词`, 'success');
+        } else {
+            showToast(result.detail || result.message || '保存失败', 'danger');
         }
+    } catch (error) {
+        console.error('保存商品关键词失败:', error);
+        showToast('保存失败', 'danger');
+    }
+}
 
-        try {
-            const details = await fetchImAccountDetails(selectedOption.value);
-            const password = details.password || '';
-            if (passwordEl) {
-                passwordEl.textContent = password ? '••••••••' : '未配置';
-            }
-        } catch (error) {
-            if (passwordEl) {
-                passwordEl.textContent = '获取失败';
-            }
-            console.error('获取IM账号详情失败:', error);
-            showToast('获取账号密码失败，请稍后重试', 'warning');
+async function loadCopyTargetItems() {
+    if (!chatCurrentCookieId) return;
+    const container = document.getElementById('copyTargetItems');
+    if (!container) return;
+    container.innerHTML = '<div class="text-muted small">加载商品...</div>';
+    try {
+        const result = await fetchJSON(`${apiBase}/api/chat/items/${encodeURIComponent(chatCurrentCookieId)}`);
+        if (!result.success) {
+            container.innerHTML = '<div class="text-muted small">加载失败</div>';
+            return;
         }
-    } else {
-        // 未选择账号时显示默认值
-        if (usernameEl) usernameEl.textContent = '-';
-        if (passwordEl) passwordEl.textContent = '-';
+        const items = (result.items || []).filter(item => item.item_id !== chatCurrentItemId);
+        if (!items.length) {
+            container.innerHTML = '<div class="text-muted small">无其他商品</div>';
+            return;
+        }
+        container.innerHTML = '';
+        items.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'copy-target-item';
+            const safeValue = escapeHtml(item.item_id);
+            const checkboxId = buildSafeCheckboxId('ct', item.item_id);
+            div.innerHTML = `<input type="checkbox" value="${safeValue}" id="${checkboxId}"><label for="${checkboxId}">${escapeHtml(item.item_title || item.item_id)}</label>`;
+            container.appendChild(div);
+        });
+    } catch (error) {
+        console.error('加载可复用商品失败:', error);
+        container.innerHTML = '<div class="text-muted small">加载失败</div>';
     }
 }
 
-/**
- * 复制账号到剪贴板
- */
-async function copyImUsername() {
-    const usernameEl = document.getElementById('imDisplayUsername');
-    const username = usernameEl ? usernameEl.textContent : '';
-
-    if (!username || username === '未配置' || username === '-') {
-        showToast('账号未配置', 'warning');
+async function copyKeywordsToSelected() {
+    if (!chatCurrentCookieId || !chatCurrentItemId) {
+        showToast('缺少源商品信息', 'warning');
         return;
     }
-
+    const checks = document.querySelectorAll('#copyTargetItems input[type=checkbox]:checked');
+    const targets = [...checks].map(check => check.value);
+    if (!targets.length) {
+        showToast('请先选择目标商品', 'warning');
+        return;
+    }
     try {
-        await navigator.clipboard.writeText(username);
-        showToast('账号已复制', 'success');
+        const result = await fetchJSON(`${apiBase}/api/chat/keywords/${encodeURIComponent(chatCurrentCookieId)}/copy`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source_item_id: chatCurrentItemId, target_item_ids: targets })
+        });
+        if (result.success) {
+            showToast(`已复制到 ${targets.length} 个商品，共 ${result.total} 条关键词`, 'success');
+        } else {
+            showToast(result.detail || result.message || '复制失败', 'danger');
+        }
     } catch (error) {
-        fallbackCopy(username, '账号已复制', '复制失败');
+        console.error('复制关键词失败:', error);
+        showToast('复制失败', 'danger');
     }
 }
 
-/**
- * 复制密码到剪贴板
- */
-async function copyImPassword() {
-    const select = document.getElementById('imAccountSelect');
-    if (!select || !select.value) {
-        showToast('请先选择账号', 'warning');
-        return;
-    }
-
-    let password = '';
-
-    try {
-        const details = await fetchImAccountDetails(select.value);
-        password = details.password || '';
-    } catch (error) {
-        console.error('获取密码失败:', error);
-        showToast('获取密码失败，请稍后重试', 'danger');
-        return;
-    }
-
-    if (!password || password === '未配置') {
-        showToast('密码未配置', 'warning');
-        return;
-    }
-
-    try {
-        await navigator.clipboard.writeText(password);
-        showToast('密码已复制', 'success');
-    } catch (error) {
-        fallbackCopy(password, '密码已复制', '复制失败');
-    }
+function formatChatTime(ts) {
+    if (!ts) return '';
+    const d = new Date(String(ts).replace(' ', 'T'));
+    if (isNaN(d.getTime())) return String(ts || '').substring(11, 16);
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) return d.toTimeString().substring(0, 5);
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    if (d.toDateString() === yesterday.toDateString()) return '昨天';
+    return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-/**
- * 降级复制方案
- */
-function fallbackCopy(text, successMsg, failMsg) {
-    const textArea = document.createElement('textarea');
-    textArea.value = text;
-    textArea.style.position = 'fixed';
-    textArea.style.left = '-9999px';
-    document.body.appendChild(textArea);
-    textArea.select();
-
-    try {
-        document.execCommand('copy');
-        showToast(successMsg, 'success');
-    } catch (e) {
-        showToast(failMsg, 'danger');
-    }
-
-    document.body.removeChild(textArea);
+function loadOnlineIm() {
+    refreshChatAccounts();
+    initChatSSE();
 }
 
-/**
- * 复制账号密码到剪贴板（保留兼容）
- */
-async function copyImAccountInfo() {
-    const select = document.getElementById('imAccountSelect');
-
-    if (!select || !select.value) {
-        showToast('请先选择一个账号', 'warning');
-        return;
-    }
-
-    const selectedOption = select.selectedOptions[0];
-    const username = selectedOption.dataset.username || '';
-    let password = '';
-
-    try {
-        const details = await fetchImAccountDetails(select.value);
-        password = details.password || '';
-    } catch (error) {
-        console.error('获取账号密码失败:', error);
-        showToast('获取账号密码失败，请稍后重试', 'danger');
-        return;
-    }
-
-    if (!username && !password) {
-        showToast('该账号未配置用户名和密码', 'warning');
-        return;
-    }
-
-    const copyText = `账号：${username}\n密码：${password}`;
-
-    try {
-        await navigator.clipboard.writeText(copyText);
-        showToast('账号密码已复制到剪贴板', 'success');
-    } catch (error) {
-        fallbackCopy(copyText, '账号密码已复制到剪贴板', '复制失败，请手动复制');
-    }
+function loadImAccountList() {
+    refreshChatAccounts();
 }
 
-/**
- * 刷新IM iframe
- */
+function onImAccountChange() {}
+
 function refreshImIframe() {
-    const iframe = document.getElementById('goofishImIframe');
-    if (iframe) {
-        iframe.src = iframe.src;
-        showToast('页面已刷新', 'success');
-    }
+    refreshChatSessions();
 }
 
-/**
- * 在新窗口打开闲鱼IM
- */
 function openGoofishImNewWindow() {
     window.open('https://www.goofish.com/im', '_blank');
 }
 
-/**
- * 兼容旧版函数名
- */
 function openGoofishIm() {
     openGoofishImNewWindow();
-}
-
-/**
- * 加载在线客服页面
- */
-function loadOnlineIm() {
-    loadImAccountList();
-
-    // 延迟加载 iframe，避免页面加载时直接加载闲鱼导致跳转问题
-    const iframe = document.getElementById('goofishImIframe');
-    if (iframe && iframe.src === 'about:blank') {
-        const realSrc = iframe.dataset.src || 'https://www.goofish.com/im';
-        iframe.src = realSrc;
-    }
 }
 
 // ==================== 定时擦亮任务管理 ====================
