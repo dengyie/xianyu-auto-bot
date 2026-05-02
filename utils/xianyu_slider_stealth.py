@@ -9595,119 +9595,6 @@ class XianyuSliderStealth:
         )
         return any(marker in error_text for marker in lock_markers)
 
-    def _get_current_hostname(self) -> str:
-        try:
-            return str(socket.gethostname() or "").strip()
-        except Exception:
-            return ""
-
-    def _looks_like_docker_container_hostname(self, hostname: str) -> bool:
-        normalized = str(hostname or "").strip().lower()
-        return bool(re.fullmatch(r"[0-9a-f]{12}", normalized))
-
-    def _is_process_alive(self, pid: int) -> bool:
-        try:
-            normalized_pid = int(pid)
-        except (TypeError, ValueError):
-            return False
-        if normalized_pid <= 0:
-            return False
-        try:
-            os.kill(normalized_pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        except OSError:
-            return False
-        return True
-
-    def _parse_chromium_singleton_lock(self, profile_dir: str) -> Optional[Dict[str, Any]]:
-        lock_path = os.path.join(profile_dir, "SingletonLock")
-        if not os.path.islink(lock_path):
-            return None
-        try:
-            target = os.readlink(lock_path)
-        except OSError as read_error:
-            logger.warning(f"【{self.pure_user_id}】读取 Chromium SingletonLock 失败: {read_error}")
-            return None
-
-        target_name = os.path.basename(str(target or "").rstrip("/\\"))
-        if "-" not in target_name:
-            return {
-                "lock_path": lock_path,
-                "target": target,
-                "host": None,
-                "pid": None,
-            }
-
-        lock_host, pid_text = target_name.rsplit("-", 1)
-        if not lock_host or not pid_text.isdigit():
-            return {
-                "lock_path": lock_path,
-                "target": target,
-                "host": None,
-                "pid": None,
-            }
-
-        return {
-            "lock_path": lock_path,
-            "target": target,
-            "host": lock_host,
-            "pid": int(pid_text),
-        }
-
-    def _try_cleanup_stale_chromium_singleton_lock(self, profile_dir: str) -> bool:
-        lock_info = self._parse_chromium_singleton_lock(profile_dir)
-        if not lock_info:
-            logger.info(f"【{self.pure_user_id}】未发现可判定的 Chromium SingletonLock，跳过自动清理")
-            return False
-
-        current_host = self._get_current_hostname()
-        lock_host = str(lock_info.get("host") or "").strip()
-        lock_pid = lock_info.get("pid")
-        if not current_host or not lock_host or lock_pid is None:
-            logger.warning(
-                f"【{self.pure_user_id}】SingletonLock 信息不足，无法证明是 stale 锁，保持原有 fallback: "
-                f"host={lock_host or 'unknown'}, pid={lock_pid}"
-            )
-            return False
-
-        same_host = lock_host == current_host
-        same_docker_host_rollover = (
-            not same_host and
-            self._looks_like_docker_container_hostname(lock_host) and
-            self._looks_like_docker_container_hostname(current_host)
-        )
-        if not same_host and not same_docker_host_rollover:
-            logger.warning(
-                f"【{self.pure_user_id}】SingletonLock 指向其他宿主机，拒绝自动清理: "
-                f"lock_host={lock_host}, current_host={current_host}, pid={lock_pid}"
-            )
-            return False
-        if same_docker_host_rollover:
-            logger.warning(
-                f"【{self.pure_user_id}】检测到 Docker 容器 hostname 漂移导致的 stale SingletonLock，"
-                f"允许按失效锁清理: lock_host={lock_host}, current_host={current_host}, pid={lock_pid}"
-            )
-
-        if self._is_process_alive(lock_pid):
-            logger.info(f"【{self.pure_user_id}】SingletonLock 对应进程仍存活(pid={lock_pid})，跳过自动清理")
-            return False
-
-        removed_any = False
-        for lock_name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
-            lock_path = os.path.join(profile_dir, lock_name)
-            try:
-                if os.path.lexists(lock_path):
-                    os.unlink(lock_path)
-                    removed_any = True
-                    logger.warning(f"【{self.pure_user_id}】已清理 stale Chromium 锁文件: {lock_path}")
-            except OSError as cleanup_error:
-                logger.warning(f"【{self.pure_user_id}】清理 stale Chromium 锁文件失败({lock_path}): {cleanup_error}")
-
-        return removed_any
-
     def _launch_clean_cookie_seeded_context(
         self,
         playwright,
@@ -9879,6 +9766,7 @@ class XianyuSliderStealth:
             playwright_factory = self._get_sync_playwright_factory()
             playwright = playwright_factory().start()
             browser = None
+            used_profile_lock_fallback = False
             launch_options: Dict[str, Any] = {
                 'headless': not show_browser,
                 'ignore_default_args': ['--enable-automation'],
@@ -9893,74 +9781,39 @@ class XianyuSliderStealth:
             if self.executable_path:
                 launch_options['executable_path'] = self.executable_path
             if force_clean_context:
-                browser = playwright.chromium.launch(**launch_options)
-                context = browser.new_context(
-                    viewport={'width': browser_features['viewport_width'], 'height': browser_features['viewport_height']},
-                    user_agent=browser_features['user_agent'],
-                    locale=browser_features['locale'],
-                    accept_downloads=True,
-                    ignore_https_errors=True,
-                    extra_http_headers={
-                        'Accept-Language': browser_features['accept_lang']
-                    }
+                browser, context = self._launch_clean_cookie_seeded_context(
+                    playwright,
+                    launch_options,
+                    browser_features,
                 )
-                # 注入已有 Cookie（让浏览器不是全新空白状态，降低风控检测风险）
-                try:
-                    _cookies_to_inject = self._build_initial_cookie_payload()
-                    _cookie_str = ''
-                    if not _cookies_to_inject:
-                        from db_manager import db_manager as _db
-                        _cookie_info = _db.get_cookie_details(self.pure_user_id)
-                        if _cookie_info and _cookie_info.get('value'):
-                            _cookie_str = _cookie_info['value']
-                    if _cookie_str:
-                        _cookies_to_inject = []
-                        for pair in _cookie_str.split(';'):
-                            pair = pair.strip()
-                            if '=' in pair:
-                                name, value = pair.split('=', 1)
-                                name = name.strip()
-                                value = value.strip()
-                                if name:
-                                    _cookies_to_inject.append({
-                                        'name': name,
-                                        'value': value,
-                                        'domain': '.goofish.com',
-                                        'path': '/',
-                                    })
-                                    # 同时注入 taobao 域（部分 Cookie 需要跨域）
-                                    if name in ('_m_h5_tk', '_m_h5_tk_enc', 'cookie2', 'sgcookie', 'unb', 't', 'cna'):
-                                        _cookies_to_inject.append({
-                                            'name': name,
-                                            'value': value,
-                                            'domain': '.taobao.com',
-                                            'path': '/',
-                                        })
-                        if _cookies_to_inject:
-                            context.add_cookies(_cookies_to_inject)
-                            logger.info(f"【{self.pure_user_id}】已注入 {len(_cookies_to_inject)} 个历史 Cookie 到干净上下文")
-                        else:
-                            logger.warning(f"【{self.pure_user_id}】历史 Cookie 为空，使用全新上下文")
-                    elif _cookies_to_inject:
-                        context.add_cookies(_cookies_to_inject)
-                        logger.info(f"【{self.pure_user_id}】已注入 {len(_cookies_to_inject)} 个传入 Cookie 到干净上下文")
-                    else:
-                        logger.info(f"【{self.pure_user_id}】未找到历史 Cookie，使用全新上下文")
-                except Exception as inject_e:
-                    logger.warning(f"【{self.pure_user_id}】注入历史 Cookie 失败（不影响登录）: {inject_e}")
             else:
-                context = playwright.chromium.launch_persistent_context(
-                    user_data_dir,
-                    **launch_options,
-                    viewport={'width': browser_features['viewport_width'], 'height': browser_features['viewport_height']},
-                    user_agent=browser_features['user_agent'],
-                    locale=browser_features['locale'],
-                    accept_downloads=True,
-                    ignore_https_errors=True,
-                    extra_http_headers={
-                        'Accept-Language': browser_features['accept_lang']
-                    }
-                )
+                try:
+                    context = playwright.chromium.launch_persistent_context(
+                        user_data_dir,
+                        **launch_options,
+                        viewport={'width': browser_features['viewport_width'], 'height': browser_features['viewport_height']},
+                        user_agent=browser_features['user_agent'],
+                        locale=browser_features['locale'],
+                        accept_downloads=True,
+                        ignore_https_errors=True,
+                        extra_http_headers={
+                            'Accept-Language': browser_features['accept_lang']
+                        }
+                    )
+                except Exception as persistent_launch_error:
+                    if not self._is_profile_in_use_launch_error(persistent_launch_error):
+                        raise
+                    used_profile_lock_fallback = True
+                    logger.warning(
+                        f"【{self.pure_user_id}】持久化浏览器目录被其他 Chromium 进程占用，"
+                        f"自动切换到干净上下文兜底登录: {persistent_launch_error}"
+                    )
+                    browser, context = self._launch_clean_cookie_seeded_context(
+                        playwright,
+                        launch_options,
+                        browser_features,
+                    )
+            effective_clean_context = force_clean_context or used_profile_lock_fallback
             logger.info(f"【{self.pure_user_id}】已设置浏览器语言为中文（zh-CN）")
 
             if not browser:
@@ -10883,7 +10736,7 @@ class XianyuSliderStealth:
                         except Exception as close_context_err:
                             close_errors.append(f"context.close: {close_context_err}")
 
-                        if force_clean_context and browser:
+                        if effective_clean_context and browser:
                             try:
                                 browser.close()
                             except Exception as close_browser_err:
@@ -10907,7 +10760,7 @@ class XianyuSliderStealth:
                         logger.warning(f"【{self.pure_user_id}】关闭浏览器超时，改为后台继续清理，避免阻塞密码登录会话收尾")
                     elif close_errors:
                         logger.warning(f"【{self.pure_user_id}】关闭浏览器时出现异常: {close_errors}")
-                    elif force_clean_context:
+                    elif effective_clean_context:
                         logger.info(f"【{self.pure_user_id}】浏览器已关闭，干净上下文已销毁")
                     else:
                         logger.info(f"【{self.pure_user_id}】浏览器已关闭，缓存已保存")
