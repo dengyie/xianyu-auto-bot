@@ -4140,6 +4140,33 @@ def _build_risk_event_meta(base: Optional[Dict[str, Any]] = None, **extra_fields
     return payload or None
 
 
+def _is_password_login_verification_timeout_message(message: str) -> bool:
+    normalized = str(message or '').strip()
+    if not normalized:
+        return False
+
+    if ('超时' in normalized or '失效' in normalized) and '重新发起验证' in normalized:
+        return True
+
+    timeout_markers = (
+        '验证超时',
+        '二维码已失效',
+        '请重新扫码',
+    )
+    return any(marker in normalized for marker in timeout_markers)
+
+
+def _derive_password_login_verification_failure_result_code(error_message: str) -> str:
+    normalized = str(error_message or '').strip()
+    if '二维码' in normalized:
+        return 'qr_verify_timed_out' if _is_password_login_verification_timeout_message(normalized) else 'qr_verify_failed'
+    if '人脸' in normalized:
+        return 'face_verify_timed_out' if _is_password_login_verification_timeout_message(normalized) else 'face_verify_failed'
+    if '短信' in normalized:
+        return 'sms_verify_timed_out' if _is_password_login_verification_timeout_message(normalized) else 'sms_verify_failed'
+    return 'verification_timed_out' if _is_password_login_verification_timeout_message(normalized) else 'verification_failed'
+
+
 def _update_session_risk_log(
     session_id: str,
     status: str,
@@ -4193,6 +4220,95 @@ def _update_session_risk_log(
         logger.error(f"更新风控日志状态失败: {e}")
 
 
+def _close_password_login_pending_verification_risk_logs(
+    session_id: str,
+    status: str,
+    error_message: str = None,
+    processing_result: str = None,
+    result_code: str = None,
+    event_meta: Optional[Dict[str, Any]] = None,
+) -> int:
+    """收口同一账密登录链路下遗留的 processing 验证风控日志。"""
+    try:
+        session = password_login_sessions.get(session_id)
+        if not session:
+            return 0
+
+        risk_session_id = session.get('risk_session_id') or session_id
+        if not risk_session_id:
+            return 0
+
+        with db_manager.lock:
+            cursor = db_manager.conn.cursor()
+            cursor.execute(
+                '''
+                SELECT id
+                FROM risk_control_logs
+                WHERE session_id = ?
+                  AND processing_status = 'processing'
+                  AND event_type IN ('qr_verify', 'face_verify', 'sms_verify', 'unknown')
+                ORDER BY id ASC
+                ''',
+                (risk_session_id,)
+            )
+            pending_rows = cursor.fetchall() or []
+
+        if not pending_rows:
+            return 0
+
+        duration_ms = None
+        started_at = session.get('timestamp')
+        if started_at:
+            duration_ms = max(0, int((time.time() - float(started_at)) * 1000))
+
+        processing_status = 'success' if str(status or '').strip().lower() == 'success' else 'failed'
+        if result_code:
+            resolved_result_code = result_code
+        elif processing_status == 'success':
+            resolved_result_code = 'manual_cookie_refresh_verification_completed' if session.get('refresh_mode') else 'password_login_verification_completed'
+        else:
+            resolved_result_code = _derive_password_login_verification_failure_result_code(error_message)
+
+        if processing_result is None:
+            if processing_status == 'success':
+                processing_result = '人工验证已完成，登录流程已成功收尾'
+            else:
+                processing_result = error_message or '验证流程已结束'
+
+        merged_meta = _build_risk_event_meta(
+            {
+                'account_id': session.get('account_id'),
+                'show_browser': session.get('show_browser'),
+                'refresh_mode': bool(session.get('refresh_mode')),
+            },
+            **(event_meta or {}),
+        )
+
+        updated_count = 0
+        for row in pending_rows:
+            log_id = row[0] if isinstance(row, (tuple, list)) else row
+            if not log_id:
+                continue
+            updated = db_manager.update_risk_control_log(
+                log_id=log_id,
+                processing_result=processing_result,
+                processing_status=processing_status,
+                error_message=error_message,
+                session_id=risk_session_id,
+                trigger_scene='manual_password_refresh' if session.get('refresh_mode') else 'password_login',
+                result_code=resolved_result_code,
+                event_meta=merged_meta,
+                duration_ms=duration_ms,
+            )
+            if updated:
+                updated_count += 1
+
+        return updated_count
+    except Exception as e:
+        logger.error(f"收口待处理验证风控日志失败: {e}")
+        return 0
+
+
 def _set_password_login_session_status(session_id: str, status: str, **fields):
     session = password_login_sessions.get(session_id)
     if not session:
@@ -4222,6 +4338,114 @@ def _set_password_login_session_status(session_id: str, status: str, **fields):
         session['completed_at'] = None
 
     return True
+
+
+def _finalize_password_login_session_failure(
+    session_id: str,
+    error_message: str,
+    *,
+    result_code: str = None,
+    event_meta: Optional[Dict[str, Any]] = None,
+) -> bool:
+    session = password_login_sessions.get(session_id)
+    if not session:
+        return False
+
+    extra_fields: Dict[str, Any] = {}
+    if _is_password_login_verification_timeout_message(error_message):
+        extra_fields.update(
+            verification_url=None,
+            screenshot_path=None,
+            qr_code_url=None,
+            verification_type=None,
+        )
+
+    _set_password_login_session_status(
+        session_id,
+        'failed',
+        error=error_message,
+        **extra_fields,
+    )
+    _update_session_risk_log(
+        session_id,
+        'failed',
+        error_message=(error_message or '')[:200],
+        result_code=result_code,
+        event_meta=event_meta,
+    )
+    _close_password_login_pending_verification_risk_logs(
+        session_id,
+        'failed',
+        error_message=error_message,
+        event_meta=event_meta,
+    )
+    return True
+
+
+def _get_latest_password_login_session_for_account(
+    account_id: str,
+    user_id: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    target_account_id = str(account_id)
+    matched_sessions = []
+
+    for session in password_login_sessions.values():
+        if str(session.get('account_id')) != target_account_id:
+            continue
+        if user_id is not None and session.get('user_id') != user_id:
+            continue
+        matched_sessions.append(session)
+
+    if not matched_sessions:
+        return None
+
+    return max(
+        matched_sessions,
+        key=lambda item: (
+            float(item.get('timestamp') or 0),
+            float(item.get('completed_at') or 0),
+        ),
+    )
+
+
+def _is_timed_out_verification_risk_log(log: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(log, dict):
+        return False
+
+    result_code = str(log.get('result_code') or '').strip().lower()
+    if result_code == 'verification_timed_out' or result_code.endswith('_timed_out'):
+        return True
+
+    for field in ('error_message', 'processing_result', 'event_description'):
+        if _is_password_login_verification_timeout_message(log.get(field)):
+            return True
+
+    return False
+
+
+def _get_latest_verification_risk_log_for_account(account_id: str) -> Optional[Dict[str, Any]]:
+    verification_event_types = {'qr_verify', 'face_verify', 'sms_verify', 'unknown'}
+    logs = db_manager.get_risk_control_logs(cookie_id=str(account_id), limit=20)
+    for log in logs:
+        if str(log.get('event_type') or '').strip() in verification_event_types:
+            return log
+    return None
+
+
+def _build_face_verification_screenshot_info(account_id: str, file_path: str) -> Dict[str, Any]:
+    from datetime import datetime
+
+    normalized_path = str(file_path or '').replace('\\', '/')
+    filename = os.path.basename(normalized_path)
+    stat = os.stat(normalized_path)
+    return {
+        'filename': filename,
+        'account_id': account_id,
+        'path': f'/static/uploads/images/{filename}',
+        'size': stat.st_size,
+        'created_time': stat.st_ctime,
+        'created_time_str': datetime.fromtimestamp(stat.st_ctime).strftime('%Y-%m-%d %H:%M:%S')
+    }
 
 
 def _set_manual_cookie_import_session_status(session_id: str, status: str, **fields):
@@ -4351,6 +4575,11 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                     message,
                     verification_url,
                 )
+
+                if _is_password_login_verification_timeout_message(message):
+                    _finalize_password_login_session_failure(session_id, message)
+                    log_with_user('warning', f"密码登录会话检测到失效验证页，直接标记失败: {session_id}", current_user)
+                    return
                 
                 # 优先使用截图路径，如果没有截图则使用验证链接
                 if actual_screenshot_path and os.path.exists(actual_screenshot_path):
@@ -4467,10 +4696,8 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                 
                 if cookies_dict is None:
                     failure_message = slider_instance.last_login_error or '登录失败，请检查账号密码是否正确'
-                    _set_password_login_session_status(session_id, 'failed', error=failure_message)
+                    _finalize_password_login_session_failure(session_id, failure_message)
                     log_with_user('error', f"账号密码登录失败: {account_id}, 错误: {failure_message}", current_user)
-                    # 更新风控日志状态
-                    _update_session_risk_log(session_id, 'failed', error_message=failure_message[:200])
                     return
                 
                 log_with_user('info', f"账号密码登录成功，获取到 {len(cookies_dict)} 个Cookie字段: {account_id}", current_user)
@@ -4514,17 +4741,15 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                     missing_fields_text = ', '.join(merge_result['missing_required_fields'])
                     error_message = f"登录成功但Cookie核心字段仍缺失，未覆盖旧Cookie: {missing_fields_text}"
                     log_with_user('error', f"{error_message}: {account_id}", current_user)
-                    _set_password_login_session_status(session_id, 'failed', error=error_message)
-                    _update_session_risk_log(
+                    _finalize_password_login_session_failure(
                         session_id,
-                        'failed',
-                        error_message=error_message[:200],
+                        error_message,
                         result_code='password_login_cookie_incomplete',
                         event_meta={
                             'missing_required_fields': merge_result['missing_required_fields'],
                             'incoming_missing_protected_fields': merge_result['incoming_missing_protected_fields'],
                             'preserved_protected_fields': merge_result['preserved_protected_fields'],
-                        }
+                        },
                     )
                     return
 
@@ -4555,11 +4780,9 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                     except Exception as preflight_err:
                         error_message = f"刷新模式认证预检失败，任务未切换: {str(preflight_err)}"
                         log_with_user('error', f"{error_message}: {account_id}", current_user)
-                        _set_password_login_session_status(session_id, 'failed', error=error_message)
-                        _update_session_risk_log(
+                        _finalize_password_login_session_failure(
                             session_id,
-                            'failed',
-                            error_message=error_message[:200],
+                            error_message,
                             result_code='manual_refresh_preflight_failed',
                             event_meta={'account_id': account_id},
                         )
@@ -4704,6 +4927,11 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                     is_new_account=is_new_account,
                     cookie_count=len(merged_cookies_dict)
                 )
+                _close_password_login_pending_verification_risk_logs(
+                    session_id,
+                    'success',
+                    processing_result='人工验证已完成，登录流程已成功收尾',
+                )
                 # 更新风控日志状态
                 _update_session_risk_log(
                     session_id,
@@ -4753,11 +4981,9 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                 
             except Exception as e:
                 error_msg = str(e)
-                _set_password_login_session_status(session_id, 'failed', error=error_msg)
+                _finalize_password_login_session_failure(session_id, error_msg)
                 log_with_user('error', f"账号密码登录失败: {account_id}, 错误: {error_msg}", current_user)
                 logger.info(f"会话 {session_id} 状态已更新为 failed，错误消息: {error_msg}")  # 添加日志确认状态更新
-                # 更新风控日志状态
-                _update_session_risk_log(session_id, 'failed', error_message=error_msg[:200])
                 import traceback
                 logger.error(traceback.format_exc())
             finally:
@@ -4791,9 +5017,8 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
         login_thread_started = True
         
     except Exception as e:
-        _set_password_login_session_status(session_id, 'failed', error=str(e))
+        _finalize_password_login_session_failure(session_id, str(e))
         log_with_user('error', f"执行账号密码登录任务异常: {str(e)}", current_user)
-        _update_session_risk_log(session_id, 'failed', error_message=str(e)[:200])
         if manual_refresh_acquired and not login_thread_started:
             try:
                 from XianyuAutoAsync import XianyuLive
@@ -5267,6 +5492,12 @@ async def cancel_password_login(
 
         _set_password_login_session_status(session_id, 'cancelled', error='用户取消登录')
         _update_session_risk_log(session_id, 'failed', error_message='用户取消登录')
+        _close_password_login_pending_verification_risk_logs(
+            session_id,
+            'failed',
+            error_message='用户取消登录',
+            result_code='password_login_cancelled',
+        )
 
         slider_instance = session.get('slider_instance')
         if slider_instance:
@@ -5298,7 +5529,6 @@ async def get_account_face_verification_screenshot(
     """获取指定账号的人脸验证截图"""
     try:
         import glob
-        from datetime import datetime
         
         # 检查账号是否属于当前用户
         user_id = current_user['user_id']
@@ -5323,13 +5553,58 @@ async def get_account_face_verification_screenshot(
                     'success': False,
                     'message': '无权访问该账号'
                 }
+
+        session_scope_user_id = None if is_admin else user_id
+        latest_password_login_session = _get_latest_password_login_session_for_account(
+            account_id,
+            user_id=session_scope_user_id,
+        )
+        if latest_password_login_session:
+            session_status = str(latest_password_login_session.get('status') or '').strip().lower()
+            session_screenshot_path = latest_password_login_session.get('screenshot_path')
+
+            if session_status == 'verification_required' and session_screenshot_path and os.path.exists(session_screenshot_path):
+                screenshot_info = _build_face_verification_screenshot_info(account_id, session_screenshot_path)
+                log_with_user('info', f"优先返回账号 {account_id} 当前登录会话的验证截图", current_user)
+                return {
+                    'success': True,
+                    'screenshot': screenshot_info
+                }
+
+            if session_status == 'failed':
+                session_error_message = str(latest_password_login_session.get('error') or '').strip()
+                if _is_password_login_verification_timeout_message(session_error_message):
+                    log_with_user('info', f"账号 {account_id} 最近一次验证已超时，忽略历史截图", current_user)
+                    return {
+                        'success': False,
+                        'message': session_error_message
+                    }
+
+        latest_verification_log = _get_latest_verification_risk_log_for_account(account_id)
+        if latest_verification_log and str(latest_verification_log.get('processing_status') or '').strip().lower() == 'failed':
+            if _is_timed_out_verification_risk_log(latest_verification_log):
+                timeout_message = (
+                    str(latest_verification_log.get('error_message') or '').strip()
+                    or '当前验证页面已超时/失效，请重新发起验证'
+                )
+                log_with_user('info', f"账号 {account_id} 最新验证风控已超时，忽略历史截图", current_user)
+                return {
+                    'success': False,
+                    'message': timeout_message
+                }
         
         # 获取该账号的验证截图
         screenshots_dir = os.path.join(static_dir, 'uploads', 'images')
-        pattern = os.path.join(screenshots_dir, f'face_verify_{account_id}_*.jpg')
-        screenshot_files = glob.glob(pattern)
+        pattern_jpg = os.path.join(screenshots_dir, f'face_verify_{account_id}_*.jpg')
+        pattern_png = os.path.join(screenshots_dir, f'face_verify_{account_id}_*.png')
+        screenshot_files = glob.glob(pattern_jpg) + glob.glob(pattern_png)
+        screenshot_files = [file_path for file_path in screenshot_files if os.path.exists(file_path)]
         
-        log_with_user('debug', f"查找截图: {pattern}, 找到 {len(screenshot_files)} 个文件", current_user)
+        log_with_user(
+            'debug',
+            f"查找截图: {pattern_jpg} / {pattern_png}, 找到 {len(screenshot_files)} 个有效文件",
+            current_user,
+        )
         
         if not screenshot_files:
             log_with_user('warning', f"账号 {account_id} 没有找到验证截图", current_user)
@@ -5340,17 +5615,7 @@ async def get_account_face_verification_screenshot(
         
         # 获取最新的截图
         latest_file = max(screenshot_files, key=os.path.getmtime)
-        filename = os.path.basename(latest_file)
-        stat = os.stat(latest_file)
-        
-        screenshot_info = {
-            'filename': filename,
-            'account_id': account_id,
-            'path': f'/static/uploads/images/{filename}',
-            'size': stat.st_size,
-            'created_time': stat.st_ctime,
-            'created_time_str': datetime.fromtimestamp(stat.st_ctime).strftime('%Y-%m-%d %H:%M:%S')
-        }
+        screenshot_info = _build_face_verification_screenshot_info(account_id, latest_file)
         
         log_with_user('info', f"获取账号 {account_id} 的验证截图", current_user)
         
