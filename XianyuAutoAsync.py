@@ -14123,6 +14123,34 @@ class XianyuLive:
 
         return None
 
+    def _extract_message_id_from_chat_payload(self, message_1: dict, message_10: dict) -> str:
+        """从已解出的聊天消息结构里直接提取 messageId，避免重复解同步包。"""
+        try:
+            if not isinstance(message_1, dict) or not isinstance(message_10, dict):
+                return None
+
+            biz_tag = message_10.get("bizTag", "")
+            if isinstance(biz_tag, str) and biz_tag:
+                try:
+                    biz_tag_dict = json.loads(biz_tag)
+                    if isinstance(biz_tag_dict, dict) and biz_tag_dict.get("messageId"):
+                        return str(biz_tag_dict["messageId"])
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    pass
+
+            ext_json = message_10.get("extJson", "")
+            if isinstance(ext_json, str) and ext_json:
+                try:
+                    ext_json_dict = json.loads(ext_json)
+                    if isinstance(ext_json_dict, dict) and ext_json_dict.get("messageId"):
+                        return str(ext_json_dict["messageId"])
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    pass
+        except Exception as e:
+            logger.debug(f"【{self.cookie_id}】从聊天消息结构提取messageId失败: {self._safe_str(e)}")
+
+        return None
+
     def _cleanup_message_reply_state(self, current_time: float):
         """清理过期的已处理/处理中消息状态。"""
         expired_processed_ids = [
@@ -14194,7 +14222,8 @@ class XianyuLive:
 
     async def _schedule_debounced_reply(self, chat_id: str, message_data: dict, websocket,
                                        send_user_name: str, send_user_id: str, send_message: str,
-                                       item_id: str, msg_time: str):
+                                       item_id: str, msg_time: str, dedupe_message_id: str = None,
+                                       dedupe_create_time: int = 0):
         """
         调度防抖回复：如果用户连续发送消息，等待用户停止发送后再回复最后一条消息
         
@@ -14208,24 +14237,26 @@ class XianyuLive:
             item_id: 商品ID
             msg_time: 消息时间
         """
-        # 提取消息ID并检查是否已处理
-        message_id = self._extract_message_id(message_data)
-        # 如果没有 messageId，使用备用标识（chat_id + send_message + 时间戳）
+        # 提取消息ID并检查是否已处理（优先使用调用链已解出的 messageId，避免重复解同步包）
+        message_id = str(dedupe_message_id).strip() if dedupe_message_id else self._extract_message_id(message_data)
+        # 如果没有 messageId，使用备用标识（chat_id + send_user_id + send_message + 时间戳）
         if not message_id:
             try:
                 # 同步包消息要先还原到内部结构再取 createTime
                 normalized_message = self._unwrap_message_for_dedupe(message_data) or {}
-                # 尝试从消息数据中提取时间戳
-                create_time = 0
+                # 优先使用调用链里已提取出的 create_time，避免退化成 _0 后缀
+                create_time = int(dedupe_create_time or 0)
                 if isinstance(normalized_message, dict) and "1" in normalized_message:
                     message_1 = normalized_message.get("1")
                     if isinstance(message_1, dict):
-                        create_time = message_1.get("5", 0)
-                # 使用组合键作为备用标识
-                message_id = f"{chat_id}_{send_message}_{create_time}"
+                        create_time = int(message_1.get("5", create_time) or create_time or 0)
+                if not create_time:
+                    create_time = int(time.time() * 1000)
+                # 使用更稳的组合键作为备用标识（带 send_user_id 减少不同人同文本撞车）
+                message_id = f"{chat_id}_{send_user_id}_{send_message}_{create_time}"
             except Exception:
                 # 如果提取失败，使用当前时间戳
-                message_id = f"{chat_id}_{send_message}_{int(time.time() * 1000)}"
+                message_id = f"{chat_id}_{send_user_id}_{send_message}_{int(time.time() * 1000)}"
 
         # in-flight 锁：原子地检查"已处理 / 正在处理"两个状态，预占后才进入防抖
         # （替代原来的 inline check-and-set，修复同消息并发时被多次回复的问题）
@@ -14870,6 +14901,8 @@ class XianyuLive:
                 send_user_name = message_10.get("senderNick", message_10.get("reminderTitle", "未知用户"))
                 send_user_id = message_10.get("senderUserId", "unknown")
                 send_message = message_10.get("reminderContent", "")
+                # 直接从已解出的 chat payload 拿 messageId，传给 dedupe 链路避免重复解同步包
+                dedupe_message_id = self._extract_message_id_from_chat_payload(message_1, message_10)
 
                 chat_id_raw = message_1.get("2", "")
                 chat_id = chat_id_raw.split('@')[0] if '@' in str(chat_id_raw) else str(chat_id_raw)
@@ -15488,7 +15521,9 @@ class XianyuLive:
                 send_user_id=send_user_id,
                 send_message=send_message,
                 item_id=item_id,
-                msg_time=msg_time
+                msg_time=msg_time,
+                dedupe_message_id=dedupe_message_id,
+                dedupe_create_time=create_time,
             )
 
         except Exception as e:
