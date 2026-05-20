@@ -2,9 +2,18 @@ import queue
 import threading
 import time
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from loguru import logger
+
+
+_BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def _now_beijing_str() -> str:
+    """返回北京时间字符串（与 DB 出口转换后的格式保持一致：YYYY-MM-DD HH:MM:SS）。"""
+    return datetime.now(_BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S')
 
 
 class ChatEventHub:
@@ -59,6 +68,10 @@ def publish_chat_message(cookie_id: str, message_data: Dict[str, Any]) -> Option
     user_id = cookie_info.get('user_id') if cookie_info else None
     if user_id is None:
         return None
+
+    # 兜底补上 created_at（北京时间），避免前端 SSE 落回 toISOString 显示 UTC
+    if not message_data.get('created_at'):
+        message_data['created_at'] = _now_beijing_str()
 
     event = {
         'type': 'chat.message',

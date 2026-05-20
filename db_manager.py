@@ -9269,9 +9269,11 @@ Cookie数量: {cookie_count}
                 cursor = self.conn.cursor()
                 # 过滤 sender_name 中混入的系统文案/订单状态文本，避免污染 buyer_name
                 # （例如 "买家已拍下，待付款"、"工作台通知" 等会被当成买家昵称显示）
+                # SQLite 的 CURRENT_TIMESTAMP 落库为 UTC，对外统一转换为北京时间（UTC+8）给前端展示
                 self._execute_sql(cursor, """
                     SELECT m.chat_id, m.sender_name, m.content, m.content_type,
-                           m.item_id, m.created_at, m.direction, m.sender_id,
+                           m.item_id, datetime(m.created_at, '+8 hours') AS created_at,
+                           m.direction, m.sender_id,
                            buyer.buyer_name, buyer.buyer_id
                     FROM chat_messages m
                     INNER JOIN (
@@ -9322,7 +9324,8 @@ Cookie数量: {cookie_count}
                     self._execute_sql(cursor, """
                         SELECT id, cookie_id, chat_id, sender_id, sender_name, content,
                                content_type, image_url, item_id, direction, reply_source,
-                               media_url, link_url, extra_json, created_at
+                               media_url, link_url, extra_json,
+                               datetime(created_at, '+8 hours') AS created_at
                         FROM chat_messages
                         WHERE cookie_id = ? AND chat_id = ? AND id < ?
                         ORDER BY id DESC
@@ -9332,7 +9335,8 @@ Cookie数量: {cookie_count}
                     self._execute_sql(cursor, """
                         SELECT id, cookie_id, chat_id, sender_id, sender_name, content,
                                content_type, image_url, item_id, direction, reply_source,
-                               media_url, link_url, extra_json, created_at
+                               media_url, link_url, extra_json,
+                               datetime(created_at, '+8 hours') AS created_at
                         FROM chat_messages
                         WHERE cookie_id = ? AND chat_id = ?
                         ORDER BY id DESC
