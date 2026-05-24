@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -256,6 +256,11 @@
             <span id="statusText">未连接</span>
         </div>
 
+        <div id="recordingStatus" class="info-card" style="display:none; text-align:center; margin-bottom:15px;">
+            <h3>🎬 录制状态</h3>
+            <p id="recordingText" style="color:#dc3545;">🔴 录制中</p>
+        </div>
+
         <div class="session-input">
             <input type="text" id="sessionIdInput" placeholder="输入会话ID（通常是用户ID）" />
             <button id="connectBtn" onclick="connectSession()">连接</button>
@@ -308,6 +313,9 @@
         let lastMoveTime = 0;
         let moveThrottle = 5; // 节流：每10ms最多发送一次（极致流畅）
         let captchaOffset = {x: 0, y: 0}; // 滑块区域在页面中的偏移量
+        let isRecording = true;
+        let trajectoryPoints = [];
+        let trajectoryStartX = 0, trajectoryStartY = 0;
 
         // 初始化
         document.addEventListener('DOMContentLoaded', () => {
@@ -458,6 +466,9 @@
                     }
                 }, 500);
             }
+            
+            // 自动提交录制轨迹
+            submitTrajectory();
 
             else if (type === 'error') {
                 log(`错误: ${data.message}`, 'error');
@@ -504,6 +515,12 @@
                 x: coords.x,
                 y: coords.y
             }));
+            // 录制起始点
+            if (isRecording) {
+                trajectoryPoints = [];
+                trajectoryStartX = coords.x;
+                trajectoryStartY = coords.y;
+            }
         }
 
         function handleMouseMove(event) {
@@ -526,6 +543,11 @@
                 x: coords.x,
                 y: coords.y
             }));
+            if (isRecording) {
+                trajectoryPoints.push({
+                    x: coords.x, y: coords.y, t: Date.now()
+                });
+            }
         }
 
         function handleMouseUp(event) {
@@ -548,6 +570,19 @@
                 x: coords.x,
                 y: coords.y
             }));
+            if (isRecording && trajectoryStartX) {
+                const finalX = coords.x;
+                const finalY = coords.y;
+                const distance = Math.abs(finalX - trajectoryStartX);
+                window._pendingTrajectory = {
+                    points: trajectoryPoints,
+                    startX: trajectoryStartX,
+                    startY: trajectoryStartY,
+                    endX: finalX,
+                    endY: finalY,
+                    distance: Math.round(distance * 10) / 10,
+                };
+            }
         }
 
         function getMouseCoords(event) {
@@ -565,6 +600,54 @@
                 y: canvasY + captchaOffset.y
             };
         }
+
+        async function submitTrajectory() {
+            if (!window._pendingTrajectory || !currentSessionId) return;
+            const t = window._pendingTrajectory;
+            if (!t.points || t.points.length < 3) return;
+
+            // 计算归一化轨迹点 [(dx, dy, delay_ms), ...]
+            const normPoints = [];
+            let prevT = t.points[0].t;
+            normPoints.push([0, 0, 120]); // 起始点
+            for (const p of t.points) {
+                const dt = Math.max(5, p.t - prevT);
+                const dx = p.x - t.startX;
+                const dy = p.y - t.startY;
+                normPoints.push([Math.round(dx * 100) / 100, Math.round(dy * 100) / 100, Math.round(dt * 10) / 10]);
+                prevT = p.t;
+            }
+
+            const cookieId = currentSessionId.replace(/^slider_fallback_/, "").replace(/_\d+$/, "");
+            log(`📤 正在提交轨迹... (${normPoints.length} points, distance=${t.distance}px)`, "info");
+
+            try {
+                const resp = await fetch("/api/captcha/trajectory", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        cookie_id: cookieId,
+                        points: normPoints,
+                        distance: t.distance,
+                        verify_url: "",
+                    }),
+                });
+                const result = await resp.json();
+                if (result.success) {
+                    log("✅ 轨迹已保存！", "success");
+                    document.getElementById("recordingStatus").style.display = "block";
+                    document.getElementById("recordingText").style.color = "#28a745";
+                    document.getElementById("recordingText").textContent = "🟢 已保存 (" + normPoints.length + " points)";
+                } else {
+                    log("⚠️ 轨迹保存失败: " + (result.message || "unknown"), "warn");
+                }
+            } catch (e) {
+                log("❌ 轨迹提交失败: " + e.message, "error");
+            }
+            window._pendingTrajectory = null;
+        }
+
     </script>
 </body>
 </html>

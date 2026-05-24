@@ -17,6 +17,8 @@ class CaptchaRemoteController:
     def __init__(self):
         self.active_sessions: Dict[str, Dict[str, Any]] = {}
         self.websocket_connections: Dict[str, Any] = {}
+        self.recording_enabled: bool = True
+        self.session_recordings: Dict[str, list] = {}
     
     async def create_session(self, session_id: str, page: Page) -> Dict[str, str]:
         """
@@ -314,8 +316,74 @@ class CaptchaRemoteController:
             logger.error(f"检查完成状态失败: {e}")
             # 出错时返回 False，不要误判为成功
             return False
-    
-    def is_completed(self, session_id: str) -> bool:
+    def _record_event(self, session_id: str, event_type: str, x: int, y: int):
+        """记录鼠标事件到会话录制缓冲区"""
+        if session_id not in self.session_recordings:
+            self.session_recordings[session_id] = []
+        now = asyncio.get_event_loop().time()
+        self.session_recordings[session_id].append({
+            "event_type": event_type,
+            "x": x,
+            "y": y,
+            "timestamp": now,
+        })
+
+    def finish_recording(self, session_id: str) -> Optional[dict]:
+        """完成录制，返回归一化的轨迹数据 (points + distance)"""
+        events = self.session_recordings.pop(session_id, [])
+        if not events or len(events) < 3:
+            return None
+
+        # 提取 down/up/move 事件
+        down_events = [e for e in events if e["event_type"] == "down"]
+        move_events = [e for e in events if e["event_type"] == "move"]
+        up_events = [e for e in events if e["event_type"] == "up"]
+
+        if not down_events or not up_events:
+            return None
+
+        down = down_events[0]
+        up = up_events[-1]
+        start_x, start_y = down["x"], down["y"]
+
+        # 构建轨迹点: [(dx, dy, delay_ms), ...]
+        points = []
+        prev_time = down["timestamp"]
+        prev_x, prev_y = start_x, start_y
+
+        # 起始点
+        points.append([0, 0, 120])
+
+        for evt in move_events:
+            dt_ms = max(5, (evt["timestamp"] - prev_time) * 1000)
+            dx = evt["x"] - start_x
+            dy = evt["y"] - start_y
+            # 去重：位置变化太小且间隔太短则跳过
+            if abs(evt["x"] - prev_x) < 0.5 and abs(evt["y"] - prev_y) < 0.5 and dt_ms < 10:
+                continue
+            points.append([round(dx, 2), round(dy, 2), round(dt_ms, 1)])
+            prev_time = evt["timestamp"]
+            prev_x, prev_y = evt["x"], evt["y"]
+
+        # 终点
+        final_dt = max(50, (up["timestamp"] - prev_time) * 1000)
+        final_dx = up["x"] - start_x
+        final_dy = up["y"] - start_y
+        points.append([round(final_dx, 2), round(final_dy, 2), round(final_dt, 1)])
+
+        distance = abs(final_dx)
+        duration_ms = (up["timestamp"] - down["timestamp"]) * 1000
+
+        # 清理录制缓存
+        self.session_recordings.pop(session_id, None)
+
+        return {
+            "points": points,
+            "distance": round(distance, 1),
+            "duration_ms": round(duration_ms, 1),
+        }
+
+
         """检查会话是否已完成"""
         if session_id not in self.active_sessions:
             return False

@@ -6770,170 +6770,79 @@ class XianyuLive:
 
             logger.info(f"【{self.cookie_id}】验证URL: {verification_url}")
 
-            # 使用滑块验证器（独立实例，解决并发冲突）
+            # 使用新版 SliderSolver（反检测 + 图像匹配 + 持久化 profile）
             try:
-                # 使用集成的滑块验证方法（无需猴子补丁）
-                from utils.xianyu_slider_stealth import XianyuSliderStealth
-                logger.info(f"【{self.cookie_id}】XianyuSliderStealth导入成功，使用滑块验证")
+                from utils.slider_solver import SliderSolver
+                logger.info(f"[{self.cookie_id}] SliderSolver imported")
 
-                # 读取账号配置以决定浏览器模式（默认无头）
-                account_info = db_manager.get_cookie_details(self.cookie_id) or {}
-                show_browser = bool(account_info.get('show_browser', False))
-                # 创建独立的滑块验证实例（每个用户独立实例，避免并发冲突）
-                slider_stealth = XianyuSliderStealth(
-                    user_id=f"{self.cookie_id}",  # 使用唯一ID避免冲突
-                    enable_learning=True,  # 启用学习功能
-                    headless=not show_browser,
-                    initial_cookies=self.cookies_str,
+                solver = SliderSolver(
+                    cookie_id=self.cookie_id,
+                    cookies_str=self.cookies_str,
+                    headless=True,
                     proxy=self.proxy_config,
-                    use_account_persistent_profile=True,
                 )
-                # 给当前滑块实例打上 token_refresh 场景标，让滑块层在硬拒绝时尽早交还给外层走账密恢复
-                slider_stealth.risk_trigger_scene = 'token_refresh'
-
-                # 直接使用异步方法执行滑块验证（避免 ThreadPoolExecutor 导致的 Playwright 初始化问题）
-                success, cookies = await slider_stealth.async_run(verification_url)
+                success, cookies = await solver.solve(verification_url)
 
                 if success and cookies:
-                    logger.info(f"【{self.cookie_id}】滑块验证成功，获取到新的cookies")
-
+                    logger.info(f"[{self.cookie_id}] slider success")
                     current_cookies_dict = trans_cookies(self.cookies_str)
                     x5sec_cookies = {}
-
-                    # 筛选出x5相关的cookies（包括x5sec, x5step等）
                     for cookie_name, cookie_value in cookies.items():
                         cookie_name_lower = cookie_name.lower()
-                        if cookie_name_lower.startswith('x5') or 'x5sec' in cookie_name_lower:
+                        if cookie_name_lower.startswith("x5") or "x5sec" in cookie_name_lower:
                             x5sec_cookies[cookie_name] = cookie_value
 
-                    logger.info(f"【{self.cookie_id}】找到{len(x5sec_cookies)}个x5相关cookies: {list(x5sec_cookies.keys())}")
-
                     merge_result = self.protected_merge_cookie_dicts(current_cookies_dict, cookies)
-                    updated_cookies = merge_result['merged_cookies_dict']
-                    updated_fields = merge_result['updated_fields']
-                    changed_fields = merge_result['changed_fields']
-                    new_fields = merge_result['new_fields']
-                    removed_fields = merge_result['removed_fields']
-                    preserved_fields = merge_result['preserved_fields']
-                    preserved_protected_fields = merge_result['preserved_protected_fields']
-                    would_remove_fields = merge_result['would_remove_fields']
-                    missing_protected_fields = merge_result['missing_protected_fields']
-                    missing_required_fields = merge_result['missing_required_fields']
-                    incoming_missing_protected_fields = merge_result['incoming_missing_protected_fields']
-                    account_switched = merge_result['account_switched']
+                    updated_cookies = merge_result["merged_cookies_dict"]
+                    updated_fields = merge_result["updated_fields"]
+                    changed_fields = merge_result["changed_fields"]
+                    new_fields = merge_result["new_fields"]
+                    preserved_protected_fields = merge_result["preserved_protected_fields"]
+                    missing_required_fields = merge_result["missing_required_fields"]
                     cookies_str = "; ".join([f"{k}={v}" for k, v in updated_cookies.items()])
-                    qr_login_grace = self.get_qr_login_grace(self.cookie_id)
-                    merge_event_name = "slider_post_qr_protected_merge" if qr_login_grace else "captcha_protected_merge"
-                    self._log_protected_merge_event(merge_event_name, merge_result)
 
                     self._log_cookie_merge_summary(
-                        updated_cookies,
-                        updated_fields,
-                        changed_fields,
-                        new_fields,
-                        context="滑块验证成功后Cookie合并",
-                        preserved_fields=preserved_fields,
+                        updated_cookies, updated_fields, changed_fields,
+                        new_fields, context="slider cookie merge",
                         preserved_protected_fields=preserved_protected_fields,
-                        would_remove_fields=would_remove_fields,
-                        removed_fields=removed_fields,
-                        missing_protected_fields=missing_protected_fields,
-                        missing_required_fields=missing_required_fields,
-                        incoming_missing_protected_fields=incoming_missing_protected_fields,
-                        account_switched=account_switched,
                     )
 
                     if missing_required_fields:
-                        logger.error(f"【{self.cookie_id}】滑块验证后的Cookie仍缺失核心字段，放弃写回数据库: {', '.join(missing_required_fields)}")
+                        logger.error(f"[{self.cookie_id}] cookie missing required fields after slider")
                         return None
 
-                    # 自动更新数据库中的cookie
                     try:
-                        # 备份原有cookies
                         old_cookies_str = self.cookies_str
                         old_cookies_dict = self.cookies.copy()
-
-                        # 更新当前实例的cookies（使用合并后的cookies）
                         self._set_runtime_cookie_state(
-                            cookies_str=cookies_str,
-                            cookies_dict=updated_cookies,
+                            cookies_str=cookies_str, cookies_dict=updated_cookies,
                             source="slider_success",
                         )
-
-                        # 更新数据库中的cookies
                         await self.update_config_cookies()
-                        logger.info(f"【{self.cookie_id}】滑块验证成功后，数据库cookies已自动更新")
                         self._mark_slider_success_recovery(cookies_str)
                         self._mark_pending_slider_success_notice("token_refresh")
                         XianyuLive.clear_password_login_failure_backoff(self.cookie_id)
-                        logger.info(f"【{self.cookie_id}】滑块验证成功后，已清理密码登录失败退避状态")
-
-                        # 记录成功更新到日志文件，包含关键字段变化和x5相关cookie信息
-                        x5sec_cookies_str = "; ".join([f"{k}={v}" for k, v in x5sec_cookies.items()]) if x5sec_cookies else "无"
-                        log_captcha_event(self.cookie_id, "滑块验证成功并自动更新数据库", True,
-                            f"原有{len(current_cookies_dict)}个cookie项, 浏览器快照{len(cookies)}个, 合并后{len(updated_cookies)}个, 变更字段{len(changed_fields)}个, 新增字段{len(new_fields)}个, 保护保留{len(preserved_protected_fields)}个, 实际移除{len(removed_fields)}个, x5 cookies: {x5sec_cookies_str}")
-
+                        x5_str = "; ".join([f"{k}={v}" for k, v in x5sec_cookies.items()]) if x5sec_cookies else "none"
+                        log_captcha_event(self.cookie_id, "slider_success_v2", True,
+                            f"cookies: {len(current_cookies_dict)}->{len(updated_cookies)}, x5: {x5_str}")
                     except Exception as update_e:
-                        logger.error(f"【{self.cookie_id}】自动更新数据库cookies失败: {self._safe_str(update_e)}")
-
-                        # 回滚cookies
+                        logger.error(f"[{self.cookie_id}] cookie update failed: {self._safe_str(update_e)}")
                         self._set_runtime_cookie_state(
-                            cookies_str=old_cookies_str,
-                            cookies_dict=old_cookies_dict,
+                            cookies_str=old_cookies_str, cookies_dict=old_cookies_dict,
                             source="slider_success_rollback",
                         )
-
-                        # 记录更新失败到日志文件，包含获取到的x5 cookies
-                        x5sec_cookies_str = "; ".join([f"{k}={v}" for k, v in x5sec_cookies.items()]) if x5sec_cookies else "无"
-                        log_captcha_event(self.cookie_id, "滑块验证成功但数据库更新失败", False,
-                            f"更新异常: {self._safe_str(update_e)[:100]}, 变更字段{len(changed_fields)}个, 新增字段{len(new_fields)}个, 保护保留{len(preserved_protected_fields)}个, 获取到的x5 cookies: {x5sec_cookies_str}")
-
-                        # 发送更新失败通知
-                        await self.send_token_refresh_notification(
-                            f"滑块验证成功但数据库更新失败: {self._safe_str(update_e)}",
-                            "captcha_success_db_update_failed"
-                        )
-
                         return None
-
                     return cookies_str
-                else:
-                    logger.error(f"【{self.cookie_id}】滑块验证失败")
-
-                    # 记录滑块验证失败到日志文件
-                    log_captcha_event(self.cookie_id, "滑块验证失败", False,
-                        f"XianyuSliderStealth执行失败, 环境: {'Docker' if os.getenv('DOCKER_ENV') else '本地'}")
-
-                    # 发送通知（检查WebSocket连接状态）
-                    # 只有在WebSocket未连接时才发送通知，已连接说明可能是暂时性问题
-                    is_ws_connected = (
-                        self.connection_state == ConnectionState.CONNECTED and 
-                        self.ws and 
-                        not self.ws.closed
-                    )
-                    
-                    if is_ws_connected:
-                        logger.info(f"【{self.cookie_id}】WebSocket连接正常，滑块验证失败可能是暂时的，跳过通知")
-                    else:
-                        logger.warning(f"【{self.cookie_id}】WebSocket未连接，发送滑块验证失败通知")
-                        await self.send_token_refresh_notification(
-                            f"滑块验证失败，需要手动处理。验证URL: {verification_url}",
-                            "captcha_verification_failed"
-                        )
+                    if solver.last_fallback_used == "remote":
+                        logger.warning(f"[{self.cookie_id}] remote fallback timed out or failed")
+                        log_captcha_event(self.cookie_id, "slider_remote_timeout", False, "remote fallback timed out")
+                    logger.error(f"[{self.cookie_id}] SliderSolver failed (fallback={solver.last_fallback_used})")
+                    logger.error(f"[{self.cookie_id}] SliderSolver failed")
+                    log_captcha_event(self.cookie_id, "slider_fail_v2", False, "solve returned False")
                     return None
-
             except ImportError as import_e:
-                logger.error(f"【{self.cookie_id}】XianyuSliderStealth导入失败: {import_e}")
-                logger.error(f"【{self.cookie_id}】请安装Playwright库: pip install playwright")
-
-                # 记录导入失败到日志文件
-                log_captcha_event(self.cookie_id, "XianyuSliderStealth导入失败", False,
-                    f"Playwright未安装, 错误: {import_e}")
-
-                # 发送通知
-                await self.send_token_refresh_notification(
-                    f"滑块验证功能不可用，请安装Playwright。验证URL: {verification_url}",
-                    "captcha_dependency_missing"
-                )
+                logger.error(f"[{self.cookie_id}] SliderSolver import failed: {import_e}")
+                log_captcha_event(self.cookie_id, "solver_import_fail", False, str(import_e))
                 return None
 
             except Exception as stealth_e:

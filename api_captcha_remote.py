@@ -26,6 +26,15 @@ class MouseEvent(BaseModel):
     y: int
 
 
+class TrajectorySubmitRequest(BaseModel):
+    """轨迹提交请求模型"""
+    session_id: str
+    cookie_id: str
+    points: List[List[float]]  # [[x, y, delay_ms], ...]
+    distance: float
+    verify_url: str = ""
+
+
 class SessionCheckRequest(BaseModel):
     """会话检查请求"""
     session_id: str
@@ -236,6 +245,20 @@ async def check_completion(request: SessionCheckRequest):
         'completed': completed
     }
 
+
+
+@router.post("/trajectory")
+async def submit_trajectory(request: TrajectorySubmitRequest):
+    try:
+        from utils.slider_trajectory_pool import trajectory_pool
+        if not request.points or len(request.points) < 3:
+            raise HTTPException(status_code=400, detail="too few points")
+        trajectory_pool.save_trajectory(request.points, request.cookie_id, request.distance, True, request.verify_url or "")
+        logger.success(f"trajectory saved: cookie={request.cookie_id}")
+        return {"success": True, "message": "saved", "cookie_id": request.cookie_id}
+    except Exception as e:
+        logger.error(f"trajectory save failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/session/{session_id}")
 async def close_session(session_id: str):

@@ -1,0 +1,29 @@
+========================================
+  Slider Verification Refactor - Status
+========================================
+
+ISOLATION: New modules (slider_*) form independent subsystem.
+           Only entry: SliderSolver in utils/slider_solver.py
+           Old module (xianyu_slider_stealth) unchanged.
+
+NEW MODULES (self-contained):
+  utils/slider_solver.py       - Entry point, CDP + Playwright
+  utils/slider_stealth_patch.py - Anti-detection JS + args
+  utils/slider_image_match.py   - OpenCV Canny matching
+  utils/slider_trajectory.py    - Trajectory generation
+
+INTEGRATION POINTS:
+  XianyuAutoAsync.py L6773    - Token refresh calls SliderSolver
+  demo_slider_verify.py       - Test harness (standalone)
+
+OLD MODULE (unchanged):
+  utils/xianyu_slider_stealth.py - Password login, item_search etc.
+
+TODO (5 pending):
+  [TODO] P0 - Real human trajectory recording & replay
+  [TODO] P1 - Fix image match accuracy (Canny params)
+  [TODO] P1 - Fix retry distance calc (stale selectors)
+  [TODO] P2 - Headless mode support
+  [TODO] P3 - Multi-round pass rate test (>70% target)
+
+Progress: 7/12 done

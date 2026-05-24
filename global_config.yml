@@ -95,3 +95,22 @@ WEBSOCKET_HEADERS:
   User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
     like Gecko) Chrome/133.0.0.0 Safari/537.36
 WEBSOCKET_URL: wss://wss-goofish.dingtalk.com/
+
+
+# ════════════════════════════════════════════════════
+# 滑块轨迹池配置
+# ════════════════════════════════════════════════════
+TRAJECTORY_POOL:
+  enabled: true              # 是否启用轨迹池
+  max_per_cookie: 50         # 每个 Cookie 最大轨迹数
+  min_pool_size: 5           # 最小池大小，不足时回退数学模型
+  rotation_strategy: lru     # 轮转策略: lru / random / weighted
+  recorded_only_mode: false  # 仅使用录制轨迹（测试模式）
+
+# ════════════════════════════════════════════════════
+# 远程人工滑块控制配置
+# ════════════════════════════════════════════════════
+REMOTE_CAPTCHA:
+  enabled: true              # 是否启用远程人工兜底
+  timeout: 180               # 远程人工等待超时（秒）
+  poll_interval: 2           # 完成状态轮询间隔（秒）
