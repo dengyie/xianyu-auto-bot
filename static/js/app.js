@@ -173,6 +173,9 @@ function showSection(sectionName) {
     case 'file-management':
         loadAdminFiles();
         break;
+    case 'user-groups':
+        loadGroups();
+        break;
 
     }
 
@@ -19821,5 +19824,164 @@ async function loadAdminFiles() {
     } catch(e) {
         loading.style.display = 'none';
         showToast('加载文件列表失败', 'danger');
+    }
+}
+
+
+
+// API helpers for user group management
+async function apiGet(url) {
+    const res = await fetchJSON(url);
+    return res;
+}
+
+async function apiPost(url, data) {
+    const res = await fetchJSON(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+    return res;
+}
+
+async function apiDelete(url) {
+    const res = await fetchJSON(url, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
+    return res;
+}
+// ==================== 用户组管理 ====================
+
+let _currentGroupId = null;
+
+function showCreateGroupModal() {
+    new bootstrap.Modal(document.getElementById('createGroupModal')).show();
+}
+
+async function submitCreateGroup() {
+    const name = document.getElementById('groupNameInput').value.trim();
+    const desc = document.getElementById('groupDescInput').value.trim();
+    const count = parseInt(document.getElementById('groupUserCount').value) || 5;
+    if (!name) { showToast('请输入组名', 'warning'); return; }
+    try {
+        const res = await apiPost('/api/groups', { group_name: name, description: desc, user_count: count });
+        if (res.success) {
+            bootstrap.Modal.getInstance(document.getElementById('createGroupModal')).hide();
+            showToast(res.message, 'success');
+            document.getElementById('createGroupForm').reset();
+            loadGroups();
+        } else {
+            showToast(res.message || '创建失败', 'danger');
+        }
+    } catch(e) {
+        showToast('创建用户组失败: ' + e.message, 'danger');
+    }
+}
+
+async function loadGroups() {
+    const loading = document.getElementById('groupListLoading');
+    const list = document.getElementById('groupList');
+    const empty = document.getElementById('groupListEmpty');
+    loading.style.display = 'block';
+    list.innerHTML = '';
+    empty.style.display = 'none';
+    try {
+        const res = await apiGet('/api/groups');
+        if (!res.success || !res.data || !res.data.length) {
+            empty.style.display = 'block';
+            return;
+        }
+        var html = '<div class="table-responsive"><table class="table table-hover"><thead><tr><th>组名</th><th>描述</th><th>成员数</th><th>创建时间</th><th>操作</th></tr></thead><tbody>';
+        for (var i = 0; i < res.data.length; i++) {
+            var g = res.data[i];
+            html += '<tr><td><strong>' + escapeHtml(g.group_name) + '</strong></td>' +
+                '<td>' + escapeHtml(g.description || '-') + '</td>' +
+                '<td><span class="badge bg-info">' + (g.member_count || 0) + '</span></td>' +
+                '<td>' + escapeHtml(g.created_at || '-') + '</td>' +
+                '<td><button class="btn btn-sm btn-outline-info me-1" onclick="viewGroupMembers(' + g.id + ')"><i class="bi bi-eye me-1"></i>成员</button>' +
+                '<button class="btn btn-sm btn-outline-danger" onclick="deleteGroup(' + g.id + ', \'' + escapeHtml(g.group_name).replace(/'/g, "\\'") + '\')"><i class="bi bi-trash me-1"></i>删除</button></td></tr>';
+        }
+        html += '</tbody></table></div>';
+        list.innerHTML = html;
+    } catch(e) {
+        loading.style.display = 'none';
+        showToast('加载用户组失败', 'danger');
+    } finally {
+        loading.style.display = 'none';
+    }
+}
+
+async function viewGroupMembers(groupId) {
+    _currentGroupId = groupId;
+    var modal = new bootstrap.Modal(document.getElementById('viewMembersModal'));
+    var tbody = document.getElementById('membersTableBody');
+    var empty = document.getElementById('membersEmpty');
+    tbody.innerHTML = '<tr><td colspan="4" class="text-center"><div class="spinner-border spinner-border-sm me-2"></div>加载中...</td></tr>';
+    empty.style.display = 'none';
+    modal.show();
+    try {
+        var res = await apiGet('/api/groups/' + groupId + '/members');
+        if (!res.success || !res.data || !res.data.length) {
+            tbody.innerHTML = '';
+            empty.style.display = 'block';
+            return;
+        }
+        var html = '';
+        for (var i = 0; i < res.data.length; i++) {
+            var m = res.data[i];
+            html += '<tr><td>' + escapeHtml(m.username) + '</td>' +
+                '<td><code>' + escapeHtml(m.password_plain || '-') + '</code></td>' +
+                '<td>' + escapeHtml(m.created_at || '-') + '</td>' +
+                '<td><button class="btn btn-sm btn-outline-danger" onclick="removeGroupMember(' + groupId + ', ' + m.id + ')"><i class="bi bi-person-x me-1"></i>移除</button></td></tr>';
+        }
+        tbody.innerHTML = html;
+    } catch(e) {
+        tbody.innerHTML = '<tr><td colspan="4" class="text-center text-danger">加载失败: ' + escapeHtml(e.message) + '</td></tr>';
+    }
+}
+
+async function deleteGroup(groupId, groupName) {
+    if (!confirm('确定要删除用户组 "' + groupName + '" 及其所有成员吗？此操作不可撤销。')) return;
+    try {
+        var res = await apiDelete('/api/groups/' + groupId);
+        if (res.success) {
+            showToast('用户组已删除', 'success');
+            loadGroups();
+        } else {
+            showToast(res.message || '删除失败', 'danger');
+        }
+    } catch(e) {
+        showToast('删除用户组失败: ' + e.message, 'danger');
+    }
+}
+
+function addMembersToCurrentGroup() {
+    if (!_currentGroupId) { showToast('请先选择一个用户组', 'warning'); return; }
+    new bootstrap.Modal(document.getElementById('addMembersModal')).show();
+}
+
+async function submitAddMembers() {
+    var count = parseInt(document.getElementById('addMemberCount').value) || 5;
+    if (!_currentGroupId) { showToast('用户组信息丢失', 'danger'); return; }
+    try {
+        var res = await apiPost('/api/groups/' + _currentGroupId + '/members', { count: count });
+        if (res.success) {
+            bootstrap.Modal.getInstance(document.getElementById('addMembersModal')).hide();
+            showToast(res.message, 'success');
+            viewGroupMembers(_currentGroupId);
+        } else {
+            showToast(res.message || '添加失败', 'danger');
+        }
+    } catch(e) {
+        showToast('添加用户失败: ' + e.message, 'danger');
+    }
+}
+
+async function removeGroupMember(groupId, userId) {
+    if (!confirm('确定要移除该成员吗？')) return;
+    try {
+        var res = await apiDelete('/api/groups/' + groupId + '/members/' + userId);
+        if (res.success) {
+            showToast('成员已移除', 'success');
+            viewGroupMembers(groupId);
+        } else {
+            showToast(res.message || '移除失败', 'danger');
+        }
+    } catch(e) {
+        showToast('移除成员失败: ' + e.message, 'danger');
     }
 }

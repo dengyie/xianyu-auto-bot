@@ -125,7 +125,7 @@
     
     <div class="login-body">
 
-      <form id="loginForm">
+      <form id="loginForm" action="/login" method="POST">
         <!-- 用户名/密码登录 -->
         <div id="usernameLoginForm" class="login-form-section">
           <div class="input-group">
@@ -180,7 +180,7 @@
           <span id="errorMessage"></span>
         </div>
 
-        <button type="submit" class="btn btn-primary btn-login">
+        <button type="submit" class="btn btn-primary btn-login" onclick="handleLogin(); return false;">
           <span class="loading spinner-border spinner-border-sm me-2" role="status"></span>
           <span id="loginText">登录</span>
         </button>
@@ -278,9 +278,8 @@
       }
     }
 
-    // 登录表单提交
-    document.getElementById('loginForm').addEventListener('submit', async function(e) {
-      e.preventDefault();
+    // 登录处理函数（支持 onclick 和 submit 两种触发方式）
+    async function handleLogin() {
       hideError();
       setLoading(true);
 
@@ -338,6 +337,12 @@
       } finally {
         setLoading(false);
       }
+    }
+
+    // 登录表单提交事件（兜底）
+    document.getElementById('loginForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      handleLogin();
     });
 
     // 页面初始化

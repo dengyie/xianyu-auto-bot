@@ -192,6 +192,14 @@
         <div class="nav-divider mt-3 mb-2">
           <small class="text-white-50">管理员功能</small>
         </div>
+        
+        <div class="nav-item" data-menu-id="user-groups">
+          <a href="javascript:void(0)" class="nav-link" onclick="showSection('user-groups')">
+            <i class="bi bi-people-fill"></i>
+            <span>用户组</span>
+          </a>
+        </div>
+        
         <div class="nav-item" data-menu-id="file-management">
           <a href="javascript:void(0)" class="nav-link" onclick="showSection('file-management')">
             <i class="bi bi-folder"></i>
@@ -3493,6 +3501,23 @@
       </div>
     </div>
 
+
+    <div class="content-section" id="user-groups-section">
+      <div class="content-header">
+        <h2 class="mb-0"><i class="bi bi-people-fill me-2"></i>用户组管理</h2>
+        <p class="text-muted mb-0">创建用户组并批量生成账号，组内用户仅可访问下载页</p>
+      </div>
+      <div class="content-body">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <button class="btn btn-primary" onclick="showCreateGroupModal()"><i class="bi bi-plus-circle me-1"></i>创建用户组</button>
+          <button class="btn btn-outline-secondary btn-sm" onclick="loadGroups()"><i class="bi bi-arrow-clockwise me-1"></i>刷新</button>
+        </div>
+        <div id="groupListLoading" class="text-center py-5" style="display:none;"><div class="spinner-border text-primary"></div><p class="mt-2 text-muted">加载中...</p></div>
+        <div id="groupList"></div>
+        <div id="groupListEmpty" class="text-center py-5" style="display:none;"><i class="bi bi-inbox" style="font-size:3rem;color:#ccc;"></i><p class="mt-2 text-muted">暂无用户组</p></div>
+      </div>
+    </div>
+
     <div class="content-section" id="file-management-section">
       <div class="content-header">
           <h2 class="mb-0"><i class="bi bi-folder me-2"></i>文件管理</h2>
@@ -5348,6 +5373,46 @@
     <p class="progress-text" id="progressText">0%</p>
   </div>
 </div>
+
+
+<!-- 创建用户组模态框 -->
+<div class="modal fade" id="createGroupModal" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title"><i class="bi bi-people-fill me-2"></i>创建用户组</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <form id="createGroupForm">
+        <div class="mb-3"><label class="form-label">组名 <span class="text-danger">*</span></label><input type="text" class="form-control" id="groupNameInput" placeholder="如：vip、guest" required><div class="form-text">用户名将自动生成为 组名_user01, 组名_user02 ...</div></div>
+        <div class="mb-3"><label class="form-label">描述（选填）</label><input type="text" class="form-control" id="groupDescInput" placeholder="简要描述该用户组的用途"></div>
+        <div class="mb-3"><label class="form-label">用户数量</label><input type="number" class="form-control" id="groupUserCount" value="5" min="1" max="100"><div class="form-text">每个用户密码为8位随机字母数字混合</div></div>
+      </form>
+    </div>
+    <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button><button type="button" class="btn btn-primary" onclick="submitCreateGroup()"><i class="bi bi-plus-lg me-1"></i>创建</button></div>
+  </div></div>
+</div>
+
+<!-- 查看组成员模态框 -->
+<div class="modal fade" id="viewMembersModal" tabindex="-1">
+  <div class="modal-dialog modal-lg"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title" id="viewMembersTitle"><i class="bi bi-list-ul me-2"></i>组成员</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <div class="mb-3"><button class="btn btn-outline-primary btn-sm" onclick="addMembersToCurrentGroup()"><i class="bi bi-person-plus me-1"></i>添加用户</button></div>
+      <div class="table-responsive"><table class="table table-striped"><thead><tr><th>用户名</th><th>密码</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="membersTableBody"></tbody></table></div>
+      <div id="membersEmpty" class="text-center py-4" style="display:none;"><p class="text-muted">暂无成员</p></div>
+    </div>
+  </div></div>
+</div>
+
+<!-- 追加用户模态框 -->
+<div class="modal fade" id="addMembersModal" tabindex="-1">
+  <div class="modal-dialog modal-sm"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title">添加用户</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <div class="mb-3"><label class="form-label">添加数量</label><input type="number" class="form-control" id="addMemberCount" value="5" min="1" max="50"></div>
+    </div>
+    <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button><button type="button" class="btn btn-primary" onclick="submitAddMembers()">确认添加</button></div>
+  </div></div>
+</div>
+
 
 </body>
 </html>

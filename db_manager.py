@@ -858,6 +858,18 @@ class DBManager:
             )
             ''')
 
+            # ===== 用户组表 =====
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_name TEXT UNIQUE NOT NULL,
+                description TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_by INTEGER,
+                FOREIGN KEY (created_by) REFERENCES users(id)
+            )
+            ''')
+
             # 创建定时任务表
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS scheduled_tasks (
@@ -1333,6 +1345,13 @@ Cookie数量: {cookie_count}
                 self.set_system_setting("db_version", "1.7", "数据库版本号")
                 logger.info("数据库升级到版本1.7完成")
 
+            # 升级到版本1.8 - 创建用户组表 + 为users表添加group_id和password_plain字段
+            if current_version < "1.8":
+                logger.info("开始升级数据库到版本1.8...")
+                self.upgrade_add_user_groups(cursor)
+                self.set_system_setting("db_version", "1.8", "数据库版本号")
+                logger.info("数据库升级到版本1.8完成")
+
             # 迁移遗留数据（在所有版本升级完成后执行）
             self.migrate_legacy_data(cursor)
 
@@ -1798,11 +1817,44 @@ Cookie数量: {cookie_count}
             self._execute_sql(cursor, "UPDATE users SET is_admin = 1 WHERE username = 'admin'")
             logger.info("已将admin用户设置为管理员")
 
+
             logger.info("✅ users表管理员权限字段升级完成")
             logger.info("   - is_admin: 是否为管理员 (0=普通用户, 1=管理员)")
             return True
         except Exception as e:
             logger.error(f"升级users表管理员权限字段失败: {e}")
+
+
+
+
+    def upgrade_add_user_groups(self, cursor):
+        """升级数据库 - 添加用户组支持"""
+        try:
+            logger.info("开始添加用户组支持...")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS user_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_name TEXT UNIQUE NOT NULL,
+                description TEXT DEFAULT "",
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_by INTEGER,
+                FOREIGN KEY (created_by) REFERENCES users(id))""")
+            try:
+                self._execute_sql(cursor, "SELECT group_id FROM users LIMIT 1")
+                logger.info("users表group_id字段已存在")
+            except:
+                self._execute_sql(cursor, "ALTER TABLE users ADD COLUMN group_id INTEGER REFERENCES user_groups(id)")
+                logger.info("为users表添加group_id字段")
+            try:
+                self._execute_sql(cursor, "SELECT password_plain FROM users LIMIT 1")
+                logger.info("users表password_plain字段已存在")
+            except:
+                self._execute_sql(cursor, 'ALTER TABLE users ADD COLUMN password_plain TEXT DEFAULT ""')
+                logger.info("为users表添加password_plain字段")
+            logger.info("用户组支持添加完成")
+        except Exception as e:
+            logger.error(f"添加用户组支持失败: {e}")
+            raise
+
             raise
 
     def migrate_legacy_data(self, cursor):
@@ -9668,6 +9720,109 @@ Cookie数量: {cookie_count}
         except Exception as e:
             logger.error("get_file_download_stats failed: {}".format(e))
             return {'total_users': 0, 'total_downloads': 0}
+
+    # ==================== 用户组管理方法 ====================
+
+    def create_group(self, group_name, description="", created_by=None):
+        """创建用户组，返回group_id"""
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute("INSERT INTO user_groups (group_name, description, created_by) VALUES (?, ?, ?)", (group_name, description, created_by))
+                self.conn.commit()
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error("create_group failed: {}".format(e))
+            raise
+
+    def get_all_groups(self):
+        """获取所有用户组列表（含成员数）"""
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute("""SELECT g.id, g.group_name, g.description, g.created_at, g.created_by, COUNT(u.id) as member_count FROM user_groups g LEFT JOIN users u ON u.group_id = g.id GROUP BY g.id ORDER BY g.created_at DESC""")
+                rows = cursor.fetchall()
+                columns = [desc[0] for desc in cursor.description]
+                return [dict(zip(columns, row)) for row in rows]
+        except Exception as e:
+            logger.error("get_all_groups failed: {}".format(e))
+            return []
+
+    def get_group_members(self, group_id):
+        """获取组成员列表（含密码明文）"""
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute("SELECT id, username, password_plain, email, created_at, is_active FROM users WHERE group_id = ? ORDER BY username", (group_id,))
+                rows = cursor.fetchall()
+                columns = [desc[0] for desc in cursor.description]
+                return [dict(zip(columns, row)) for row in rows]
+        except Exception as e:
+            logger.error("get_group_members failed: {}".format(e))
+            return []
+
+    def delete_group(self, group_id):
+        """删除用户组及其所有成员"""
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute("DELETE FROM download_records WHERE user_id IN (SELECT id FROM users WHERE group_id = ?)", (group_id,))
+                cursor.execute("DELETE FROM users WHERE group_id = ?", (group_id,))
+                cursor.execute("DELETE FROM user_groups WHERE id = ?", (group_id,))
+                self.conn.commit()
+                return True
+        except Exception as e:
+            logger.error("delete_group failed: {}".format(e))
+            self.conn.rollback()
+            return False
+
+    def batch_create_users(self, group_id, count, prefix):
+        """批量创建用户，返回 [{username, password, user_id}, ...]"""
+        import secrets as _secrets
+        import string as _string
+        created = []
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute("SELECT username FROM users WHERE group_id = ? ORDER BY username DESC LIMIT 1", (group_id,))
+                row = cursor.fetchone()
+                if row:
+                    import re as _re
+                    m = _re.search(r"_user(\d+)$", row[0])
+                    start_seq = int(m.group(1)) + 1 if m else 1
+                else:
+                    start_seq = 1
+                for i in range(count):
+                    seq = start_seq + i
+                    username = f"{prefix}_user{seq:02d}"
+                    password = "".join(_secrets.choice(_string.ascii_letters + _string.digits) for _ in range(8))
+                    email = f"{username}@group.local"
+                    password_hash = hashlib.sha256(password.encode()).hexdigest()
+                    cursor.execute("INSERT INTO users (username, email, password_hash, password_plain, is_admin, group_id) VALUES (?, ?, ?, ?, 0, ?)", (username, email, password_hash, password, group_id))
+                    user_id = cursor.lastrowid
+                    created.append({"username": username, "password": password, "user_id": user_id})
+                self.conn.commit()
+                return created
+        except Exception as e:
+            logger.error("batch_create_users failed: {}".format(e))
+            self.conn.rollback()
+            raise
+
+    def remove_group_member(self, user_id):
+        """删除组内单个成员"""
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute("DELETE FROM download_records WHERE user_id = ?", (user_id,))
+                cursor.execute("DELETE FROM users WHERE id = ? AND group_id IS NOT NULL", (user_id,))
+                self.conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error("remove_group_member failed: {}".format(e))
+            self.conn.rollback()
+            return False
+
+
 db_manager = DBManager()
 
 # 确保进程结束时关闭数据库连接

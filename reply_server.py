@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import List, Tuple, Optional, Dict, Any, Callable, Awaitable
@@ -70,6 +70,8 @@ KEYWORDS_FILE = Path(__file__).parent / "回复关键字.txt"
 ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "admin123"  # 系统初始化时的默认密码
 SESSION_TOKENS = {}  # 存储会话token: {token: {'user_id': int, 'username': str, 'timestamp': float}}
+
+DOWNLOAD_TOKENS = {}  # 下载一次性token: {token_str: {user_id, file_id, exp}}
 TOKEN_EXPIRE_TIME = 24 * 60 * 60  # token过期时间：24小时
 
 # HTTP Bearer认证
@@ -1354,7 +1356,7 @@ async def register_page():
         return HTMLResponse('<h3>Register page not found</h3>')
 
 
-# 管理页面（不需要服务器端认证，由前端JavaScript处理）
+# 管理页面 - 由前端JS检查管理员权限
 @app.get('/admin', response_class=HTMLResponse)
 async def admin_page():
     index_path = os.path.join(static_dir, 'index.html')
@@ -13215,8 +13217,8 @@ async def download_file(file_id: int, current_user: Dict[str, Any] = Depends(get
         if not file_info:
             raise HTTPException(status_code=404, detail="文件不存在")
         db_manager.record_download(file_id, user_id)
-        return StreamingResponse(
-            io.BytesIO(file_info['file_data']),
+        return Response(
+            content=file_info['file_data'],
             media_type=file_info.get('mime_type', 'application/octet-stream'),
             headers={"Content-Disposition": "attachment; filename*=UTF-8''" + urllib.parse.quote(file_info['filename'])}
         )
@@ -13284,6 +13286,142 @@ async def delete_file_info(
         raise
     except Exception as e:
         logger.error("delete_file_info failed: {}".format(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+
+# ==================== 下载 Token 机制 ====================
+
+@app.get("/api/files/{file_id}/download-token")
+async def get_download_token(file_id: int, current_user: Dict[str, Any] = Depends(get_current_user)):
+    try:
+        user_id = current_user['user_id']
+        can_download, remaining, max_allowed = db_manager.check_download_quota(file_id, user_id)
+        if not can_download:
+            raise HTTPException(status_code=403, detail="下载次数已用完")
+        token_str = secrets.token_urlsafe(32)
+        DOWNLOAD_TOKENS[token_str] = {
+            "user_id": user_id,
+            "file_id": file_id,
+            "exp": time.time() + 120
+        }
+        return {"success": True, "token": token_str}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("get_download_token failed: {}".format(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/files/{file_id}/direct")
+async def direct_download(file_id: int, token: str = None):
+    try:
+        if not token or token not in DOWNLOAD_TOKENS:
+            raise HTTPException(status_code=401, detail="无效或已过期的下载链接")
+        token_data = DOWNLOAD_TOKENS[token]
+        if token_data["file_id"] != file_id or time.time() > token_data["exp"]:
+            del DOWNLOAD_TOKENS[token]
+            raise HTTPException(status_code=401, detail="下载链接已过期")
+        user_id = token_data["user_id"]
+        del DOWNLOAD_TOKENS[token]  # 一次性
+        file_info = db_manager.get_file(file_id)
+        if not file_info:
+            raise HTTPException(status_code=404, detail="文件不存在")
+        db_manager.record_download(file_id, user_id)
+        return Response(
+            content=file_info['file_data'],
+            media_type=file_info.get('mime_type', 'application/octet-stream'),
+            headers={"Content-Disposition": "attachment; filename*=UTF-8''" + urllib.parse.quote(file_info['filename'])}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("direct_download failed: {}".format(e))
+        raise HTTPException(status_code=500, detail=str(e))
+# ==================== 用户组管理 API ====================
+
+class CreateGroupRequest(BaseModel):
+    group_name: str
+    description: Optional[str] = ""
+    user_count: int = 5
+
+class AddMembersRequest(BaseModel):
+    count: int = 5
+
+@app.post("/api/groups")
+async def create_group(req: CreateGroupRequest, admin_user: Dict[str, Any] = Depends(require_admin)):
+    try:
+        group_id = db_manager.create_group(
+            group_name=req.group_name,
+            description=req.description or "",
+            created_by=admin_user["user_id"]
+        )
+        members = db_manager.batch_create_users(group_id, req.user_count, req.group_name)
+        logger.info("admin {} created group '{}' with {} users".format(admin_user["username"], req.group_name, len(members)))
+        return {
+            "success": True,
+            "message": "用户组 '{}' 创建成功，含 {} 个用户".format(req.group_name, len(members)),
+            "group": {"id": group_id, "group_name": req.group_name},
+            "members": members
+        }
+    except Exception as e:
+        logger.error("create_group failed: {}".format(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/groups")
+async def list_groups(admin_user: Dict[str, Any] = Depends(require_admin)):
+    try:
+        groups = db_manager.get_all_groups()
+        return {"success": True, "data": groups}
+    except Exception as e:
+        logger.error("list_groups failed: {}".format(e))
+        return {"success": False, "message": str(e)}
+
+@app.get("/api/groups/{group_id}/members")
+async def get_group_members(group_id: int, admin_user: Dict[str, Any] = Depends(require_admin)):
+    try:
+        members = db_manager.get_group_members(group_id)
+        return {"success": True, "data": members}
+    except Exception as e:
+        logger.error("get_group_members failed: {}".format(e))
+        return {"success": False, "message": str(e)}
+
+@app.delete("/api/groups/{group_id}")
+async def delete_group(group_id: int, admin_user: Dict[str, Any] = Depends(require_admin)):
+    try:
+        success = db_manager.delete_group(group_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="用户组不存在")
+        logger.info("admin {} deleted group {}".format(admin_user["username"], group_id))
+        return {"success": True, "message": "用户组已删除"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("delete_group failed: {}".format(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/groups/{group_id}/members")
+async def add_group_members(group_id: int, req: AddMembersRequest, admin_user: Dict[str, Any] = Depends(require_admin)):
+    try:
+        members = db_manager.batch_create_users(group_id, req.count, "grp{}".format(group_id))
+        return {"success": True, "message": "已添加 {} 个用户".format(len(members)), "members": members}
+    except Exception as e:
+        logger.error("add_group_members failed: {}".format(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/groups/{group_id}/members/{user_id}")
+async def remove_group_member(group_id: int, user_id: int, admin_user: Dict[str, Any] = Depends(require_admin)):
+    try:
+        success = db_manager.remove_group_member(user_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="用户不存在或不属于任何组")
+        return {"success": True, "message": "成员已删除"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("remove_group_member failed: {}".format(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 # 移除自动启动，由Start.py或手动启动

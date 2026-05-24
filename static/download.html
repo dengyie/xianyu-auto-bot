@@ -305,69 +305,38 @@ function downloadFile(fileId, btn) {
 
   showProgress('下载文件中...');
 
-  var xhr = new XMLHttpRequest();
-  xhr.open('GET', '/api/files/' + fileId + '/download', true);
-  xhr.setRequestHeader('Authorization', 'Bearer ' + authToken);
-  xhr.responseType = 'blob';
-
-  xhr.onprogress = function(e) {
-    if (e.lengthComputable) {
-      updateProgress((e.loaded / e.total) * 100);
+  fetch('/api/files/' + fileId + '/download-token', {
+    method: 'GET',
+    headers: { 'Authorization': 'Bearer ' + authToken }
+  })
+  .then(function(resp) {
+    if (!resp.ok) {
+      return resp.json().then(function(err) {
+        throw new Error(err.detail || '获取下载令牌失败');
+      });
     }
-  };
-
-  xhr.onload = function() {
+    return resp.json();
+  })
+  .then(function(data) {
     hideProgress();
-    if (xhr.status === 200) {
-      var blob = xhr.response;
-      var disposition = xhr.getResponseHeader('Content-Disposition') || '';
-      var filename = 'download';
-      var match = disposition.match(/filename\*=UTF-8''(.+)/);
-      if (match) filename = decodeURIComponent(match[1]);
-      else {
-        match = disposition.match(/filename="?(.+?)"?$/);
-        if (match) filename = match[1];
-      }
-      var url = window.URL.createObjectURL(blob);
-      var a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
-      showToast('下载成功', 'success');
-      setTimeout(loadFiles, 500);
-    } else if (xhr.status === 403) {
-      try {
-        var errData = JSON.parse(xhr.responseText);
-        showToast(errData.detail || '下载次数已用完', 'danger');
-      } catch(e) {
-        showToast('下载次数已用完', 'danger');
-      }
-      loadFiles();
+    if (data.success && data.token) {
+      window.location.href = '/api/files/' + fileId + '/direct?token=' + encodeURIComponent(data.token);
+      setTimeout(function() {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+        loadFiles();
+      }, 1000);
     } else {
-      showToast('下载失败', 'danger');
+      showToast('获取下载令牌失败', 'danger');
+      btn.disabled = false;
+      btn.innerHTML = origHtml;
     }
-    btn.disabled = false;
-    btn.innerHTML = origHtml;
-  };
-
-  xhr.onerror = function() {
+  })
+  .catch(function(err) {
     hideProgress();
-    showToast('下载失败: 网络错误', 'danger');
+    showToast(err.message || '下载失败', 'danger');
     btn.disabled = false;
     btn.innerHTML = origHtml;
-  };
-
-  xhr.send();
-}
-
-function doLogout() {
-  localStorage.removeItem('auth_token');
-  localStorage.removeItem('user_info');
-  fetch('/logout', { method: 'POST', headers: { 'Authorization': 'Bearer ' + authToken } }).finally(function() {
-    window.location.href = '/';
   });
 }
 
