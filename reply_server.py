@@ -85,11 +85,18 @@ login_ip_tracker = {}
 login_user_tracker = {}
 # 永久黑名单IP列表
 ip_blacklist = set()
+username_rate_tracker: dict = {}
 
 # 验证码存储: {captcha_id: {'code': str, 'created_at': float, 'ip': str}}
 captcha_storage = {}
 CAPTCHA_EXPIRE_SECONDS = 300  # 验证码5分钟过期
 CAPTCHA_REQUIRE_AFTER_FAILURES = 2  # 失败2次后要求验证码
+
+# Codex识别
+def is_codex_browser(user_agent: str) -> bool:
+    if not user_agent:
+        return False
+    return 'Codex' in user_agent
 
 # 防暴力破解参数
 BRUTE_FORCE_CONFIG = {
@@ -104,6 +111,8 @@ BRUTE_FORCE_CONFIG = {
     'response_delay_multiplier': 0.5,  # 每次失败增加的延迟（秒）
     'max_response_delay': 10,       # 最大响应延迟（秒）
     'captcha_require_failures': 2,  # 失败多少次后需要验证码
+    'username_rate_per_minute': 5,
+    'username_rate_window': 60,
 }
 
 SENSITIVE_FIELD_PATTERNS = [
@@ -636,6 +645,28 @@ def record_login_success(client_ip: str, username: str):
         login_user_tracker[username]['attempts'] = 0
 
 
+def check_username_rate_limit(username: str):
+    if not username:
+        return False, 0
+    current_time = time.time()
+    window = BRUTE_FORCE_CONFIG.get('username_rate_window', 60)
+    max_attempts = BRUTE_FORCE_CONFIG.get('username_rate_per_minute', 5)
+    if username not in username_rate_tracker:
+        username_rate_tracker[username] = []
+    timestamps = username_rate_tracker[username]
+    timestamps[:] = [t for t in timestamps if current_time - t < window]
+    if len(timestamps) >= max_attempts:
+        remaining = int(window - (current_time - timestamps[0]))
+        return True, remaining
+    return False, 0
+
+def record_username_rate(username: str):
+    if not username:
+        return
+    if username not in username_rate_tracker:
+        username_rate_tracker[username] = []
+    username_rate_tracker[username].append(time.time())
+
 def get_response_delay(client_ip: str) -> float:
     """计算响应延迟时间（失败次数越多，延迟越长）"""
     if client_ip not in login_ip_tracker:
@@ -650,8 +681,10 @@ def get_response_delay(client_ip: str) -> float:
     return min(delay, BRUTE_FORCE_CONFIG['max_response_delay'])
 
 
-def is_captcha_required(client_ip: str) -> bool:
-    """检查是否需要验证码"""
+def is_captcha_required(client_ip: str, user_agent: str = "") -> bool:
+    """检查是否需要验证码(Codex豁免)"""
+    if is_codex_browser(user_agent):
+        return False
     if client_ip not in login_ip_tracker:
         return False
     attempts = login_ip_tracker[client_ip].get('attempts', 0)
@@ -1236,18 +1269,12 @@ async def generate_captcha(request: Request):
         media_type="image/png",
         headers={
             "X-Captcha-Id": captcha_id,
+            "Access-Control-Expose-Headers": "X-Captcha-Id",
             "Cache-Control": "no-cache, no-store, must-revalidate"
         }
     )
 
 
-@app.get('/captcha/check-required')
-async def check_captcha_required(request: Request):
-    """检查是否需要验证码"""
-    client_ip = request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or \
-                request.headers.get('X-Real-IP', '') or \
-                request.client.host if request.client else 'unknown'
-    
     required = is_captcha_required(client_ip)
     failure_count = get_ip_failure_count(client_ip)
     
@@ -1259,6 +1286,22 @@ async def check_captcha_required(request: Request):
 
 
 # ========================= 验证码API结束 =========================
+
+@app.get("/captcha/check-required")
+async def check_captcha_required(request: Request):
+    client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or \
+                request.headers.get("X-Real-IP", "") or \
+                request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("User-Agent", "")
+    required = is_captcha_required(client_ip, user_agent)
+    failure_count = get_ip_failure_count(client_ip)
+    return {
+        "required": required,
+        "codex_browser": is_codex_browser(user_agent),
+        "failure_count": failure_count,
+        "threshold": BRUTE_FORCE_CONFIG.get("captcha_require_failures", 2)
+    }
+
 
 
 # 登录页面路由
@@ -1408,25 +1451,40 @@ async def login(login_request: LoginRequest, request: Request):
                 captcha_required=True
             )
     
+    # 用户名速率限制
+    if login_identifier:
+        rate_limited, rate_remaining = check_username_rate_limit(login_identifier)
+        if rate_limited:
+            logger.warning("[RATE] user=" + login_identifier + " too many attempts")
+            return LoginResponse(
+                success=False,
+                message="请求过于频繁，请稍后重试",
+                captcha_required=True
+            )
+        record_username_rate(login_identifier)
+    
     # 检查是否需要验证码
     captcha_enabled_str = db_manager.get_system_setting('login_captcha_enabled')
     captcha_enabled = captcha_enabled_str == 'true' if captcha_enabled_str is not None else True
 
     if captcha_enabled:
-        # 验证码已开启，需要验证
-        captcha_valid, captcha_error = verify_login_captcha(
-            login_request.captcha_id,
-            login_request.captcha_code,
-            client_ip
-        )
-        if not captcha_valid:
-            logger.warning(f"🔢 IP {client_ip} 验证码验证失败: {captcha_error}")
-            return LoginResponse(
+        user_agent = request.headers.get("User-Agent", "")
+        if is_codex_browser(user_agent):
+            logger.info("Codex browser, skip captcha")
+        else:
+            captcha_valid, captcha_error = verify_login_captcha(
+                login_request.captcha_id,
+                login_request.captcha_code,
+                client_ip
+            )
+            if not captcha_valid:
+                logger.warning(f"🔢 IP {client_ip} 验证码验证失败: {captcha_error}")
+                return LoginResponse(
                 success=False,
                 message=captcha_error,
                 captcha_required=True
-            )
-        logger.info(f"🔢 IP {client_ip} 验证码验证成功")
+                )
+            logger.info(f"🔢 IP {client_ip} 验证码验证成功")
     else:
         logger.info(f"🔢 IP {client_ip} 登录验证码已关闭，跳过验证")
 

@@ -814,3 +814,9 @@ secure_confirm_ultra.py
 secure_freeshipping_ultra.py
 test_php_stats.py
 .playwright-browsers/
+
+# Test artifacts
+captcha*.png
+captcha_response.txt
+goofish_cookies.json
+get_cookie.py
