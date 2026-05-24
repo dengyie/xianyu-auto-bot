@@ -19618,6 +19618,35 @@ async function savePolishSchedule() {
 
 // ==================== 文件管理功能 ====================
 
+function showProgress(title) {
+    var overlay = document.getElementById('progressOverlay');
+    var bar = document.getElementById('progressBar');
+    var text = document.getElementById('progressText');
+    var titleEl = document.getElementById('progressTitle');
+    if (!overlay) return;
+    titleEl.textContent = title || '处理中...';
+    bar.style.width = '0%';
+    text.textContent = '0%';
+    overlay.classList.add('active');
+}
+
+function updateProgress(percent) {
+    var bar = document.getElementById('progressBar');
+    var text = document.getElementById('progressText');
+    if (!bar || !text) return;
+    var p = Math.round(percent);
+    bar.style.width = p + '%';
+    text.textContent = p + '%';
+}
+
+function hideProgress() {
+    var overlay = document.getElementById('progressOverlay');
+    if (!overlay) return;
+    overlay.classList.remove('active');
+}
+
+
+
 function showUploadFileModal() {
     document.getElementById('uploadFileInput').value = '';
     document.getElementById('uploadFileDesc').value = '';
@@ -19625,7 +19654,7 @@ function showUploadFileModal() {
     new bootstrap.Modal(document.getElementById('uploadFileModal')).show();
 }
 
-async function submitUploadFile() {
+function submitUploadFile() {
     var fileInput = document.getElementById('uploadFileInput');
     var file = fileInput.files[0];
     if (!file) { showToast('请选择文件', 'warning'); return; }
@@ -19633,23 +19662,41 @@ async function submitUploadFile() {
     formData.append('file', file);
     formData.append('description', document.getElementById('uploadFileDesc').value);
     formData.append('max_downloads', document.getElementById('uploadFileMaxDownloads').value);
-    try {
-        var response = await fetch('/api/files', {
-            method: 'POST',
-            headers: { 'Authorization': 'Bearer ' + getAuthToken() },
-            body: formData
-        });
-        var result = await response.json();
-        if (result.success) {
-            showToast('文件上传成功', 'success');
-            bootstrap.Modal.getInstance(document.getElementById('uploadFileModal')).hide();
-            loadAdminFiles();
-        } else {
-            showToast('上传失败: ' + (result.message || '未知错误'), 'danger');
+
+    showProgress('上传文件中...');
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/files', true);
+    xhr.setRequestHeader('Authorization', 'Bearer ' + getAuthToken());
+
+    xhr.upload.onprogress = function(e) {
+        if (e.lengthComputable) {
+            updateProgress((e.loaded / e.total) * 100);
         }
-    } catch(e) {
+    };
+
+    xhr.onload = function() {
+        hideProgress();
+        try {
+            var result = JSON.parse(xhr.responseText);
+            if (result.success) {
+                showToast('文件上传成功', 'success');
+                bootstrap.Modal.getInstance(document.getElementById('uploadFileModal')).hide();
+                loadAdminFiles();
+            } else {
+                showToast('上传失败: ' + (result.message || '未知错误'), 'danger');
+            }
+        } catch(e) {
+            showToast('上传失败', 'danger');
+        }
+    };
+
+    xhr.onerror = function() {
+        hideProgress();
         showToast('上传失败: 网络错误', 'danger');
-    }
+    };
+
+    xhr.send(formData);
 }
 
 function showEditFileModal(fileId, description, maxDownloads) {

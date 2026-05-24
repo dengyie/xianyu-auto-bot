@@ -107,7 +107,44 @@
       right: 20px;
       z-index: 9999;
     }
-  </style>
+  
+    /* 进度遮罩 */
+    .progress-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 10000;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+    }
+    .progress-overlay.active {
+      display: flex;
+    }
+    .progress-card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 32px 40px;
+      min-width: 360px;
+      max-width: 440px;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    .progress-card .spinner-border {
+      width: 3rem; height: 3rem;
+    }
+    .progress-card .progress {
+      height: 10px;
+      border-radius: 5px;
+      margin-top: 16px;
+    }
+    .progress-card .progress-text {
+      font-size: 0.9rem;
+      color: #6c757d;
+      margin-top: 8px;
+    }
+</style>
 </head>
 <body>
   <nav class="navbar navbar-custom">
@@ -261,47 +298,69 @@ async function loadFiles() {
   }
 }
 
-async function downloadFile(fileId, btn) {
+function downloadFile(fileId, btn) {
   var origHtml = btn.innerHTML;
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>下载中...';
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>准备中...';
 
-  try {
-    var resp = await fetch('/api/files/' + fileId + '/download', {
-      headers: { 'Authorization': 'Bearer ' + authToken }
-    });
-    if (!resp.ok) {
-      var errData = await resp.json().catch(function() { return {detail: '下载失败'}; });
-      showToast(errData.detail || '下载失败', 'danger');
-      btn.disabled = false;
-      btn.innerHTML = origHtml;
-      if (resp.status === 403) loadFiles();
-      return;
+  showProgress('下载文件中...');
+
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', '/api/files/' + fileId + '/download', true);
+  xhr.setRequestHeader('Authorization', 'Bearer ' + authToken);
+  xhr.responseType = 'blob';
+
+  xhr.onprogress = function(e) {
+    if (e.lengthComputable) {
+      updateProgress((e.loaded / e.total) * 100);
     }
-    var blob = await resp.blob();
-    var disposition = resp.headers.get('Content-Disposition') || '';
-    var filename = 'download';
-    var match = disposition.match(/filename\*=UTF-8''(.+)/);
-    if (match) filename = decodeURIComponent(match[1]);
-    else {
-      match = disposition.match(/filename="?(.+?)"?$/);
-      if (match) filename = match[1];
+  };
+
+  xhr.onload = function() {
+    hideProgress();
+    if (xhr.status === 200) {
+      var blob = xhr.response;
+      var disposition = xhr.getResponseHeader('Content-Disposition') || '';
+      var filename = 'download';
+      var match = disposition.match(/filename\*=UTF-8''(.+)/);
+      if (match) filename = decodeURIComponent(match[1]);
+      else {
+        match = disposition.match(/filename="?(.+?)"?$/);
+        if (match) filename = match[1];
+      }
+      var url = window.URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+      showToast('下载成功', 'success');
+      setTimeout(loadFiles, 500);
+    } else if (xhr.status === 403) {
+      try {
+        var errData = JSON.parse(xhr.responseText);
+        showToast(errData.detail || '下载次数已用完', 'danger');
+      } catch(e) {
+        showToast('下载次数已用完', 'danger');
+      }
+      loadFiles();
+    } else {
+      showToast('下载失败', 'danger');
     }
-    var url = window.URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-    showToast('下载成功', 'success');
-    setTimeout(loadFiles, 500);
-  } catch (e) {
+    btn.disabled = false;
+    btn.innerHTML = origHtml;
+  };
+
+  xhr.onerror = function() {
+    hideProgress();
     showToast('下载失败: 网络错误', 'danger');
     btn.disabled = false;
     btn.innerHTML = origHtml;
-  }
+  };
+
+  xhr.send();
 }
 
 function doLogout() {
@@ -315,6 +374,46 @@ function doLogout() {
 document.addEventListener('DOMContentLoaded', function() {
   loadFiles();
 });
+
+
+function showProgress(title) {
+    var overlay = document.getElementById('progressOverlay');
+    var bar = document.getElementById('progressBar');
+    var text = document.getElementById('progressText');
+    var titleEl = document.getElementById('progressTitle');
+    if (!overlay) return;
+    titleEl.textContent = title || '处理中...';
+    bar.style.width = '0%';
+    text.textContent = '0%';
+    overlay.classList.add('active');
+}
+function updateProgress(percent) {
+    var bar = document.getElementById('progressBar');
+    var text = document.getElementById('progressText');
+    if (!bar || !text) return;
+    var p = Math.round(percent);
+    bar.style.width = p + '%';
+    text.textContent = p + '%';
+}
+function hideProgress() {
+    var overlay = document.getElementById('progressOverlay');
+    if (!overlay) return;
+    overlay.classList.remove('active');
+}
+
 </script>
+
+<!-- 进度遮罩 -->
+<div class="progress-overlay" id="progressOverlay">
+  <div class="progress-card">
+    <div class="spinner-border text-primary mb-3" id="progressSpinner"></div>
+    <h5 id="progressTitle" class="mb-2">处理中...</h5>
+    <div class="progress">
+      <div class="progress-bar progress-bar-striped progress-bar-animated" id="progressBar" style="width: 0%"></div>
+    </div>
+    <p class="progress-text" id="progressText">0%</p>
+  </div>
+</div>
+
 </body>
 </html>

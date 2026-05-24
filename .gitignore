@@ -823,3 +823,8 @@ get_cookie.py
 
 # Codex project memory (local only)
 .codex-memory/
+
+# Session temp/debug files
+_temp_fix.py
+stderr.txt
+stdout.txt

@@ -9,7 +9,44 @@
   <style>
     html { visibility: hidden; }
     html.theme-ready { visibility: visible; }
-  </style>
+  
+    /* 进度遮罩 */
+    .progress-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 10000;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+    }
+    .progress-overlay.active {
+      display: flex;
+    }
+    .progress-card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 32px 40px;
+      min-width: 360px;
+      max-width: 440px;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    .progress-card .spinner-border {
+      width: 3rem; height: 3rem;
+    }
+    .progress-card .progress {
+      height: 10px;
+      border-radius: 5px;
+      margin-top: 16px;
+    }
+    .progress-card .progress-text {
+      font-size: 0.9rem;
+      color: #6c757d;
+      margin-top: 8px;
+    }
+</style>
   <script>
     (function() {
       function adjustBrightness(hex, percent) {
@@ -5297,6 +5334,19 @@
     </div>
     <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button><button type="button" class="btn btn-primary" onclick="submitEditFile()"><i class="bi bi-check-lg me-1"></i>保存</button></div>
   </div></div>
+</div>
+
+
+<!-- 进度遮罩 -->
+<div class="progress-overlay" id="progressOverlay">
+  <div class="progress-card">
+    <div class="spinner-border text-primary mb-3" id="progressSpinner"></div>
+    <h5 id="progressTitle" class="mb-2">处理中...</h5>
+    <div class="progress">
+      <div class="progress-bar progress-bar-striped progress-bar-animated" id="progressBar" style="width: 0%"></div>
+    </div>
+    <p class="progress-text" id="progressText">0%</p>
+  </div>
 </div>
 
 </body>
