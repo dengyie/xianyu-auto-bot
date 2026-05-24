@@ -322,7 +322,7 @@
             username: result.username,
             is_admin: result.is_admin
           }));
-          window.location.href = '/admin';
+          if (result.is_admin) { window.location.href = '/admin'; } else { window.location.href = '/download'; }
         } else {
           showError(result.message || '登录失败');
           if (loginCaptchaEnabled) {

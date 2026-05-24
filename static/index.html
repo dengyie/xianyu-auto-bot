@@ -155,6 +155,12 @@
         <div class="nav-divider mt-3 mb-2">
           <small class="text-white-50">管理员功能</small>
         </div>
+        <div class="nav-item" data-menu-id="file-management">
+          <a href="javascript:void(0)" class="nav-link" onclick="showSection('file-management')">
+            <i class="bi bi-folder"></i>
+            <span>文件管理</span>
+          </a>
+        </div>
         <div class="nav-item" data-menu-id="user-management">
           <a href="javascript:void(0)" class="nav-link" onclick="showSection('user-management')">
             <i class="bi bi-people"></i>
@@ -3450,7 +3456,24 @@
       </div>
     </div>
 
+    <div class="content-section" id="file-management-section">
+      <div class="content-header">
+          <h2 class="mb-0"><i class="bi bi-folder me-2"></i>文件管理</h2>
+          <p class="text-muted mb-0">管理下载文件，设置下载次数限制</p>
+        </div>
+        <div class="content-body">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <button class="btn btn-primary" onclick="showUploadFileModal()"><i class="bi bi-upload me-1"></i>上传文件</button>
+            <button class="btn btn-outline-secondary btn-sm" onclick="loadAdminFiles()"><i class="bi bi-arrow-clockwise me-1"></i>刷新</button>
+          </div>
+          <div id="adminFileLoading" class="text-center py-5" style="display:none;"><div class="spinner-border text-primary"></div><p class="mt-2 text-muted">加载中...</p></div>
+          <div id="adminFileList"></div>
+          <div id="adminFileEmpty" class="text-center py-5" style="display:none;"><i class="bi bi-inbox" style="font-size:3rem;color:#ccc;"></i><p class="mt-2 text-muted">暂无文件</p></div>
+      </div>
+    </div>
+
     <!-- 关于页面内容 -->
+
     <div id="about-section" class="content-section">
       <div class="content-header">
         <h2 class="mb-0">
@@ -5245,6 +5268,36 @@
       </div>
     </div>
   </div>
+
+
+<!-- 文件上传模态框 -->
+<div class="modal fade" id="uploadFileModal" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title"><i class="bi bi-upload me-2"></i>上传文件</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <form id="uploadFileForm">
+        <div class="mb-3"><label class="form-label">选择文件 <span class="text-danger">*</span></label><input type="file" class="form-control" id="uploadFileInput" required></div>
+        <div class="mb-3"><label class="form-label">文件描述</label><input type="text" class="form-control" id="uploadFileDesc" placeholder="简要描述文件内容"></div>
+        <div class="mb-3"><label class="form-label">每用户下载上限</label><input type="number" class="form-control" id="uploadFileMaxDownloads" value="5" min="1" max="999"><div class="form-text">每个用户可以下载该文件的次数</div></div>
+      </form>
+    </div>
+    <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button><button type="button" class="btn btn-primary" onclick="submitUploadFile()"><i class="bi bi-cloud-upload me-1"></i>上传</button></div>
+  </div></div>
+</div>
+<!-- 文件编辑模态框 -->
+<div class="modal fade" id="editFileModal" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title"><i class="bi bi-pencil me-2"></i>编辑文件信息</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <form id="editFileForm">
+        <input type="hidden" id="editFileId">
+        <div class="mb-3"><label class="form-label">文件描述</label><input type="text" class="form-control" id="editFileDesc"></div>
+        <div class="mb-3"><label class="form-label">每用户下载上限</label><input type="number" class="form-control" id="editFileMaxDownloads" min="1" max="999"></div>
+      </form>
+    </div>
+    <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button><button type="button" class="btn btn-primary" onclick="submitEditFile()"><i class="bi bi-check-lg me-1"></i>保存</button></div>
+  </div></div>
+</div>
 
 </body>
 </html>

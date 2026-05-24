@@ -5,6 +5,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import List, Tuple, Optional, Dict, Any, Callable, Awaitable
 from pathlib import Path
+import urllib.parse
 from urllib.parse import unquote
 from urllib import request as urllib_request, error as urllib_error
 import hashlib
@@ -1412,6 +1413,16 @@ async def admin_page():
 
 
 
+
+# 文件下载页面
+@app.get('/download', response_class=HTMLResponse)
+async def download_page():
+    download_path = os.path.join(static_dir, 'download.html')
+    if os.path.exists(download_path):
+        with open(download_path, 'r', encoding='utf-8') as f:
+            return HTMLResponse(f.read())
+    else:
+        return HTMLResponse('<h3>Download page not found</h3>')
 
 # 登录接口
 @app.post('/login')
@@ -13178,6 +13189,102 @@ async def scheduled_task_checker():
             logger.error(f"定时任务检查异常: {str(e)}")
         await asyncio.sleep(60)
 
+
+
+# ==================== 文件下载服务 API ====================
+
+@app.get("/api/files")
+async def list_files(current_user: Dict[str, Any] = Depends(get_current_user)):
+    try:
+        user_id = current_user['user_id']
+        files = db_manager.get_files(user_id=user_id)
+        return {"success": True, "data": files}
+    except Exception as e:
+        logger.error("list_files failed: {}".format(e))
+        return {"success": False, "message": str(e)}
+
+
+@app.get("/api/files/{file_id}/download")
+async def download_file(file_id: int, current_user: Dict[str, Any] = Depends(get_current_user)):
+    try:
+        user_id = current_user['user_id']
+        can_download, remaining, max_allowed = db_manager.check_download_quota(file_id, user_id)
+        if not can_download:
+            raise HTTPException(status_code=403, detail="下载次数已用完")
+        file_info = db_manager.get_file(file_id)
+        if not file_info:
+            raise HTTPException(status_code=404, detail="文件不存在")
+        db_manager.record_download(file_id, user_id)
+        return StreamingResponse(
+            io.BytesIO(file_info['file_data']),
+            media_type=file_info.get('mime_type', 'application/octet-stream'),
+            headers={"Content-Disposition": "attachment; filename*=UTF-8''" + urllib.parse.quote(file_info['filename'])}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("download_file failed: {}".format(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/files")
+async def upload_file(
+    file: UploadFile = File(...),
+    description: str = Form(""),
+    max_downloads: int = Form(5),
+    admin_user: Dict[str, Any] = Depends(require_admin)
+):
+    try:
+        file_data = await file.read()
+        file_id = db_manager.add_file(
+            filename=file.filename,
+            file_data=file_data,
+            description=description,
+            mime_type=file.content_type or 'application/octet-stream',
+            max_downloads=max_downloads,
+            created_by=admin_user['user_id']
+        )
+        logger.info("admin {} uploaded file: {} (id={})".format(admin_user['username'], file.filename, file_id))
+        return {"success": True, "message": "文件上传成功", "file_id": file_id}
+    except Exception as e:
+        logger.error("upload_file failed: {}".format(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/files/{file_id}")
+async def update_file_info(
+    file_id: int,
+    description: Optional[str] = Form(None),
+    max_downloads: Optional[int] = Form(None),
+    admin_user: Dict[str, Any] = Depends(require_admin)
+):
+    try:
+        success = db_manager.update_file(file_id, description=description, max_downloads=max_downloads)
+        if not success:
+            raise HTTPException(status_code=404, detail="文件不存在或更新失败")
+        return {"success": True, "message": "文件更新成功"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("update_file_info failed: {}".format(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/files/{file_id}")
+async def delete_file_info(
+    file_id: int,
+    admin_user: Dict[str, Any] = Depends(require_admin)
+):
+    try:
+        success = db_manager.delete_file(file_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="文件不存在")
+        return {"success": True, "message": "文件已删除"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("delete_file_info failed: {}".format(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 # 移除自动启动，由Start.py或手动启动
 # if __name__ == "__main__":

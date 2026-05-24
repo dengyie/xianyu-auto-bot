@@ -170,6 +170,10 @@ function showSection(sectionName) {
     case 'data-management':  // 【数据管理菜单】
         loadDataManagement();
         break;
+    case 'file-management':
+        loadAdminFiles();
+        break;
+
     }
 
     if (sectionName !== 'orders') {
@@ -19607,5 +19611,168 @@ async function savePolishSchedule() {
         closePolishScheduleModal();
     } catch (error) {
         console.error('保存定时擦亮设置失败:', error);
+    }
+}
+
+
+
+// ==================== 文件管理功能 ====================
+
+function showUploadFileModal() {
+    document.getElementById('uploadFileInput').value = '';
+    document.getElementById('uploadFileDesc').value = '';
+    document.getElementById('uploadFileMaxDownloads').value = '5';
+    new bootstrap.Modal(document.getElementById('uploadFileModal')).show();
+}
+
+async function submitUploadFile() {
+    var fileInput = document.getElementById('uploadFileInput');
+    var file = fileInput.files[0];
+    if (!file) { showToast('请选择文件', 'warning'); return; }
+    var formData = new FormData();
+    formData.append('file', file);
+    formData.append('description', document.getElementById('uploadFileDesc').value);
+    formData.append('max_downloads', document.getElementById('uploadFileMaxDownloads').value);
+    try {
+        var response = await fetch('/api/files', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + getAuthToken() },
+            body: formData
+        });
+        var result = await response.json();
+        if (result.success) {
+            showToast('文件上传成功', 'success');
+            bootstrap.Modal.getInstance(document.getElementById('uploadFileModal')).hide();
+            loadAdminFiles();
+        } else {
+            showToast('上传失败: ' + (result.message || '未知错误'), 'danger');
+        }
+    } catch(e) {
+        showToast('上传失败: 网络错误', 'danger');
+    }
+}
+
+function showEditFileModal(fileId, description, maxDownloads) {
+    document.getElementById('editFileId').value = fileId;
+    document.getElementById('editFileDesc').value = description || '';
+    document.getElementById('editFileMaxDownloads').value = maxDownloads;
+    new bootstrap.Modal(document.getElementById('editFileModal')).show();
+}
+
+async function submitEditFile() {
+    var fileId = document.getElementById('editFileId').value;
+    var formData = new FormData();
+    formData.append('description', document.getElementById('editFileDesc').value);
+    formData.append('max_downloads', document.getElementById('editFileMaxDownloads').value);
+    try {
+        var response = await fetch('/api/files/' + fileId, {
+            method: 'PUT',
+            headers: { 'Authorization': 'Bearer ' + getAuthToken() },
+            body: formData
+        });
+        var result = await response.json();
+        if (result.success) {
+            showToast('文件信息已更新', 'success');
+            bootstrap.Modal.getInstance(document.getElementById('editFileModal')).hide();
+            loadAdminFiles();
+        } else {
+            showToast('更新失败: ' + (result.message || '未知错误'), 'danger');
+        }
+    } catch(e) {
+        showToast('更新失败: 网络错误', 'danger');
+    }
+}
+
+async function deleteAdminFile(fileId) {
+    if (!confirm('确定要删除此文件吗？此操作不可恢复。')) return;
+    try {
+        var response = await fetch('/api/files/' + fileId, {
+            method: 'DELETE',
+            headers: { 'Authorization': 'Bearer ' + getAuthToken() }
+        });
+        var result = await response.json();
+        if (result.success) {
+            showToast('文件已删除', 'success');
+            loadAdminFiles();
+        } else {
+            showToast('删除失败: ' + (result.message || '未知错误'), 'danger');
+        }
+    } catch(e) {
+        showToast('删除失败: 网络错误', 'danger');
+    }
+}
+
+function formatSize(bytes) {
+    if (!bytes) return '0 B';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+    return (bytes / 1073741824).toFixed(2) + ' GB';
+}
+
+async function loadAdminFiles() {
+    var loading = document.getElementById('adminFileLoading');
+    var list = document.getElementById('adminFileList');
+    var empty = document.getElementById('adminFileEmpty');
+    if (!loading || !list || !empty) return;
+    
+    loading.style.display = 'block';
+    list.innerHTML = '';
+    empty.style.display = 'none';
+    
+    try {
+        var response = await fetch('/api/files', {
+            headers: { 'Authorization': 'Bearer ' + getAuthToken() }
+        });
+        var result = await response.json();
+        loading.style.display = 'none';
+        
+        if (!result.success || !result.data || !result.data.length) {
+            empty.style.display = 'block';
+            return;
+        }
+        
+        var files = result.data;
+        var html = '<div class="table-responsive"><table class="table table-hover">';
+        html += '<thead><tr><th>ID</th><th>文件名</th><th>描述</th><th>大小</th><th>上限/次</th><th>操作</th></tr></thead><tbody>';
+        
+        for (var i = 0; i < files.length; i++) {
+            var f = files[i];
+            html += '<tr>';
+            html += '<td>' + f.id + '</td>';
+            html += '<td>' + (f.filename || '') + '</td>';
+            html += '<td>' + (f.description || '-') + '</td>';
+            html += '<td>' + formatSize(f.file_size) + '</td>';
+            html += '<td>' + f.max_downloads_per_user + '</td>';
+            html += '<td>';
+            html += '<button class="btn btn-sm btn-outline-primary me-1" data-action="edit" data-id="' + f.id + '" data-desc="' + (f.description || '').replace(/"/g, '&quot;') + '" data-max="' + f.max_downloads_per_user + '"><i class="bi bi-pencil"></i></button>';
+            html += '<button class="btn btn-sm btn-outline-danger" data-action="delete" data-id="' + f.id + '"><i class="bi bi-trash"></i></button>';
+            html += '</td>';
+            html += '</tr>';
+        }
+        
+        html += '</tbody></table></div>';
+        list.innerHTML = html;
+        
+        // Use event delegation instead of inline onclick
+        list.querySelectorAll('button[data-action="edit"]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                showEditFileModal(
+                    parseInt(this.getAttribute('data-id')),
+                    this.getAttribute('data-desc'),
+                    parseInt(this.getAttribute('data-max'))
+                );
+            });
+        });
+        
+        list.querySelectorAll('button[data-action="delete"]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                deleteAdminFile(parseInt(this.getAttribute('data-id')));
+            });
+        });
+        
+    } catch(e) {
+        loading.style.display = 'none';
+        showToast('加载文件列表失败', 'danger');
     }
 }
