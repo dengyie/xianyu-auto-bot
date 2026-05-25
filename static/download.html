@@ -215,6 +215,18 @@ async function checkAuth() {
   }
 }
 
+async function doLogout() {
+  try {
+    await fetch('/logout', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + authToken }
+    });
+  } catch (e) {}
+  localStorage.removeItem('auth_token');
+  localStorage.removeItem('user_info');
+  window.location.href = '/login.html';
+}
+
 function fmtSize(bytes) {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';

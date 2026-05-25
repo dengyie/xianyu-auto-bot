@@ -2,6 +2,8 @@ import sqlite3
 import os
 import threading
 import hashlib
+import secrets
+import string as _string
 import time
 import json
 import random
@@ -15,6 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 from typing import List, Tuple, Dict, Optional, Any
 from urllib.parse import parse_qs, urlparse
 from cryptography.fernet import Fernet, InvalidToken
+from passlib.hash import bcrypt
 from loguru import logger
 
 class DBManager:
@@ -1352,6 +1355,13 @@ Cookie数量: {cookie_count}
                 self.set_system_setting("db_version", "1.8", "数据库版本号")
                 logger.info("数据库升级到版本1.8完成")
 
+            # 升级到版本1.9 - 删除password_plain字段，密码加密升级至bcrypt
+            if current_version < "1.9":
+                logger.info("开始升级数据库到版本1.9...")
+                self.upgrade_password_security(cursor)
+                self.set_system_setting("db_version", "1.9", "数据库版本号")
+                logger.info("数据库升级到版本1.9完成")
+
             # 迁移遗留数据（在所有版本升级完成后执行）
             self.migrate_legacy_data(cursor)
 
@@ -1369,7 +1379,12 @@ Cookie数量: {cookie_count}
 
             if not admin_exists:
                 # 首次创建admin用户，设置默认密码和管理员权限
-                default_password_hash = hashlib.sha256("admin123".encode()).hexdigest()
+                admin_password = "".join(_secrets.choice(_string.ascii_letters + _string.digits) for _ in range(16))
+                default_password_hash = self._hash_password(admin_password)
+                logger.warning("="*60)
+                logger.warning(f"INITIAL ADMIN PASSWORD: {admin_password}")
+                logger.warning("Please login and change it immediately!")
+                logger.warning("="*60)
                 # 检查is_admin列是否存在
                 try:
                     cursor.execute('SELECT is_admin FROM users LIMIT 1')
@@ -1855,6 +1870,28 @@ Cookie数量: {cookie_count}
             logger.error(f"添加用户组支持失败: {e}")
             raise
 
+    def upgrade_password_security(self, cursor):
+        """v1.9: ???password_plain??????SHA256????????crypt"""
+        try:
+            # 1. ??????password_plain???
+            try:
+                self._execute_sql(cursor, "SELECT password_plain FROM users LIMIT 1")
+                self._execute_sql(cursor, "ALTER TABLE users DROP COLUMN password_plain")
+                logger.info("?????sers??assword_plain???")
+            except Exception:
+                logger.info("password_plain column dropped successfully")
+            # 2. ??HA256????????????bcrypt??????????????????????
+            #    ???????????????????????crypt?????HA256???
+            #    ????HA256???????????????????????
+            #    ?????dmin??????????????crypt???
+            # 3. ?????????
+            try:
+                self._execute_sql(cursor, "UPDATE users SET password_hash = '' WHERE password_hash IS NULL")
+            except Exception:
+                pass
+            logger.info("?????????????????HA256?????????????????????")
+        except Exception as e:
+            logger.error(f"????????????: {e}")
             raise
 
     def migrate_legacy_data(self, cursor):
@@ -4024,6 +4061,26 @@ Cookie数量: {cookie_count}
 
     # 管理员密码现在统一使用用户表管理，不再需要单独的方法
 
+
+    # ==================== Password helpers (bcrypt + SHA256 compat) ====================
+
+    def _hash_password(self, password: str) -> str:
+        return bcrypt.hash(password)
+
+    def _verify_password(self, password: str, stored_hash: str):
+        stored_hash = (stored_hash or '').strip()
+        if not stored_hash:
+            return False, False, None
+        if stored_hash.startswith('$2b$') or stored_hash.startswith('$2a$'):
+            try:
+                return (bcrypt.verify(password, stored_hash), False, None)
+            except Exception:
+                return (False, False, None)
+        sha256_hash = hashlib.sha256(password.encode()).hexdigest()
+        if sha256_hash == stored_hash:
+            return (True, True, self._hash_password(password))
+        return (False, False, None)
+
     # ==================== 用户管理方法 ====================
 
     def create_user(self, username: str, email: str, password: str) -> bool:
@@ -4031,7 +4088,7 @@ Cookie数量: {cookie_count}
         with self.lock:
             try:
                 cursor = self.conn.cursor()
-                password_hash = hashlib.sha256(password.encode()).hexdigest()
+                password_hash = self._hash_password(password)
 
                 cursor.execute('''
                 INSERT INTO users (username, email, password_hash)
@@ -4135,20 +4192,32 @@ Cookie数量: {cookie_count}
                 return None
 
     def verify_user_password(self, username: str, password: str) -> bool:
-        """验证用户密码"""
+        """Validate user password (bcrypt + SHA256 compat, auto-upgrade)"""
         user = self.get_user_by_username(username)
-        if not user:
+        if not user or not user.get('is_active'):
             return False
 
-        password_hash = hashlib.sha256(password.encode()).hexdigest()
-        return user['password_hash'] == password_hash and user['is_active']
+        is_valid, needs_upgrade, new_hash = self._verify_password(password, user['password_hash'])
+        if is_valid and needs_upgrade:
+            # Auto-upgrade SHA256 hash to bcrypt
+            try:
+                with self.lock:
+                    cursor = self.conn.cursor()
+                    cursor.execute(
+                        'UPDATE users SET password_hash = ? WHERE username = ?',
+                        (new_hash, username)
+                    )
+                    self.conn.commit()
+            except Exception as e:
+                pass
+        return is_valid
 
     def update_user_password(self, username: str, new_password: str) -> bool:
         """更新用户密码"""
         with self.lock:
             try:
                 cursor = self.conn.cursor()
-                password_hash = hashlib.sha256(new_password.encode()).hexdigest()
+                password_hash = self._hash_password(new_password)
 
                 cursor.execute('''
                 UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP
@@ -9753,7 +9822,7 @@ Cookie数量: {cookie_count}
         try:
             with self.lock:
                 cursor = self.conn.cursor()
-                cursor.execute("SELECT id, username, password_plain, email, created_at, is_active FROM users WHERE group_id = ? ORDER BY username", (group_id,))
+                cursor.execute("SELECT id, username, email, created_at, is_active FROM users WHERE group_id = ? ORDER BY username", (group_id,))
                 rows = cursor.fetchall()
                 columns = [desc[0] for desc in cursor.description]
                 return [dict(zip(columns, row)) for row in rows]
@@ -9797,8 +9866,8 @@ Cookie数量: {cookie_count}
                     username = f"{prefix}_user{seq:02d}"
                     password = "".join(_secrets.choice(_string.ascii_letters + _string.digits) for _ in range(8))
                     email = f"{username}@group.local"
-                    password_hash = hashlib.sha256(password.encode()).hexdigest()
-                    cursor.execute("INSERT INTO users (username, email, password_hash, password_plain, is_admin, group_id) VALUES (?, ?, ?, ?, 0, ?)", (username, email, password_hash, password, group_id))
+                    password_hash = self._hash_password(password)
+                    cursor.execute("INSERT INTO users (username, email, password_hash, is_admin, group_id) VALUES (?, ?, ?, 0, ?)", (username, email, password_hash, group_id))
                     user_id = cursor.lastrowid
                     created.append({"username": username, "password": password, "user_id": user_id})
                 self.conn.commit()

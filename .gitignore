@@ -828,3 +828,6 @@ get_cookie.py
 _temp_fix.py
 stderr.txt
 stdout.txt
+
+# 环境配置（含敏感信息）
+.env
