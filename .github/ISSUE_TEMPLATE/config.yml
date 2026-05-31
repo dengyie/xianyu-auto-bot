@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security Issue
-    url: https://github.com/GuDong2003/xianyu-auto-reply-fix/security/advisories/new
+    url: https://github.com/dengyie/xianyu-auto-bot/security/advisories/new
     about: 请通过私密方式报告安全漏洞，不要公开提交敏感信息
   - name: Documentation / FAQ
-    url: https://github.com/GuDong2003/xianyu-auto-reply-fix#-快速开始
+    url: https://github.com/dengyie/xianyu-auto-bot#-快速开始
     about: 部署和使用问题建议先查看 README

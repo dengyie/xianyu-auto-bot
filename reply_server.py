@@ -169,8 +169,8 @@ def _get_announcement_remote_url() -> str:
     if configured_url:
         return configured_url
 
-    owner = str(os.getenv('UPDATE_GITHUB_OWNER') or 'GuDong2003').strip() or 'GuDong2003'
-    repo = str(os.getenv('UPDATE_GITHUB_REPO') or 'xianyu-auto-reply-fix').strip() or 'xianyu-auto-reply-fix'
+    owner = str(os.getenv('UPDATE_GITHUB_OWNER') or 'dengyie').strip() or 'dengyie'
+    repo = str(os.getenv('UPDATE_GITHUB_REPO') or 'xianyu-auto-bot').strip() or 'xianyu-auto-bot'
     branch = str(os.getenv('DASHBOARD_ANNOUNCEMENT_BRANCH') or 'main').strip() or 'main'
     file_path = str(os.getenv('DASHBOARD_ANNOUNCEMENT_FILE') or 'announcement.json').strip().lstrip('/')
     return f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{file_path}"

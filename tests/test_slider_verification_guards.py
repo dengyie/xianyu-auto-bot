@@ -295,7 +295,7 @@ class SliderVerificationGuardsTest(unittest.TestCase):
         }
         slider = self._make_slider(page)
         slider.last_login_error = ""
-        slider._snapshot_context_cookies = lambda _context, page=None: dict(cookies_missing_cna)
+        slider._snapshot_context_cookies = lambda _context, page=None, **kwargs: dict(cookies_missing_cna)
         slider._stabilize_logged_in_context_cookies = lambda _context, _page, scene=None: dict(cookies_missing_cna)
         def _warmup(_context, _page, scene=None, initial_cookies=None):
             slider.last_browser_cookie_warmup_session_unready = True

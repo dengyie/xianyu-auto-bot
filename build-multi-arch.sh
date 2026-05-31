@@ -13,7 +13,7 @@ echo "========================================"
 echo
 
 # 设置镜像标签（可通过环境变量覆盖）
-IMAGE_NAME="${IMAGE_NAME:-xianyu-auto-reply-fix}"
+IMAGE_NAME="${IMAGE_NAME:-xianyu-auto-bot}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 DOCKERFILE="${DOCKERFILE:-Dockerfile-cn}"
 
@@ -179,7 +179,7 @@ echo "使用方法:"
 if [ "$PUSH_IMAGE" = "y" ]; then
     echo "  docker pull $FULL_IMAGE_NAME"
 fi
-echo "  docker run -d -p 8090:8090 --name xianyu-auto-reply-fix $FULL_IMAGE_NAME"
+echo "  docker run -d -p 8090:8090 --name xianyu-auto-bot $FULL_IMAGE_NAME"
 echo
 echo "验证多架构镜像:"
 if [ "$PUSH_IMAGE" = "y" ]; then

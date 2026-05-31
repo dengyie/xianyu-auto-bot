@@ -8,7 +8,7 @@ REM 支持快速部署和管理
 title 闲鱼管理系统 Docker 部署
 
 REM 项目配置
-set PROJECT_NAME=xianyu-auto-reply-fix
+set PROJECT_NAME=xianyu-auto-bot
 set COMPOSE_FILE=docker-compose.yml
 set "COMPOSE_CMD=docker-compose"
 

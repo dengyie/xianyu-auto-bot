@@ -13,7 +13,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # 项目配置
-PROJECT_NAME="xianyu-auto-reply-fix"
+PROJECT_NAME="xianyu-auto-bot"
 COMPOSE_FILE="docker-compose.yml"
 SELECTED_COMPOSE_FILE="$COMPOSE_FILE"
 

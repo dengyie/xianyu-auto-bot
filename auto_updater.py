@@ -95,8 +95,8 @@ class AutoUpdater:
     # 默认 GitHub 更新源配置
     DEFAULT_GITHUB_API_BASE = "https://api.github.com"
     DEFAULT_GITHUB_RAW_BASE = "https://raw.githubusercontent.com"
-    DEFAULT_GITHUB_OWNER = "GuDong2003"
-    DEFAULT_GITHUB_REPO = "xianyu-auto-reply-fix"
+    DEFAULT_GITHUB_OWNER = "dengyie"
+    DEFAULT_GITHUB_REPO = "xianyu-auto-bot"
     
     # 可热更新的静态文件类型（通常不需要重启）
     HOT_UPDATABLE_EXTENSIONS = {

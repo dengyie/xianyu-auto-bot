@@ -8,7 +8,7 @@
 
 ## 📑 项目概述
 
-基于 [xianyu-auto-reply-fix](https://github.com/GuDong2003/xianyu-auto-reply-fix) 二次开发的闲鱼自动化客服系统，支持**多用户多账号**管理，具备**智能自动回复**、**自动发货确认**、**商品定时擦亮**、**AI 大模型回复**等企业级功能。
+基于 [GuDong2003/xianyu-auto-reply-fix](https://github.com/GuDong2003/xianyu-auto-reply-fix) 二次开发的闲鱼自动化客服系统，支持**多用户多账号**管理，具备**智能自动回复**、**自动发货确认**、**商品定时擦亮**、**AI 大模型回复**等企业级功能。
 
 > ⚠️ **重要提示：本项目仅供学习研究使用，严禁商业用途！**
 

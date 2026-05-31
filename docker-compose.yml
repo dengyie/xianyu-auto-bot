@@ -11,8 +11,8 @@ services:
         http_proxy: ${HTTP_PROXY}
         https_proxy: ${HTTPS_PROXY}
         no_proxy: ${NO_PROXY}
-    image: ghcr.io/gudong2003/xianyu-auto-reply-fix:latest
-    container_name: xianyu-auto-reply-fix
+    image: dengyie/xianyu-auto-bot:latest
+    container_name: xianyu-auto-bot
     restart: unless-stopped
     # 使用root用户避免权限问题
     user: "0:0"

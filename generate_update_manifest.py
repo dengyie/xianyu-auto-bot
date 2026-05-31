@@ -22,8 +22,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
-DEFAULT_GITHUB_OWNER = "GuDong2003"
-DEFAULT_GITHUB_REPO = "xianyu-auto-reply-fix"
+DEFAULT_GITHUB_OWNER = "dengyie"
+DEFAULT_GITHUB_REPO = "xianyu-auto-bot"
 
 # static 目录下允许热更新的静态资源类型
 STATIC_ASSET_EXTENSIONS = {
