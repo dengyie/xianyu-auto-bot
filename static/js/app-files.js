@@ -326,9 +326,20 @@ async function viewGroupMembers(groupId) {
             html += '<tr><td>' + escapeHtml(m.username) + '</td>' +
                 '<td><code>' + escapeHtml(m.password_plain || '-') + '</code></td>' +
                 '<td>' + escapeHtml(m.created_at || '-') + '</td>' +
-                '<td><button class="btn btn-sm btn-outline-danger" onclick="removeGroupMember(' + groupId + ', ' + m.id + ')"><i class="bi bi-person-x me-1"></i>移除</button></td></tr>';
+                '<td><button class="btn btn-sm btn-outline-danger" data-action="remove-member" data-group-id="' + groupId + '" data-user-id="' + m.id + '"><i class="bi bi-person-x me-1"></i>移除</button></td></tr>';
         }
         tbody.innerHTML = html;
+        // Event delegation for remove member buttons
+        // Event delegation for remove member buttons
+        tbody.querySelectorAll('button[data-action="remove-member"]').forEach(function(btn) {
+            btn.addEventListener("click", function() {
+                removeGroupMember(
+                    parseInt(this.getAttribute("data-group-id")),
+                    parseInt(this.getAttribute("data-user-id"))
+                );
+            });
+        });
+
     } catch(e) {
         tbody.innerHTML = '<tr><td colspan="4" class="text-center text-danger">加载失败: ' + escapeHtml(e.message) + '</td></tr>';
     }
