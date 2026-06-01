@@ -930,12 +930,9 @@ class XianyuLive:
         except Exception as status_e:
             logger.error(f"【{self.cookie_id}】{status_error_prefix}: {self._safe_str(status_e)}")
 
-        try:
-            from cookie_manager import manager as cookie_manager_manager
-            if cookie_manager_manager:
-                cookie_manager_manager.cookie_status[self.cookie_id] = False
-        except Exception as cm_e:
-            logger.error(f"【{self.cookie_id}】{memory_error_prefix}: {self._safe_str(cm_e)}")
+        _mgr = self._cookie_mgr
+        if _mgr:
+            _mgr.cookie_status[self.cookie_id] = False
 
         self._set_connection_state(ConnectionState.FAILED, connection_message)
 
@@ -953,26 +950,23 @@ class XianyuLive:
         except Exception as status_e:
             logger.error(f"【{self.cookie_id}】恢复账号启用状态失败: {self._safe_str(status_e)}")
 
-        try:
-            from cookie_manager import manager as cookie_manager_manager
-            if cookie_manager_manager:
-                cookie_manager_manager.cookie_status[self.cookie_id] = True
-        except Exception as cm_e:
-            logger.error(f"【{self.cookie_id}】恢复内存账号状态失败: {self._safe_str(cm_e)}")
+        _mgr = self._cookie_mgr
+        if _mgr:
+            _mgr.cookie_status[self.cookie_id] = True
 
         logger.info(f"【{self.cookie_id}】账号暂停状态已清理: {reason}")
 
     async def _request_stop_after_account_pause(self, reason: str) -> None:
         try:
-            from cookie_manager import manager as cookie_manager_manager
-            if not cookie_manager_manager:
+            _mgr = self._cookie_mgr
+            if not _mgr:
                 return
 
             current_task = asyncio.current_task()
-            tracked_task = cookie_manager_manager.tasks.get(self.cookie_id)
+            tracked_task = _mgr.tasks.get(self.cookie_id)
 
             if tracked_task is current_task:
-                cookie_manager_manager.tasks.pop(self.cookie_id, None)
+                _mgr.tasks.pop(self.cookie_id, None)
                 loop = asyncio.get_running_loop()
 
                 def _cancel_current_task() -> None:
@@ -988,7 +982,7 @@ class XianyuLive:
                 logger.info(f"【{self.cookie_id}】账号已暂停，已取消运行中的账号任务: {reason}")
 
             if tracked_task is not None:
-                cookie_manager_manager.tasks.pop(self.cookie_id, None)
+                _mgr.tasks.pop(self.cookie_id, None)
         except Exception as stop_e:
             logger.warning(f"【{self.cookie_id}】请求停止暂停账号任务失败: {self._safe_str(stop_e)}")
 
@@ -1436,8 +1430,8 @@ class XianyuLive:
         try:
             while True:
                 try:
-                    from cookie_manager import manager as cookie_manager
-                    if cookie_manager and not cookie_manager.get_cookie_status(self.cookie_id):
+                    _mgr = self._cookie_mgr
+                    if _mgr and not _mgr.get_cookie_status(self.cookie_id):
                         logger.info(f"【{self.cookie_id}】账号已禁用，停止业务流看门狗")
                         break
 
@@ -1914,7 +1908,7 @@ class XianyuLive:
             logger.error(f"【{self.cookie_id}】清理日志文件时出错: {self._safe_str(e)}")
             return 0
 
-    def __init__(self, cookies_str=None, cookie_id: str = "default", user_id: int = None, *, register_instance: bool = True):
+    def __init__(self, cookies_str=None, cookie_id: str = "default", user_id: int = None, *, register_instance: bool = True, cookie_manager=None):
         """初始化闲鱼直播类"""
         logger.info(f"【{cookie_id}】开始初始化XianyuLive...")
 
@@ -1934,6 +1928,7 @@ class XianyuLive:
         self.cookies_str = cookies_str  # 保存原始cookie字符串
         self.user_id = user_id  # 保存用户ID，用于token刷新时保持正确的所有者关系
         self.register_instance = bool(register_instance)
+        self._cookie_mgr = cookie_manager
         self.base_url = WEBSOCKET_URL
 
         if 'unb' not in self.cookies:
@@ -7276,11 +7271,8 @@ class XianyuLive:
                 self.last_token_refresh_status = 'verification_pending_manual' if not should_pause_account else 'manual_verification_required'
                 self.last_token_refresh_error_message = str(message or '').strip()
                 pause_target_loop = None
-                try:
-                    from cookie_manager import manager as cookie_manager_manager
-                    pause_target_loop = getattr(cookie_manager_manager, 'loop', None)
-                except Exception:
-                    pause_target_loop = None
+                _mgr = self._cookie_mgr
+                pause_target_loop = getattr(_mgr, 'loop', None)
 
                 current_loop = None
                 try:
@@ -7828,14 +7820,14 @@ class XianyuLive:
             logger.info(f"【{self.cookie_id}】准备重启实例...")
 
             # 导入CookieManager
-            from cookie_manager import manager as cookie_manager
+            _mgr = self._cookie_mgr
 
-            if cookie_manager:
+            if _mgr:
                 # 通过CookieManager重启实例
                 logger.info(f"【{self.cookie_id}】通过CookieManager重启实例...")
                 
                 # ⚠️ 重要：不要等待重启完成！
-                # cookie_manager.update_cookie() 会立即取消当前任务
+                # _mgr.update_cookie() 会立即取消当前任务
                 # 如果我们等待它完成，会导致 CancelledError 中断等待
                 # 正确的做法是：触发重启后立即返回，让任务自然退出
                 
@@ -7850,7 +7842,7 @@ class XianyuLive:
                         time.sleep(2.0)
                         
                         # save_to_db=False 因为 update_config_cookies 已经保存过了
-                        cookie_manager.update_cookie(self.cookie_id, self.cookies_str, save_to_db=False)
+                        _mgr.update_cookie(self.cookie_id, self.cookies_str, save_to_db=False)
                         logger.info(f"【{self.cookie_id}】实例重启请求已触发")
                     except Exception as e:
                         logger.error(f"【{self.cookie_id}】触发实例重启失败: {e}")
@@ -11635,8 +11627,8 @@ class XianyuLive:
             while True:
                 try:
                     # 检查账号是否启用
-                    from cookie_manager import manager as cookie_manager
-                    if cookie_manager and not cookie_manager.get_cookie_status(self.cookie_id):
+                    _mgr = self._cookie_mgr
+                    if _mgr and not _mgr.get_cookie_status(self.cookie_id):
                         logger.info(f"【{self.cookie_id}】账号已禁用，停止Token刷新循环")
                         break
 
@@ -12057,8 +12049,8 @@ class XianyuLive:
             while True:
                 try:
                     # 检查账号是否启用
-                    from cookie_manager import manager as cookie_manager
-                    if cookie_manager and not cookie_manager.get_cookie_status(self.cookie_id):
+                    _mgr = self._cookie_mgr
+                    if _mgr and not _mgr.get_cookie_status(self.cookie_id):
                         logger.info(f"【{self.cookie_id}】账号已禁用，停止心跳循环")
                         break
 
@@ -12136,8 +12128,8 @@ class XianyuLive:
             while True:
                 try:
                     # 检查账号是否启用
-                    from cookie_manager import manager as cookie_manager
-                    if cookie_manager and not cookie_manager.get_cookie_status(self.cookie_id):
+                    _mgr = self._cookie_mgr
+                    if _mgr and not _mgr.get_cookie_status(self.cookie_id):
                         logger.info(f"【{self.cookie_id}】账号已禁用，停止清理循环")
                         break
 
@@ -12276,8 +12268,8 @@ class XianyuLive:
             while True:
                 try:
                     # 检查账号是否启用
-                    from cookie_manager import manager as cookie_manager
-                    if cookie_manager and not cookie_manager.get_cookie_status(self.cookie_id):
+                    _mgr = self._cookie_mgr
+                    if _mgr and not _mgr.get_cookie_status(self.cookie_id):
                         logger.info(f"【{self.cookie_id}】账号已禁用，停止Cookie刷新循环")
                         break
 
@@ -14525,8 +14517,8 @@ class XianyuLive:
         
         try:
             # 检查账号是否启用
-            from cookie_manager import manager as cookie_manager
-            if cookie_manager and not cookie_manager.get_cookie_status(self.cookie_id):
+            _mgr = self._cookie_mgr
+            if _mgr and not _mgr.get_cookie_status(self.cookie_id):
                 logger.warning(f"【{self.cookie_id}】[{msg_id}] ⏹️ 账号已禁用，消息处理结束")
                 return
 
@@ -15633,8 +15625,8 @@ class XianyuLive:
             while True:
                 try:
                     # 检查账号是否启用
-                    from cookie_manager import manager as cookie_manager
-                    if cookie_manager and not cookie_manager.get_cookie_status(self.cookie_id):
+                    _mgr = self._cookie_mgr
+                    if _mgr and not _mgr.get_cookie_status(self.cookie_id):
                         logger.info(f"【{self.cookie_id}】账号已禁用，停止主循环")
                         break
 

@@ -63,13 +63,11 @@ class CookieManager:
         logger.info(f"【{cookie_id}】_run_xianyu方法开始执行...")
 
         try:
-            logger.info(f"【{cookie_id}】正在导入XianyuLive...")
-            from XianyuAutoAsync import XianyuLive  # 延迟导入，避免循环
-            logger.info(f"【{cookie_id}】XianyuLive导入成功")
 
+            from XianyuAutoAsync import XianyuLive
             logger.info(f"【{cookie_id}】开始创建XianyuLive实例...")
             logger.info(f"【{cookie_id}】Cookie值长度: {len(cookie_value)}")
-            live = XianyuLive(cookie_value, cookie_id=cookie_id, user_id=user_id)
+            live = XianyuLive(cookie_value, cookie_id=cookie_id, user_id=user_id, cookie_manager=self)
             # 保存实例供外部调用
             self.live_instances[cookie_id] = live
             logger.info(f"【{cookie_id}】XianyuLive实例创建成功，开始调用main()...")
