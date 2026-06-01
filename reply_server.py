@@ -1206,29 +1206,6 @@ if not os.path.exists(static_dir):
     os.makedirs(static_dir, exist_ok=True)
 
 
-# ==================== ?????? ====================
-
-class ClientErrorRequest(BaseModel):
-    message: str = ""
-    source: str = ""
-    lineno: int = 0
-    colno: int = 0
-    error: str = ""
-    url: str = ""
-    userAgent: str = ""
-
-@app.post("/api/analytics/error")
-async def report_client_error(req: ClientErrorRequest):
-    """???? JS ????"""
-    track(
-        user="browser",
-        action="client_error",
-        target=req.source.split("/")[-1] if req.source else "-",
-        result="error",
-        detail="L{}:C{} {} | {}".format(req.lineno, req.colno, req.message[:100], req.url)
-    )
-    return {"success": True}
-
 # ???????????
 @app.middleware("http")
 async def add_cache_headers(request: Request, call_next):
@@ -10270,29 +10247,6 @@ def get_all_users(admin_user: Dict[str, Any] = Depends(require_admin)):
             # 隐藏密码字段
             if 'password_hash' in user:
                 del user['password_hash']  
-# ==================== ?????? ====================
-
-class ClientErrorRequest(BaseModel):
-    message: str = ""
-    source: str = ""
-    lineno: int = 0
-    colno: int = 0
-    error: str = ""
-    url: str = ""
-    userAgent: str = ""
-
-@app.post("/api/analytics/error")
-async def report_client_error(req: ClientErrorRequest):
-    """???? JS ????"""
-    track(
-        user="browser",
-        action="client_error",
-        target=req.source.split("/")[-1] if req.source else "-",
-        result="error",
-        detail="L{}:C{} {} | {}".format(req.lineno, req.colno, req.message[:100], req.url)
-    )
-    return {"success": True}
-
 # ??????????????????????????
 
         log_with_user('info', f"返回用户信息，共 {len(users)} 个用户", admin_user)
@@ -13289,6 +13243,30 @@ async def scheduled_task_checker():
 
 
 # ==================== 文件下载服务 API ====================
+
+
+# ==================== ?????? ====================
+
+class ClientErrorRequest(BaseModel):
+    message: str = ""
+    source: str = ""
+    lineno: int = 0
+    colno: int = 0
+    error: str = ""
+    url: str = ""
+    userAgent: str = ""
+
+@app.post("/api/analytics/error")
+async def report_client_error(req: ClientErrorRequest):
+    """???? JS ????"""
+    track(
+        user="browser",
+        action="client_error",
+        target=req.source.split("/")[-1] if req.source else "-",
+        result="error",
+        detail="L{}:C{} {} | {}".format(req.lineno, req.colno, req.message[:100], req.url)
+    )
+    return {"success": True}
 
 @app.get("/api/files")
 async def list_files(current_user: Dict[str, Any] = Depends(get_current_user)):
