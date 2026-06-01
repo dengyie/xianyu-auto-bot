@@ -1,6 +1,5 @@
-import unittest
-from unittest import mock
-
+"""Smoke tests for order status refund pre-status handling."""
+import pytest
 import order_status_handler
 
 
@@ -48,8 +47,10 @@ class _FakeDBManager:
         return {"user_id": 1}
 
 
-class OrderStatusRefundPreStatusTest(unittest.TestCase):
-    def test_regular_status_update_does_not_clear_existing_pre_refund_status(self):
+class TestOrderStatusRefundPreStatus:
+    """Order status refund pre-status smoke tests."""
+
+    def test_regular_status_update_does_not_clear_existing_pre_refund_status(self, mocker):
         fake_db = _FakeDBManager(
             {
                 "order_id": "order_keep_pre_refund_status",
@@ -60,19 +61,19 @@ class OrderStatusRefundPreStatusTest(unittest.TestCase):
         )
         handler = order_status_handler.OrderStatusHandler()
 
-        with mock.patch("db_manager.db_manager", fake_db):
-            result = handler.update_order_status(
-                order_id="order_keep_pre_refund_status",
-                new_status="shipped",
-                cookie_id="cookie_keep_pre_refund_status",
-                context="unit test regular transition",
-            )
+        mocker.patch("db_manager.db_manager", fake_db)
+        result = handler.update_order_status(
+            order_id="order_keep_pre_refund_status",
+            new_status="shipped",
+            cookie_id="cookie_keep_pre_refund_status",
+            context="unit test regular transition",
+        )
 
-        self.assertTrue(result)
-        self.assertEqual(fake_db.order["order_status"], "shipped")
-        self.assertEqual(fake_db.order["pre_refund_status"], "processing")
+        assert result
+        assert fake_db.order["order_status"] == "shipped"
+        assert fake_db.order["pre_refund_status"] == "processing"
 
-    def test_leaving_refunding_clears_pre_refund_status(self):
+    def test_leaving_refunding_clears_pre_refund_status(self, mocker):
         fake_db = _FakeDBManager(
             {
                 "order_id": "order_clear_pre_refund_status",
@@ -83,18 +84,14 @@ class OrderStatusRefundPreStatusTest(unittest.TestCase):
         )
         handler = order_status_handler.OrderStatusHandler()
 
-        with mock.patch("db_manager.db_manager", fake_db):
-            result = handler.update_order_status(
-                order_id="order_clear_pre_refund_status",
-                new_status="completed",
-                cookie_id="cookie_clear_pre_refund_status",
-                context="unit test refund exit",
-            )
+        mocker.patch("db_manager.db_manager", fake_db)
+        result = handler.update_order_status(
+            order_id="order_clear_pre_refund_status",
+            new_status="completed",
+            cookie_id="cookie_clear_pre_refund_status",
+            context="unit test refund exit",
+        )
 
-        self.assertTrue(result)
-        self.assertEqual(fake_db.order["order_status"], "completed")
-        self.assertIsNone(fake_db.order["pre_refund_status"])
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert result
+        assert fake_db.order["order_status"] == "completed"
+        assert fake_db.order["pre_refund_status"] is None

@@ -831,3 +831,6 @@ stdout.txt
 
 # 环境配置（含敏感信息）
 .env
+
+# Smoke tests should be tracked
+!tests/smoke/test_*.py

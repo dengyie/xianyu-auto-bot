@@ -1,4 +1,5 @@
-import unittest
+"""Smoke tests for Xianyu token refresh request."""
+import pytest
 from unittest import mock
 
 from XianyuAutoAsync import XianyuLive, ConnectionState
@@ -41,7 +42,10 @@ class _FakeSession:
         return self.response
 
 
-class XianyuTokenRefreshRequestTest(unittest.IsolatedAsyncioTestCase):
+class TestXianyuTokenRefreshRequest:
+    """Token refresh request smoke tests."""
+
+    @pytest.mark.asyncio
     async def test_refresh_token_reuses_session_and_passes_proxy(self):
         fake_response = _FakeTokenRefreshResponse()
         fake_session = _FakeSession(fake_response)
@@ -87,17 +91,18 @@ class XianyuTokenRefreshRequestTest(unittest.IsolatedAsyncioTestCase):
 
         token = await live._refresh_token_impl(allow_password_login_recovery=False)
 
-        self.assertEqual(token, "oauth_access_token")
-        self.assertFalse(create_session_called)
-        self.assertEqual(live.current_token, "oauth_access_token")
-        self.assertEqual(live.last_token_refresh_status, "success")
-        self.assertIsNone(live.last_token_refresh_error_message)
-        self.assertEqual(live.last_message_received_time, 0)
-        self.assertEqual(len(fake_session.post_calls), 1)
+        assert token == "oauth_access_token"
+        assert not create_session_called
+        assert live.current_token == "oauth_access_token"
+        assert live.last_token_refresh_status == "success"
+        assert live.last_token_refresh_error_message is None
+        assert live.last_message_received_time == 0
+        assert len(fake_session.post_calls) == 1
         request = fake_session.post_calls[0]
-        self.assertEqual(request["kwargs"]["proxy"], "http://127.0.0.1:8888")
-        self.assertEqual(fake_response.json_content_type, None)
+        assert request["kwargs"]["proxy"] == "http://127.0.0.1:8888"
+        assert fake_response.json_content_type is None
 
+    @pytest.mark.asyncio
     async def test_handle_captcha_verification_marks_slider_scene_as_token_refresh(self):
         created_sliders = []
 
@@ -134,10 +139,10 @@ class XianyuTokenRefreshRequestTest(unittest.IsolatedAsyncioTestCase):
                 {"data": {"url": "https://example.com/punish?action=captcha"}}
             )
 
-        self.assertIsNone(result)
-        self.assertEqual(len(created_sliders), 1)
-        # risk_trigger_scene is set internally by SliderSolver path
+        assert result is None
+        assert len(created_sliders) == 1
 
+    @pytest.mark.asyncio
     async def test_handle_captcha_verification_enables_account_persistent_profile_for_token_refresh(self):
         created_sliders = []
 
@@ -174,10 +179,5 @@ class XianyuTokenRefreshRequestTest(unittest.IsolatedAsyncioTestCase):
                 {"data": {"url": "https://example.com/punish?action=captcha"}}
             )
 
-        self.assertIsNone(result)
-        self.assertEqual(len(created_sliders), 1)
-        # note: use_account_persistent_profile is handled by SliderSolver internally
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert result is None
+        assert len(created_sliders) == 1

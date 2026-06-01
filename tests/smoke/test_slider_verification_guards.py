@@ -2,7 +2,7 @@ import json
 import os
 import sys
 import tempfile
-import unittest
+import pytest
 from unittest import mock
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -156,7 +156,7 @@ class _DetachedPunishFrame:
         raise Exception("Frame was detached")
 
 
-class SliderVerificationGuardsTest(unittest.TestCase):
+class TestSliderVerificationGuards:
     def _make_slider(self, page):
         slider = XianyuSliderStealth.__new__(XianyuSliderStealth)
         slider.pure_user_id = "unit_test_account"
@@ -211,8 +211,7 @@ class SliderVerificationGuardsTest(unittest.TestCase):
         )
         slider = self._make_slider(page)
 
-        self.assertFalse(slider.check_page_changed())
-
+        assert not slider.check_page_changed()
     def test_check_page_changed_accepts_logged_in_page(self):
         page = _FakePage(
             title="闲鱼消息",
@@ -220,8 +219,7 @@ class SliderVerificationGuardsTest(unittest.TestCase):
         )
         slider = self._make_slider(page)
 
-        self.assertTrue(slider.check_page_changed())
-
+        assert slider.check_page_changed()
     @mock.patch("utils.xianyu_slider_stealth.time.sleep", return_value=None)
     def test_check_verification_success_fast_rejects_punish_after_container_missing(self, _mock_sleep):
         page = _FakePage(
@@ -243,10 +241,9 @@ class SliderVerificationGuardsTest(unittest.TestCase):
 
         result = slider.check_verification_success_fast(_FakeElement())
 
-        self.assertFalse(result)
-        self.assertEqual(slider.last_verification_feedback.get("status"), "hard_block")
-        self.assertEqual(slider.last_verification_feedback.get("source"), "punish_captcha")
-
+        assert not result
+        assert slider.last_verification_feedback.get("status") == "hard_block"
+        assert slider.last_verification_feedback.get("source") == "punish_captcha"
     @mock.patch("utils.xianyu_slider_stealth.time.sleep", return_value=None)
     def test_wait_for_context_login_does_not_finish_while_verification_page_still_visible_and_cookies_incomplete(self, _mock_sleep):
         page = _FakePage(title="扫码验证", url="https://www.taobao.com/")
@@ -280,9 +277,8 @@ class SliderVerificationGuardsTest(unittest.TestCase):
             verification_url=verify_frame.verify_url,
         )
 
-        self.assertFalse(login_success)
-        self.assertIs(success_page, page)
-
+        assert not login_success
+        assert success_page is page
     def test_finalize_logged_in_cookies_fails_when_session_still_unready(self):
         page = _FakePage(title="闲鱼消息", url="https://www.goofish.com/im")
         cookies_missing_cna = {
@@ -317,9 +313,8 @@ class SliderVerificationGuardsTest(unittest.TestCase):
             scene="单测收口",
         )
 
-        self.assertIsNone(result)
-        self.assertIn("服务端Session仍未就绪", slider.last_login_error)
-
+        assert result is None
+        assert "服务端Session仍未就绪" in slider.last_login_error
     @mock.patch("utils.xianyu_slider_stealth.time.sleep", return_value=None)
     def test_find_slider_elements_reactivates_recoverable_punish_shell(self, _mock_sleep):
         page = _RecoverablePunishPage()
@@ -327,12 +322,11 @@ class SliderVerificationGuardsTest(unittest.TestCase):
 
         slider_container, slider_button, slider_track = slider.find_slider_elements()
 
-        self.assertTrue(page.activated)
-        self.assertIsNotNone(slider_container)
-        self.assertIsNotNone(slider_button)
-        self.assertIsNotNone(slider_track)
-        self.assertNotEqual(slider.last_verification_feedback.get("status"), "hard_block")
-
+        assert page.activated
+        assert slider_container is not None
+        assert slider_button is not None
+        assert slider_track is not None
+        assert slider.last_verification_feedback.get("status") != "hard_block"
     @mock.patch("utils.xianyu_slider_stealth.time.sleep", return_value=None)
     def test_solve_slider_recovers_recoverable_punish_shell_before_hard_block(self, _mock_sleep):
         page = _RecoverablePunishPage()
@@ -378,10 +372,9 @@ class SliderVerificationGuardsTest(unittest.TestCase):
 
         result = slider.solve_slider(max_retries=1)
 
-        self.assertFalse(result)
-        self.assertTrue(page.activated)
-        self.assertEqual(slider.last_verification_feedback.get("source"), "keyword")
-
+        assert not result
+        assert page.activated
+        assert slider.last_verification_feedback.get("source") == "keyword"
     @mock.patch("utils.xianyu_slider_stealth.time.sleep")
     def test_find_slider_elements_waits_for_punish_slider_dom_before_hard_block(self, mock_sleep):
         page = _DelayedPunishSliderPage()
@@ -390,11 +383,10 @@ class SliderVerificationGuardsTest(unittest.TestCase):
 
         slider_container, slider_button, slider_track = slider.find_slider_elements()
 
-        self.assertIsNotNone(slider_container)
-        self.assertIsNotNone(slider_button)
-        self.assertIsNotNone(slider_track)
-        self.assertNotEqual(slider.last_verification_feedback.get("status"), "hard_block")
-
+        assert slider_container is not None
+        assert slider_button is not None
+        assert slider_track is not None
+        assert slider.last_verification_feedback.get("status") != "hard_block"
     @mock.patch("utils.xianyu_slider_stealth.time.sleep")
     def test_solve_slider_waits_for_punish_slider_dom_before_hard_block(self, mock_sleep):
         page = _DelayedPunishSliderPage()
@@ -441,9 +433,8 @@ class SliderVerificationGuardsTest(unittest.TestCase):
 
         result = slider.solve_slider(max_retries=1)
 
-        self.assertFalse(result)
-        self.assertEqual(slider.last_verification_feedback.get("source"), "keyword")
-
+        assert not result
+        assert slider.last_verification_feedback.get("source") == "keyword"
     @mock.patch("utils.xianyu_slider_stealth.time.sleep", return_value=None)
     def test_is_hard_block_page_allows_recoverable_punish_shell(self, _mock_sleep):
         page = _RecoverablePunishPage()
@@ -451,9 +442,8 @@ class SliderVerificationGuardsTest(unittest.TestCase):
 
         result = slider._is_hard_block_page(page)
 
-        self.assertFalse(result)
-        self.assertTrue(page.activated)
-
+        assert not result
+        assert page.activated
     @mock.patch("utils.xianyu_slider_stealth.time.sleep")
     def test_is_hard_block_page_waits_for_delayed_punish_slider_dom(self, mock_sleep):
         page = _DelayedPunishSliderPage()
@@ -462,8 +452,7 @@ class SliderVerificationGuardsTest(unittest.TestCase):
 
         result = slider._is_hard_block_page(page)
 
-        self.assertFalse(result)
-
+        assert not result
     def test_get_learning_history_with_fallback_filters_token_refresh_samples_only(self):
         slider = self._make_slider(_FakePage())
         slider.headless = True
@@ -490,8 +479,7 @@ class SliderVerificationGuardsTest(unittest.TestCase):
             history = slider._get_learning_history_with_fallback(reference_distance=258.0)
 
         user_ids = {record.get("user_id") for record in history}
-        self.assertEqual(user_ids, {"current_token_refresh_sample", "keepalive_sample"})
-
+        assert user_ids, {"current_token_refresh_sample" == "keepalive_sample"}
     def test_save_success_record_persists_trigger_scene_and_server_wait(self):
         slider = self._make_slider(_FakePage())
         slider.profile_id = "win_chrome_147_1600x900"
@@ -542,9 +530,8 @@ class SliderVerificationGuardsTest(unittest.TestCase):
             with open(slider.success_history_file, "r", encoding="utf-8") as handle:
                 saved = json.load(handle)
 
-        self.assertEqual(saved[0]["trigger_scene"], "token_refresh")
-        self.assertEqual(saved[0]["slide_behavior"]["server_judge_wait"], 9.25)
-
+        assert saved[0]["trigger_scene"] == "token_refresh"
+        assert saved[0]["slide_behavior"]["server_judge_wait"] == 9.25
     def test_optimize_trajectory_params_learns_server_judge_wait(self):
         slider = self._make_slider(_FakePage())
         slider.enable_learning = True
@@ -560,12 +547,11 @@ class SliderVerificationGuardsTest(unittest.TestCase):
 
         optimized = slider._optimize_trajectory_params(reference_distance=258.0)
 
-        self.assertIn("server_judge_wait", optimized["learned_behavior"])
+        assert "server_judge_wait" in optimized["learned_behavior"]
         wait_range = optimized["learned_behavior"]["server_judge_wait"]
-        self.assertLess(wait_range[0], wait_range[1])
-        self.assertGreaterEqual(wait_range[0], 8.0)
-        self.assertLessEqual(wait_range[1], 10.5)
-
+        assert wait_range[0] < wait_range[1]
+        assert wait_range[0] >= 8.0
+        assert wait_range[1] <= 10.5
     def test_generate_human_trajectory_attempt_two_handles_high_learned_step_floor(self):
         slider = self._make_slider(_FakePage())
         slider.enable_learning = True
@@ -592,9 +578,8 @@ class SliderVerificationGuardsTest(unittest.TestCase):
 
         trajectory = slider.generate_human_trajectory(258.0, attempt=2)
 
-        self.assertTrue(trajectory)
-        self.assertGreaterEqual(slider.current_trajectory_data["random_params"]["steps"], 39)
-
+        assert trajectory
+        assert slider.current_trajectory_data["random_params"]["steps"] >= 39
     def test_init_browser_uses_account_persistent_profile_when_enabled(self):
         class _FakeBrowser:
             def is_connected(self):
@@ -694,16 +679,10 @@ class SliderVerificationGuardsTest(unittest.TestCase):
 
         slider.init_browser()
 
-        self.assertFalse(fake_chromium.launch_called)
-        self.assertEqual(len(fake_chromium.persistent_calls), 1)
-        self.assertEqual(
-            fake_chromium.persistent_calls[0]["user_data_dir"],
-            os.path.join(os.getcwd(), "browser_data", f"user_{slider.pure_user_id}"),
-        )
-        self.assertIs(slider.context, fake_context)
-        self.assertIs(slider.page, fake_context.page)
-
-
+        assert not fake_chromium.launch_called
+        assert len(fake_chromium.persistent_calls) == 1
+        assert fake_chromium.persistent_calls[0]["user_data_dir"] == os.path.join(os.getcwd(), "browser_data", f"user_{slider.pure_user_id}")
+        assert slider.page is fake_context.page
     def test_init_browser_retries_persistent_profile_after_stale_singleton_cleanup(self):
         class _FakeBrowser:
             def is_connected(self):
@@ -803,13 +782,12 @@ class SliderVerificationGuardsTest(unittest.TestCase):
 
         page = slider.init_browser()
 
-        self.assertEqual(len(fake_chromium.persistent_calls), 2)
-        self.assertFalse(fake_chromium.launch_called)
-        self.assertIs(slider.context, fake_context)
-        self.assertIs(slider.page, fake_context.page)
-        self.assertIs(page, fake_context.page)
-        self.assertIsNone(slider.browser)
-
+        assert len(fake_chromium.persistent_calls) == 2
+        assert not fake_chromium.launch_called
+        assert slider.context is fake_context
+        assert slider.page is fake_context.page
+        assert page is fake_context.page
+        assert slider.browser is None
     def test_init_browser_falls_back_when_stale_singleton_cleanup_not_allowed(self):
         class _FakePageForInit:
             pass
@@ -917,12 +895,11 @@ class SliderVerificationGuardsTest(unittest.TestCase):
 
         page = slider.init_browser()
 
-        self.assertEqual(len(fake_chromium.persistent_calls), 1)
-        self.assertTrue(fake_chromium.launch_called)
-        self.assertIs(slider.context, fake_context)
-        self.assertIs(slider.page, fake_context.page)
-        self.assertIs(page, fake_context.page)
-
+        assert len(fake_chromium.persistent_calls) == 1
+        assert fake_chromium.launch_called
+        assert slider.context is fake_context
+        assert slider.page is fake_context.page
+        assert page is fake_context.page
     def test_try_cleanup_stale_chromium_singleton_lock_removes_only_local_dead_lock(self):
         slider = XianyuSliderStealth.__new__(XianyuSliderStealth)
         slider.pure_user_id = "singleton_cleanup_unit_test"
@@ -937,16 +914,12 @@ class SliderVerificationGuardsTest(unittest.TestCase):
              mock.patch("utils.xianyu_slider_stealth.os.unlink", side_effect=lambda path: removed_paths.append(path)):
             cleaned = slider._try_cleanup_stale_chromium_singleton_lock(profile_dir)
 
-        self.assertTrue(cleaned)
-        self.assertEqual(
-            removed_paths,
-            [
+        assert cleaned
+        assert removed_paths ==             [
                 os.path.join(profile_dir, "SingletonLock"),
                 os.path.join(profile_dir, "SingletonCookie"),
                 os.path.join(profile_dir, "SingletonSocket"),
-            ],
-        )
-
+            ]
     def test_try_cleanup_stale_chromium_singleton_lock_allows_dead_docker_container_rollover_lock(self):
         slider = XianyuSliderStealth.__new__(XianyuSliderStealth)
         slider.pure_user_id = "singleton_cleanup_container_rollover_test"
@@ -961,16 +934,12 @@ class SliderVerificationGuardsTest(unittest.TestCase):
              mock.patch("utils.xianyu_slider_stealth.os.unlink", side_effect=lambda path: removed_paths.append(path)):
             cleaned = slider._try_cleanup_stale_chromium_singleton_lock(profile_dir)
 
-        self.assertTrue(cleaned)
-        self.assertEqual(
-            removed_paths,
-            [
+        assert cleaned
+        assert removed_paths ==             [
                 os.path.join(profile_dir, "SingletonLock"),
                 os.path.join(profile_dir, "SingletonCookie"),
                 os.path.join(profile_dir, "SingletonSocket"),
-            ],
-        )
-
+            ]
     def test_try_cleanup_stale_chromium_singleton_lock_skips_foreign_host_lock(self):
         slider = XianyuSliderStealth.__new__(XianyuSliderStealth)
         slider.pure_user_id = "singleton_cleanup_foreign_host_test"
@@ -985,9 +954,8 @@ class SliderVerificationGuardsTest(unittest.TestCase):
              mock.patch("utils.xianyu_slider_stealth.os.unlink", side_effect=lambda path: removed_paths.append(path)):
             cleaned = slider._try_cleanup_stale_chromium_singleton_lock(profile_dir)
 
-        self.assertFalse(cleaned)
-        self.assertEqual(removed_paths, [])
-
+        assert not cleaned
+        assert removed_paths == []
     def test_detect_post_slider_blocking_state_ignores_detached_punish_frame(self):
         page = _FakePage(
             title="闂查奔娑堟伅",
@@ -999,8 +967,5 @@ class SliderVerificationGuardsTest(unittest.TestCase):
 
         result = slider._detect_post_slider_blocking_state(detached_frame)
 
-        self.assertIsNone(result)
-        self.assertEqual(slider.last_verification_feedback, {})
-
-if __name__ == "__main__":
-    unittest.main()
+        assert result is None
+        assert slider.last_verification_feedback == {}

@@ -1989,3 +1989,177 @@ Cookie数量: {cookie_count}
             except Exception as e:
                 logger.error(f"获取全量会话列表失败: {e}")
                 return []
+    def _ensure_file_tables(self, cursor):
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS download_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                file_data BLOB,
+                file_size INTEGER DEFAULT 0,
+                mime_type TEXT DEFAULT 'application/octet-stream',
+                max_downloads_per_user INTEGER DEFAULT 5,
+                created_by INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS download_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                download_count INTEGER DEFAULT 0,
+                last_download_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(file_id, user_id)
+            )
+        ''')
+
+    def add_file(self, filename, file_data, description='', mime_type='application/octet-stream', max_downloads=5, created_by=None):
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                self._ensure_file_tables(cursor)
+                cursor.execute('''
+                    INSERT INTO download_files (filename, description, file_data, file_size, mime_type, max_downloads_per_user, created_by)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (filename, description, file_data, len(file_data), mime_type, max_downloads, created_by))
+                self.conn.commit()
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error("add_file failed: {}".format(e))
+            raise
+
+    def get_files(self, user_id=None):
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                self._ensure_file_tables(cursor)
+                if user_id:
+                    cursor.execute('''
+                        SELECT f.id, f.filename, f.description, f.file_size, f.mime_type,
+                               f.max_downloads_per_user, f.created_at, f.created_by,
+                               COALESCE(r.download_count, 0) as user_download_count,
+                               f.max_downloads_per_user - COALESCE(r.download_count, 0) as remaining
+                        FROM download_files f
+                        LEFT JOIN download_records r ON f.id = r.file_id AND r.user_id = ?
+                        ORDER BY f.created_at DESC
+                    ''', (user_id,))
+                else:
+                    cursor.execute('''
+                        SELECT f.id, f.filename, f.description, f.file_size, f.mime_type,
+                               f.max_downloads_per_user, f.created_at, f.created_by,
+                               0 as user_download_count, f.max_downloads_per_user as remaining
+                        FROM download_files f
+                        ORDER BY f.created_at DESC
+                    ''')
+                rows = cursor.fetchall()
+                columns = [desc[0] for desc in cursor.description]
+                return [dict(zip(columns, row)) for row in rows]
+        except Exception as e:
+            logger.error("get_files failed: {}".format(e))
+            return []
+
+    def get_file(self, file_id):
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                self._ensure_file_tables(cursor)
+                cursor.execute('SELECT * FROM download_files WHERE id = ?', (file_id,))
+                row = cursor.fetchone()
+                if row:
+                    columns = [desc[0] for desc in cursor.description]
+                    return dict(zip(columns, row))
+                return None
+        except Exception as e:
+            logger.error("get_file failed: {}".format(e))
+            return None
+
+    def delete_file(self, file_id):
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                self._ensure_file_tables(cursor)
+                cursor.execute('DELETE FROM download_records WHERE file_id = ?', (file_id,))
+                cursor.execute('DELETE FROM download_files WHERE id = ?', (file_id,))
+                self.conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error("delete_file failed: {}".format(e))
+            return False
+
+    def update_file(self, file_id, description=None, max_downloads=None, filename=None):
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                updates = []
+                params = []
+                if description is not None:
+                    updates.append('description = ?')
+                    params.append(description)
+                if max_downloads is not None:
+                    updates.append('max_downloads_per_user = ?')
+                    params.append(max_downloads)
+                if filename is not None:
+                    updates.append('filename = ?')
+                    params.append(filename)
+                if not updates:
+                    return False
+                params.append(file_id)
+                cursor.execute("UPDATE download_files SET {} WHERE id = ?".format(', '.join(updates)), params)
+                self.conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error("update_file failed: {}".format(e))
+            return False
+
+    def check_download_quota(self, file_id, user_id):
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                self._ensure_file_tables(cursor)
+                cursor.execute('SELECT max_downloads_per_user FROM download_files WHERE id = ?', (file_id,))
+                file_row = cursor.fetchone()
+                if not file_row:
+                    return (False, 0, 0)
+                max_allowed = file_row[0]
+                cursor.execute('SELECT download_count FROM download_records WHERE file_id = ? AND user_id = ?', (file_id, user_id))
+                record_row = cursor.fetchone()
+                current_count = record_row[0] if record_row else 0
+                remaining = max_allowed - current_count
+                return (remaining > 0, remaining, max_allowed)
+        except Exception as e:
+            logger.error("check_download_quota failed: {}".format(e))
+            return (False, 0, 0)
+
+    def record_download(self, file_id, user_id):
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    INSERT INTO download_records (file_id, user_id, download_count, last_download_at)
+                    VALUES (?, ?, 1, CURRENT_TIMESTAMP)
+                    ON CONFLICT(file_id, user_id) DO UPDATE SET
+                        download_count = download_count + 1,
+                        last_download_at = CURRENT_TIMESTAMP
+                ''', (file_id, user_id))
+                self.conn.commit()
+                return True
+        except Exception as e:
+            logger.error("record_download failed: {}".format(e))
+            return False
+
+    def get_file_download_stats(self, file_id):
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    SELECT COUNT(*) as total_users, COALESCE(SUM(download_count), 0) as total_downloads
+                    FROM download_records WHERE file_id = ?
+                ''', (file_id,))
+                row = cursor.fetchone()
+                if row:
+                    return {'total_users': row[0], 'total_downloads': row[1]}
+                return {'total_users': 0, 'total_downloads': 0}
+        except Exception as e:
+            logger.error("get_file_download_stats failed: {}".format(e))
+            return {'total_users': 0, 'total_downloads': 0}
