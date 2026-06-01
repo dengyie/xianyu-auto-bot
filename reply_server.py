@@ -66,8 +66,8 @@ _analytics_logger = _analytics_logging.getLogger("analytics")
 _analytics_logger.setLevel(_analytics_logging.INFO)
 _analytics_logger.propagate = False
 # Ensure logs/ dir exists
-os.makedirs("logs", exist_ok=True)
-_afh = _analytics_logging.FileHandler("logs/analytics.log", encoding="utf-8")
+os.makedirs(os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs"), exist_ok=True)
+_afh = _analytics_logging.FileHandler(os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "analytics.log"), encoding="utf-8")
 _afh.setFormatter(_analytics_logging.Formatter("%(asctime)s | %(levelname)s | %(user)s | %(action)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
 _analytics_logger.addHandler(_afh)
 
@@ -88,6 +88,8 @@ def track(user="system", action="", target="-", result="success", detail=""):
     extra = {"user": user, "action": action}
     msg = f"{target} | {result} | {detail}"
     _analytics_logger.info(msg, extra=extra)
+    for h in _analytics_logger.handlers:
+        h.flush()
 
 
 # 刮刮乐远程控制路由
