@@ -55,6 +55,41 @@ from order_event_hub import order_event_hub, publish_order_update_event
 
 from loguru import logger
 
+# ==================== ?????? ====================
+import logging as _logging
+_analytics_fmt = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level} | {extra[user]} | {extra[action]} | {message}"
+_analytics_handler = _logging.FileHandler("logs/analytics.log", encoding="utf-8")
+_analytics_handler.setFormatter(_logging.Formatter("{asctime}.%(msecs)03d | %(levelname)s | %(user)s | %(action)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+# Remove loguru-style format, use standard logging for analytics
+import logging as _analytics_logging
+_analytics_logger = _analytics_logging.getLogger("analytics")
+_analytics_logger.setLevel(_analytics_logging.INFO)
+_analytics_logger.propagate = False
+# Ensure logs/ dir exists
+os.makedirs("logs", exist_ok=True)
+_afh = _analytics_logging.FileHandler("logs/analytics.log", encoding="utf-8")
+_afh.setFormatter(_analytics_logging.Formatter("%(asctime)s | %(levelname)s | %(user)s | %(action)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+_analytics_logger.addHandler(_afh)
+
+class ActionEvent:
+    LOGIN = "login"
+    LOGOUT = "logout"
+    FILE_UPLOAD = "file_upload"
+    FILE_DOWNLOAD = "file_download"
+    FILE_DELETE = "file_delete"
+    FILE_EDIT = "file_edit"
+    FILE_LIST = "file_list"
+    GROUP_CREATE = "group_create"
+    GROUP_DELETE = "group_delete"
+    GROUP_ADD_MEMBER = "group_add_member"
+    GROUP_REMOVE_MEMBER = "group_remove_member"
+
+def track(user="system", action="", target="-", result="success", detail=""):
+    extra = {"user": user, "action": action}
+    msg = f"{target} | {result} | {detail}"
+    _analytics_logger.info(msg, extra=extra)
+
+
 # 刮刮乐远程控制路由
 try:
     from api_captcha_remote import router as captcha_router
@@ -13200,6 +13235,7 @@ async def list_files(current_user: Dict[str, Any] = Depends(get_current_user)):
     try:
         user_id = current_user['user_id']
         files = db_manager.get_files(user_id=user_id)
+        track(user=current_user.get("username","?"), action=ActionEvent.FILE_LIST, detail="count={}".format(len(files)))
         return {"success": True, "data": files}
     except Exception as e:
         logger.error("list_files failed: {}".format(e))
@@ -13212,11 +13248,13 @@ async def download_file(file_id: int, current_user: Dict[str, Any] = Depends(get
         user_id = current_user['user_id']
         can_download, remaining, max_allowed = db_manager.check_download_quota(file_id, user_id)
         if not can_download:
+            track(user=current_user.get("username","?"), action=ActionEvent.FILE_DOWNLOAD, target=str(file_id), result="quota_exceeded", detail="max={}".format(max_allowed))
             raise HTTPException(status_code=403, detail="下载次数已用完")
         file_info = db_manager.get_file(file_id)
         if not file_info:
             raise HTTPException(status_code=404, detail="文件不存在")
         db_manager.record_download(file_id, user_id)
+        track(user=str(user_id), action=ActionEvent.FILE_DOWNLOAD, target="{}:{}".format(file_id, file_info.get("filename","?")), detail="via=token")
         return Response(
             content=file_info['file_data'],
             media_type=file_info.get('mime_type', 'application/octet-stream'),
@@ -13247,6 +13285,7 @@ async def upload_file(
             created_by=admin_user['user_id']
         )
         logger.info("admin {} uploaded file: {} (id={})".format(admin_user['username'], file.filename, file_id))
+        track(user=admin_user.get("username","?"), action=ActionEvent.FILE_UPLOAD, target="{}:{}".format(file_id, file.filename), detail="size={}".format(len(file_data)))
         return {"success": True, "message": "文件上传成功", "file_id": file_id}
     except Exception as e:
         logger.error("upload_file failed: {}".format(e))
@@ -13264,6 +13303,7 @@ async def update_file_info(
         success = db_manager.update_file(file_id, description=description, max_downloads=max_downloads)
         if not success:
             raise HTTPException(status_code=404, detail="文件不存在或更新失败")
+        track(user=admin_user.get("username","?"), action=ActionEvent.FILE_EDIT, target=str(file_id), detail="desc={},max_dl={}".format(description, max_downloads))
         return {"success": True, "message": "文件更新成功"}
     except HTTPException:
         raise
@@ -13300,6 +13340,7 @@ async def get_download_token(file_id: int, current_user: Dict[str, Any] = Depend
         user_id = current_user['user_id']
         can_download, remaining, max_allowed = db_manager.check_download_quota(file_id, user_id)
         if not can_download:
+            track(user=current_user.get("username","?"), action=ActionEvent.FILE_DOWNLOAD, target=str(file_id), result="quota_exceeded", detail="max={}".format(max_allowed))
             raise HTTPException(status_code=403, detail="下载次数已用完")
         token_str = secrets.token_urlsafe(32)
         DOWNLOAD_TOKENS[token_str] = {
@@ -13330,6 +13371,7 @@ async def direct_download(file_id: int, token: str = None):
         if not file_info:
             raise HTTPException(status_code=404, detail="文件不存在")
         db_manager.record_download(file_id, user_id)
+        track(user=str(user_id), action=ActionEvent.FILE_DOWNLOAD, target="{}:{}".format(file_id, file_info.get("filename","?")), detail="via=token")
         return Response(
             content=file_info['file_data'],
             media_type=file_info.get('mime_type', 'application/octet-stream'),
@@ -13360,6 +13402,7 @@ async def create_group(req: CreateGroupRequest, admin_user: Dict[str, Any] = Dep
         )
         members = db_manager.batch_create_users(group_id, req.user_count, req.group_name)
         logger.info("admin {} created group '{}' with {} users".format(admin_user["username"], req.group_name, len(members)))
+        track(user=admin_user.get("username","?"), action=ActionEvent.GROUP_CREATE, target="{}:{}".format(group_id, req.group_name), detail="members={}".format(len(members)))
         return {
             "success": True,
             "message": "用户组 '{}' 创建成功，含 {} 个用户".format(req.group_name, len(members)),
