@@ -395,7 +395,7 @@ async function removeGroupMember(groupId, userId) {
     } catch(e) {
         showToast('移除成员失败: ' + e.message, 'danger');
     }
-}var _currentGroupId;
+}
 
 function escapeHtml(str) {
     if (!str) return "";
