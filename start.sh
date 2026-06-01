@@ -1,42 +1,19 @@
-#!/bin/bash
-# 闲鱼自动回复系统启动脚本
+﻿#!/bin/bash
+# 闲鱼自动化客服系统 - 启动脚本 (Linux/macOS)
+# 委托给 Python 跨平台启动器
 
+set -e
 cd "$(dirname "$0")"
 
-echo "========================================"
-echo "  闲鱼自动回复系统"
-echo "========================================"
-
-# 检查是否已有实例在运行
-if pgrep -f "Start.py" > /dev/null; then
-    echo "检测到程序已在运行"
-    echo ""
-    read -p "是否要重启? (y/n): " choice
-    if [ "$choice" = "y" ] || [ "$choice" = "Y" ]; then
-        echo "正在停止现有进程..."
-        pkill -f "Start.py"
-        sleep 2
-    else
-        echo "保持现有进程运行"
-        echo "Web管理界面: http://localhost:8090"
-        exit 0
-    fi
-fi
-
-# 启动程序
-echo "正在启动..."
-./venv/bin/python -u Start.py 2>&1 &
-
-# 等待启动
-sleep 5
-
-# 检查是否启动成功
-if pgrep -f "Start.py" > /dev/null; then
-    echo "========================================"
-    echo "  启动成功!"
-    echo "  Web管理界面: http://localhost:8090"
-    echo "========================================"
+if [ -f "venv/bin/python" ]; then
+    PYTHON="venv/bin/python"
+elif command -v python3 &> /dev/null; then
+    PYTHON="python3"
+elif command -v python &> /dev/null; then
+    PYTHON="python"
 else
-    echo "启动失败，请检查日志"
+    echo "[ERROR] 未找到 Python，请先创建虚拟环境: python3 -m venv venv"
     exit 1
 fi
+
+exec "$PYTHON" scripts/start.py "$@"

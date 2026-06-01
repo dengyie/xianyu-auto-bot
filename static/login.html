@@ -328,7 +328,7 @@
             username: result.username,
             is_admin: result.is_admin
           }));
-          window.location.href = '/admin';
+          window.location.href = result.is_admin ? '/admin' : '/download';
         } else {
           showError(result.message || '登录失败');
           if (loginCaptchaEnabled) {

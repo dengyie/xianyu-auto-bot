@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>文件下载 - 闲鱼管理系统</title>
+  <link rel="icon" type="image/png" href="/static/favicon.png">
+  <link rel="stylesheet" href="/static/lib/bootstrap/bootstrap.min.css">
+  <link rel="stylesheet" href="/static/lib/bootstrap-icons/bootstrap-icons.css">
+  <style>
+    :root {
+      --primary-color: #0d6efd;
+    }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      min-height: 100vh;
+    }
+    .navbar-custom {
+      background: rgba(255,255,255,0.08);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .navbar-custom .navbar-brand {
+      color: #fff;
+      font-weight: 600;
+    }
+    .navbar-custom .btn-outline-light {
+      border-color: rgba(255,255,255,0.3);
+    }
+    .navbar-custom .btn-outline-light:hover {
+      background: rgba(255,255,255,0.15);
+    }
+    .download-container {
+      max-width: 1100px;
+      margin: 30px auto;
+      padding: 0 20px;
+    }
+    .file-card {
+      background: rgba(255,255,255,0.06);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 16px;
+      transition: all 0.3s ease;
+    }
+    .file-card:hover {
+      background: rgba(255,255,255,0.1);
+      border-color: rgba(255,255,255,0.2);
+      transform: translateY(-2px);
+    }
+    .file-card .file-icon {
+      font-size: 2.5rem;
+      color: var(--primary-color);
+      margin-right: 20px;
+    }
+    .file-card .file-name {
+      color: #fff;
+      font-size: 1.15rem;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    .file-card .file-desc {
+      color: rgba(255,255,255,0.65);
+      font-size: 0.9rem;
+      margin-bottom: 8px;
+    }
+    .file-card .file-meta {
+      color: rgba(255,255,255,0.45);
+      font-size: 0.82rem;
+    }
+    .file-card .btn-download {
+      border-radius: 10px;
+      padding: 8px 24px;
+      font-weight: 600;
+      transition: all 0.3s ease;
+    }
+    .file-card .btn-download:not(:disabled):hover {
+      transform: translateY(-1px);
+    }
+    .remaining-badge {
+      font-size: 0.8rem;
+      padding: 4px 12px;
+      border-radius: 20px;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 80px 20px;
+    }
+    .empty-state i {
+      font-size: 4rem;
+      color: rgba(255,255,255,0.2);
+    }
+    .empty-state p {
+      color: rgba(255,255,255,0.5);
+      margin-top: 16px;
+      font-size: 1.1rem;
+    }
+    .loading-spinner {
+      text-align: center;
+      padding: 80px 20px;
+    }
+    .toast-container {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 9999;
+    }
+  
+    /* 进度遮罩 */
+    .progress-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 10000;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+    }
+    .progress-overlay.active {
+      display: flex;
+    }
+    .progress-card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 32px 40px;
+      min-width: 360px;
+      max-width: 440px;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    .progress-card .spinner-border {
+      width: 3rem; height: 3rem;
+    }
+    .progress-card .progress {
+      height: 10px;
+      border-radius: 5px;
+      margin-top: 16px;
+    }
+    .progress-card .progress-text {
+      font-size: 0.9rem;
+      color: #6c757d;
+      margin-top: 8px;
+    }
+</style>
+</head>
+<body>
+  <nav class="navbar navbar-custom">
+    <div class="container-fluid">
+      <span class="navbar-brand">
+        <i class="bi bi-cloud-download me-2"></i>文件下载中心
+      </span>
+      <div class="d-flex align-items-center gap-3">
+        <span id="usernameDisplay" class="text-white-50"></span>
+        <button class="btn btn-outline-light btn-sm" onclick="doLogout()">
+          <i class="bi bi-box-arrow-right me-1"></i>退出
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <div class="download-container">
+    <div id="loadingArea" class="loading-spinner" style="display:none;">
+      <div class="spinner-border text-primary" role="status"></div>
+      <p class="mt-3 text-white-50">加载文件中...</p>
+    </div>
+    <div id="fileList"></div>
+    <div id="emptyState" class="empty-state" style="display:none;">
+      <i class="bi bi-inbox"></i>
+      <p>暂无可用文件</p>
+    </div>
+  </div>
+  <div class="toast-container" id="toastContainer"></div>
+
+<script>
+var authToken = localStorage.getItem('auth_token');
+
+function showToast(message, type) {
+  type = type || 'info';
+  var bgClass = type === 'danger' ? 'bg-danger' : type === 'success' ? 'bg-success' : 'bg-info';
+  var iconClass = type === 'danger' ? 'bi-exclamation-circle' : type === 'success' ? 'bi-check-circle' : 'bi-info-circle';
+  var html = '<div class="toast align-items-center text-white ' + bgClass + ' border-0 mb-2" role="alert">' +
+    '<div class="d-flex"><div class="toast-body"><i class="bi ' + iconClass + ' me-2"></i>' + message + '</div>' +
+    '<button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div></div>';
+  var container = document.getElementById('toastContainer');
+  container.insertAdjacentHTML('beforeend', html);
+  var toastEl = container.lastElementChild;
+  var toast = new bootstrap.Toast(toastEl, { delay: 3000 });
+  toast.show();
+  toastEl.addEventListener('hidden.bs.toast', function() { toastEl.remove(); });
+}
+
+async function checkAuth() {
+  if (!authToken) {
+    window.location.href = '/';
+    return false;
+  }
+  try {
+    var response = await fetch('/verify', {
+      headers: { 'Authorization': 'Bearer ' + authToken }
+    });
+    var result = await response.json();
+    if (!result.authenticated) {
+      localStorage.removeItem('auth_token');
+      localStorage.removeItem('user_info');
+      window.location.href = '/';
+      return false;
+    }
+    document.getElementById('usernameDisplay').textContent = result.username;
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function doLogout() {
+  try {
+    await fetch('/logout', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + authToken }
+    });
+  } catch (e) {}
+  localStorage.removeItem('auth_token');
+  localStorage.removeItem('user_info');
+  window.location.href = '/login.html';
+}
+
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+  return (bytes / 1073741824).toFixed(2) + ' GB';
+}
+
+function getIcon(filename) {
+  var ext = (filename || '').split('.').pop().toLowerCase();
+  var map = {
+    jpg:'bi-file-image text-info', jpeg:'bi-file-image text-info', png:'bi-file-image text-info',
+    gif:'bi-file-image text-info', svg:'bi-file-image text-info', webp:'bi-file-image text-info',
+    pdf:'bi-file-text text-warning', doc:'bi-file-text text-warning', docx:'bi-file-text text-warning',
+    xls:'bi-file-text text-warning', xlsx:'bi-file-text text-warning',
+    zip:'bi-file-zip text-secondary', rar:'bi-file-zip text-secondary', '7z':'bi-file-zip text-secondary',
+    py:'bi-file-code text-success', js:'bi-file-code text-success', html:'bi-file-code text-success',
+    css:'bi-file-code text-success', json:'bi-file-code text-success',
+  };
+  return map[ext] || 'bi-file text-primary';
+}
+
+function escHtml(text) {
+  var d = document.createElement('div');
+  d.textContent = text;
+  return d.innerHTML;
+}
+
+function escJs(text) {
+  return text.replace(/'/g, "\'").replace(/"/g, '\"');
+}
+
+async function loadFiles() {
+  if (!(await checkAuth())) return;
+  document.getElementById('loadingArea').style.display = 'block';
+  document.getElementById('fileList').innerHTML = '';
+  document.getElementById('emptyState').style.display = 'none';
+
+  try {
+    var resp = await fetch('/api/files', {
+      headers: { 'Authorization': 'Bearer ' + authToken }
+    });
+    var result = await resp.json();
+    document.getElementById('loadingArea').style.display = 'none';
+
+    if (!result.success || !result.data || !result.data.length) {
+      document.getElementById('emptyState').style.display = 'block';
+      return;
+    }
+
+    var files = result.data;
+    var html = '';
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      var rem = f.remaining;
+      var can = rem > 0;
+      var remText = can ? ('剩余 ' + rem + ' 次') : '次数已用完';
+      var badgeCls = can ? 'bg-success bg-opacity-25 text-success' : 'bg-danger bg-opacity-25 text-danger';
+      var disabled = can ? '' : 'disabled';
+      var btnHtml = can ? ('<i class="bi bi-download me-2"></i>下载') : ('<i class="bi bi-x-circle me-2"></i>已用完');
+      var btnCls = can ? 'btn-primary' : 'btn-secondary';
+
+      html += '<div class="file-card d-flex align-items-center flex-wrap">' +
+        '<div class="file-icon"><i class="bi ' + getIcon(f.filename) + '"></i></div>' +
+        '<div class="flex-grow-1 me-3">' +
+          '<div class="file-name">' + escHtml(f.filename) + '</div>';
+      if (f.description) {
+        html += '<div class="file-desc">' + escHtml(f.description) + '</div>';
+      }
+      html += '<div class="file-meta">' +
+          '<i class="bi bi-hdd me-1"></i>' + fmtSize(f.file_size) +
+          ' &middot; <span class="remaining-badge ' + badgeCls + '">' + remText + '</span>' +
+        '</div></div>' +
+        '<div><button class="btn ' + btnCls + ' btn-download" ' + disabled +
+          ' onclick="downloadFile(' + f.id + ', this)">' + btnHtml + '</button></div>' +
+      '</div>';
+    }
+    document.getElementById('fileList').innerHTML = html;
+  } catch (e) {
+    document.getElementById('loadingArea').style.display = 'none';
+    showToast('加载文件列表失败', 'danger');
+  }
+}
+
+function downloadFile(fileId, btn) {
+  var origHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>准备中...';
+
+  showProgress('下载文件中...');
+
+  fetch('/api/files/' + fileId + '/download-token', {
+    method: 'GET',
+    headers: { 'Authorization': 'Bearer ' + authToken }
+  })
+  .then(function(resp) {
+    if (!resp.ok) {
+      return resp.json().then(function(err) {
+        throw new Error(err.detail || '获取下载令牌失败');
+      });
+    }
+    return resp.json();
+  })
+  .then(function(data) {
+    hideProgress();
+    if (data.success && data.token) {
+      window.location.href = '/api/files/' + fileId + '/direct?token=' + encodeURIComponent(data.token);
+      setTimeout(function() {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+        loadFiles();
+      }, 1000);
+    } else {
+      showToast('获取下载令牌失败', 'danger');
+      btn.disabled = false;
+      btn.innerHTML = origHtml;
+    }
+  })
+  .catch(function(err) {
+    hideProgress();
+    showToast(err.message || '下载失败', 'danger');
+    btn.disabled = false;
+    btn.innerHTML = origHtml;
+  });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  loadFiles();
+});
+
+
+function showProgress(title) {
+    var overlay = document.getElementById('progressOverlay');
+    var bar = document.getElementById('progressBar');
+    var text = document.getElementById('progressText');
+    var titleEl = document.getElementById('progressTitle');
+    if (!overlay) return;
+    titleEl.textContent = title || '处理中...';
+    bar.style.width = '0%';
+    text.textContent = '0%';
+    overlay.classList.add('active');
+}
+function updateProgress(percent) {
+    var bar = document.getElementById('progressBar');
+    var text = document.getElementById('progressText');
+    if (!bar || !text) return;
+    var p = Math.round(percent);
+    bar.style.width = p + '%';
+    text.textContent = p + '%';
+}
+function hideProgress() {
+    var overlay = document.getElementById('progressOverlay');
+    if (!overlay) return;
+    overlay.classList.remove('active');
+}
+
+</script>
+
+<!-- 进度遮罩 -->
+<div class="progress-overlay" id="progressOverlay">
+  <div class="progress-card">
+    <div class="spinner-border text-primary mb-3" id="progressSpinner"></div>
+    <h5 id="progressTitle" class="mb-2">处理中...</h5>
+    <div class="progress">
+      <div class="progress-bar progress-bar-striped progress-bar-animated" id="progressBar" style="width: 0%"></div>
+    </div>
+    <p class="progress-text" id="progressText">0%</p>
+  </div>
+</div>
+
+</body>
+</html>

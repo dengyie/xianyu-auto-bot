@@ -1,4 +1,4 @@
-import asyncio, json, os, time, random, shutil
+import asyncio, json, os, time, random, shutil, psutil
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 from loguru import logger
@@ -8,6 +8,82 @@ from utils.slider_stealth_patch import STEALTH_LAUNCH_ARGS, STEALTH_INIT_SCRIPT
 from utils.slider_trajectory import generate_trajectory, trajectory_to_points
 from utils.slider_image_match import SliderImageMatcher
 from utils.slider_trajectory_pool import trajectory_pool as _global_trajectory_pool
+
+
+
+
+# === Chromium process singleton: PID tracking + kill-before-launch ===
+_last_chromium_pid = None
+_pid_lock = None
+
+def _get_pid_lock():
+    global _pid_lock
+    if _pid_lock is None:
+        import threading
+        _pid_lock = threading.Lock()
+    return _pid_lock
+
+
+def _kill_chromium_by_pid(pid):
+    """Terminate a Chromium process by PID."""
+    try:
+        proc = psutil.Process(pid)
+        if not proc.is_running():
+            return False
+        name = (proc.name() or "").lower()
+        if "chromium" not in name and "chrome" not in name:
+            return False
+        logger.info(f"[slider] Killing previous Chromium PID={pid}")
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except psutil.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=3)
+        logger.info(f"[slider] Previous Chromium PID={pid} killed")
+        return True
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
+    except Exception as e:
+        logger.warning(f"[slider] Kill Chromium PID={pid} failed: {e}")
+        return False
+
+
+def _record_chromium_pid(pid):
+    """Record the Chromium PID for next-time cleanup."""
+    global _last_chromium_pid
+    with _get_pid_lock():
+        _last_chromium_pid = pid
+    logger.info(f"[slider] Recorded Chromium PID={pid}")
+
+
+async def _ensure_previous_chromium_closed():
+    """Kill the last known Chromium process if it exists."""
+    global _last_chromium_pid
+    with _get_pid_lock():
+        pid = _last_chromium_pid
+        _last_chromium_pid = None
+    if pid is not None:
+        _kill_chromium_by_pid(pid)
+
+
+def _find_chromium_pid_by_user_data_dir(user_data_dir):
+    """Find Chromium PID whose cmdline contains the given user_data_dir."""
+    try:
+        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+            try:
+                pname = (proc.info.get("name") or "").lower()
+                if "chromium" not in pname and "chrome" not in pname:
+                    continue
+                cmdline = proc.info.get("cmdline") or []
+                for arg in cmdline:
+                    if arg and user_data_dir in arg:
+                        return proc.info["pid"]
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except Exception:
+        pass
+    return None
 
 
 class SliderSolver:
@@ -395,6 +471,9 @@ class SliderSolver:
     #  浏览器初始化与页面加载
     # ════════════════════════════════════════════════════════════
     async def _init_browser(self):
+        # === Chromium ????: ???????????? ===
+        await _ensure_previous_chromium_closed()
+
         pw = await async_playwright().start()
         self._playwright = pw
         kwargs = {"headless": self.headless, "args": STEALTH_LAUNCH_ARGS}
@@ -411,6 +490,11 @@ class SliderSolver:
             **kwargs,
         )
         self.page = await self.context.new_page()
+        # ???? Chromium ?? PID?????????
+        _pid = _find_chromium_pid_by_user_data_dir(str(self.profile_dir))
+        if _pid:
+            _record_chromium_pid(_pid)
+
         await self.page.add_init_script(STEALTH_INIT_SCRIPT)
         await self._inject_cookies()
         self.page.on("response", self._on_response)

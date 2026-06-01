@@ -823,3 +823,11 @@ get_cookie.py
 
 # Codex project memory (local only)
 .codex-memory/
+
+# Session temp/debug files
+_temp_fix.py
+stderr.txt
+stdout.txt
+
+# 环境配置（含敏感信息）
+.env
