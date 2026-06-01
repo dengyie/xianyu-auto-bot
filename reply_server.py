@@ -1381,7 +1381,7 @@ async def admin_page():
     css_version = get_file_version(app_css_path, '1.0.0')
     
     try:
-        with open(index_path, 'r', encoding='utf-8') as f:
+        with open(index_path, 'r', encoding='utf-8-sig') as f:
             html_content = f.read()
             
             # 替换 app.js 的版本号参数
@@ -2289,7 +2289,7 @@ async def register(request: RegisterRequest):
 
 # 固定的API秘钥（生产环境中应该从配置文件或环境变量读取）
 # 注意：现在从系统设置中读取QQ回复消息秘钥
-API_SECRET_KEY = "xianyu_api_secret_2024"  # 保留作为后备
+API_SECRET_KEY = "admin-command"  # 保留作为后备
 
 class SendMessageRequest(BaseModel):
     api_key: str
