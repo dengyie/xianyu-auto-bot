@@ -2,6 +2,8 @@ import sqlite3
 import os
 import threading
 import hashlib
+import secrets
+import string as _string
 import time
 import json
 import random
@@ -15,6 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 from typing import List, Tuple, Dict, Optional, Any
 from urllib.parse import parse_qs, urlparse
 from cryptography.fernet import Fernet, InvalidToken
+from passlib.hash import bcrypt
 from loguru import logger
 
 class DBManager:
@@ -829,6 +832,47 @@ class DBManager:
             )
             ''')
 
+            # ===== 文件下载服务表 =====
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS download_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                file_data BLOB NOT NULL,
+                file_size INTEGER NOT NULL DEFAULT 0,
+                mime_type TEXT DEFAULT 'application/octet-stream',
+                max_downloads_per_user INTEGER DEFAULT 5,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_by INTEGER,
+                FOREIGN KEY (created_by) REFERENCES users(id)
+            )
+            ''')
+
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS download_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                download_count INTEGER DEFAULT 0,
+                last_download_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (file_id) REFERENCES download_files(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                UNIQUE(file_id, user_id)
+            )
+            ''')
+
+            # ===== 用户组表 =====
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_name TEXT UNIQUE NOT NULL,
+                description TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_by INTEGER,
+                FOREIGN KEY (created_by) REFERENCES users(id)
+            )
+            ''')
+
             # 创建定时任务表
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS scheduled_tasks (
@@ -1304,6 +1348,20 @@ Cookie数量: {cookie_count}
                 self.set_system_setting("db_version", "1.7", "数据库版本号")
                 logger.info("数据库升级到版本1.7完成")
 
+            # 升级到版本1.8 - 创建用户组表 + 为users表添加group_id和password_plain字段
+            if current_version < "1.8":
+                logger.info("开始升级数据库到版本1.8...")
+                self.upgrade_add_user_groups(cursor)
+                self.set_system_setting("db_version", "1.8", "数据库版本号")
+                logger.info("数据库升级到版本1.8完成")
+
+            # 升级到版本1.9 - 删除password_plain字段，密码加密升级至bcrypt
+            if current_version < "1.9":
+                logger.info("开始升级数据库到版本1.9...")
+                self.upgrade_password_security(cursor)
+                self.set_system_setting("db_version", "1.9", "数据库版本号")
+                logger.info("数据库升级到版本1.9完成")
+
             # 迁移遗留数据（在所有版本升级完成后执行）
             self.migrate_legacy_data(cursor)
 
@@ -1321,7 +1379,12 @@ Cookie数量: {cookie_count}
 
             if not admin_exists:
                 # 首次创建admin用户，设置默认密码和管理员权限
-                default_password_hash = hashlib.sha256("admin123".encode()).hexdigest()
+                admin_password = "".join(_secrets.choice(_string.ascii_letters + _string.digits) for _ in range(16))
+                default_password_hash = self._hash_password(admin_password)
+                logger.warning("="*60)
+                logger.warning(f"INITIAL ADMIN PASSWORD: {admin_password}")
+                logger.warning("Please login and change it immediately!")
+                logger.warning("="*60)
                 # 检查is_admin列是否存在
                 try:
                     cursor.execute('SELECT is_admin FROM users LIMIT 1')
@@ -1769,11 +1832,66 @@ Cookie数量: {cookie_count}
             self._execute_sql(cursor, "UPDATE users SET is_admin = 1 WHERE username = 'admin'")
             logger.info("已将admin用户设置为管理员")
 
+
             logger.info("✅ users表管理员权限字段升级完成")
             logger.info("   - is_admin: 是否为管理员 (0=普通用户, 1=管理员)")
             return True
         except Exception as e:
             logger.error(f"升级users表管理员权限字段失败: {e}")
+
+
+
+
+    def upgrade_add_user_groups(self, cursor):
+        """升级数据库 - 添加用户组支持"""
+        try:
+            logger.info("开始添加用户组支持...")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS user_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_name TEXT UNIQUE NOT NULL,
+                description TEXT DEFAULT "",
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_by INTEGER,
+                FOREIGN KEY (created_by) REFERENCES users(id))""")
+            try:
+                self._execute_sql(cursor, "SELECT group_id FROM users LIMIT 1")
+                logger.info("users表group_id字段已存在")
+            except:
+                self._execute_sql(cursor, "ALTER TABLE users ADD COLUMN group_id INTEGER REFERENCES user_groups(id)")
+                logger.info("为users表添加group_id字段")
+            try:
+                self._execute_sql(cursor, "SELECT password_plain FROM users LIMIT 1")
+                logger.info("users表password_plain字段已存在")
+            except:
+                self._execute_sql(cursor, 'ALTER TABLE users ADD COLUMN password_plain TEXT DEFAULT ""')
+                logger.info("为users表添加password_plain字段")
+            logger.info("用户组支持添加完成")
+        except Exception as e:
+            logger.error(f"添加用户组支持失败: {e}")
+            raise
+
+    def upgrade_password_security(self, cursor):
+        """v1.9: ???password_plain??????SHA256????????crypt"""
+        try:
+            # 1. ??????password_plain???
+            try:
+                self._execute_sql(cursor, "SELECT password_plain FROM users LIMIT 1")
+                self._execute_sql(cursor, "ALTER TABLE users DROP COLUMN password_plain")
+                logger.info("?????sers??assword_plain???")
+            except Exception:
+                logger.info("password_plain column dropped successfully")
+            # 2. ??HA256????????????bcrypt??????????????????????
+            #    ???????????????????????crypt?????HA256???
+            #    ????HA256???????????????????????
+            #    ?????dmin??????????????crypt???
+            # 3. ?????????
+            try:
+                self._execute_sql(cursor, "UPDATE users SET password_hash = '' WHERE password_hash IS NULL")
+            except Exception:
+                pass
+            logger.info("?????????????????HA256?????????????????????")
+        except Exception as e:
+            logger.error(f"????????????: {e}")
             raise
 
     def migrate_legacy_data(self, cursor):
@@ -3943,6 +4061,26 @@ Cookie数量: {cookie_count}
 
     # 管理员密码现在统一使用用户表管理，不再需要单独的方法
 
+
+    # ==================== Password helpers (bcrypt + SHA256 compat) ====================
+
+    def _hash_password(self, password: str) -> str:
+        return bcrypt.hash(password)
+
+    def _verify_password(self, password: str, stored_hash: str):
+        stored_hash = (stored_hash or '').strip()
+        if not stored_hash:
+            return False, False, None
+        if stored_hash.startswith('$2b$') or stored_hash.startswith('$2a$'):
+            try:
+                return (bcrypt.verify(password, stored_hash), False, None)
+            except Exception:
+                return (False, False, None)
+        sha256_hash = hashlib.sha256(password.encode()).hexdigest()
+        if sha256_hash == stored_hash:
+            return (True, True, self._hash_password(password))
+        return (False, False, None)
+
     # ==================== 用户管理方法 ====================
 
     def create_user(self, username: str, email: str, password: str) -> bool:
@@ -3950,7 +4088,7 @@ Cookie数量: {cookie_count}
         with self.lock:
             try:
                 cursor = self.conn.cursor()
-                password_hash = hashlib.sha256(password.encode()).hexdigest()
+                password_hash = self._hash_password(password)
 
                 cursor.execute('''
                 INSERT INTO users (username, email, password_hash)
@@ -4054,20 +4192,32 @@ Cookie数量: {cookie_count}
                 return None
 
     def verify_user_password(self, username: str, password: str) -> bool:
-        """验证用户密码"""
+        """Validate user password (bcrypt + SHA256 compat, auto-upgrade)"""
         user = self.get_user_by_username(username)
-        if not user:
+        if not user or not user.get('is_active'):
             return False
 
-        password_hash = hashlib.sha256(password.encode()).hexdigest()
-        return user['password_hash'] == password_hash and user['is_active']
+        is_valid, needs_upgrade, new_hash = self._verify_password(password, user['password_hash'])
+        if is_valid and needs_upgrade:
+            # Auto-upgrade SHA256 hash to bcrypt
+            try:
+                with self.lock:
+                    cursor = self.conn.cursor()
+                    cursor.execute(
+                        'UPDATE users SET password_hash = ? WHERE username = ?',
+                        (new_hash, username)
+                    )
+                    self.conn.commit()
+            except Exception as e:
+                pass
+        return is_valid
 
     def update_user_password(self, username: str, new_password: str) -> bool:
         """更新用户密码"""
         with self.lock:
             try:
                 cursor = self.conn.cursor()
-                password_hash = hashlib.sha256(new_password.encode()).hexdigest()
+                password_hash = self._hash_password(new_password)
 
                 cursor.execute('''
                 UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP
@@ -9492,6 +9642,256 @@ Cookie数量: {cookie_count}
 
 
 # 全局单例
+
+    # ==================== 文件下载服务方法 ====================
+
+    def add_file(self, filename, file_data, description='', mime_type='application/octet-stream', max_downloads=5, created_by=None):
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    INSERT INTO download_files (filename, description, file_data, file_size, mime_type, max_downloads_per_user, created_by)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (filename, description, file_data, len(file_data), mime_type, max_downloads, created_by))
+                self.conn.commit()
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error("add_file failed: {}".format(e))
+            raise
+
+    def get_files(self, user_id=None):
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                if user_id:
+                    cursor.execute('''
+                        SELECT f.id, f.filename, f.description, f.file_size, f.mime_type,
+                               f.max_downloads_per_user, f.created_at, f.created_by,
+                               COALESCE(r.download_count, 0) as user_download_count,
+                               f.max_downloads_per_user - COALESCE(r.download_count, 0) as remaining
+                        FROM download_files f
+                        LEFT JOIN download_records r ON f.id = r.file_id AND r.user_id = ?
+                        ORDER BY f.created_at DESC
+                    ''', (user_id,))
+                else:
+                    cursor.execute('''
+                        SELECT f.id, f.filename, f.description, f.file_size, f.mime_type,
+                               f.max_downloads_per_user, f.created_at, f.created_by,
+                               0 as user_download_count, f.max_downloads_per_user as remaining
+                        FROM download_files f
+                        ORDER BY f.created_at DESC
+                    ''')
+                rows = cursor.fetchall()
+                columns = [desc[0] for desc in cursor.description]
+                return [dict(zip(columns, row)) for row in rows]
+        except Exception as e:
+            logger.error("get_files failed: {}".format(e))
+            return []
+
+    def get_file(self, file_id):
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute('SELECT * FROM download_files WHERE id = ?', (file_id,))
+                row = cursor.fetchone()
+                if row:
+                    columns = [desc[0] for desc in cursor.description]
+                    return dict(zip(columns, row))
+                return None
+        except Exception as e:
+            logger.error("get_file failed: {}".format(e))
+            return None
+
+    def delete_file(self, file_id):
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute('DELETE FROM download_records WHERE file_id = ?', (file_id,))
+                cursor.execute('DELETE FROM download_files WHERE id = ?', (file_id,))
+                self.conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error("delete_file failed: {}".format(e))
+            return False
+
+    def update_file(self, file_id, description=None, max_downloads=None, filename=None):
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                updates = []
+                params = []
+                if description is not None:
+                    updates.append('description = ?')
+                    params.append(description)
+                if max_downloads is not None:
+                    updates.append('max_downloads_per_user = ?')
+                    params.append(max_downloads)
+                if filename is not None:
+                    updates.append('filename = ?')
+                    params.append(filename)
+                if not updates:
+                    return False
+                params.append(file_id)
+                cursor.execute("UPDATE download_files SET {} WHERE id = ?".format(', '.join(updates)), params)
+                self.conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error("update_file failed: {}".format(e))
+            return False
+
+    def check_download_quota(self, file_id, user_id):
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute('SELECT max_downloads_per_user FROM download_files WHERE id = ?', (file_id,))
+                file_row = cursor.fetchone()
+                if not file_row:
+                    return (False, 0, 0)
+                max_allowed = file_row[0]
+                cursor.execute('SELECT download_count FROM download_records WHERE file_id = ? AND user_id = ?', (file_id, user_id))
+                record_row = cursor.fetchone()
+                current_count = record_row[0] if record_row else 0
+                remaining = max_allowed - current_count
+                return (remaining > 0, remaining, max_allowed)
+        except Exception as e:
+            logger.error("check_download_quota failed: {}".format(e))
+            return (False, 0, 0)
+
+    def record_download(self, file_id, user_id):
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    INSERT INTO download_records (file_id, user_id, download_count, last_download_at)
+                    VALUES (?, ?, 1, CURRENT_TIMESTAMP)
+                    ON CONFLICT(file_id, user_id) DO UPDATE SET
+                        download_count = download_count + 1,
+                        last_download_at = CURRENT_TIMESTAMP
+                ''', (file_id, user_id))
+                self.conn.commit()
+                return True
+        except Exception as e:
+            logger.error("record_download failed: {}".format(e))
+            return False
+
+    def get_file_download_stats(self, file_id):
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    SELECT COUNT(*) as total_users, COALESCE(SUM(download_count), 0) as total_downloads
+                    FROM download_records WHERE file_id = ?
+                ''', (file_id,))
+                row = cursor.fetchone()
+                if row:
+                    return {'total_users': row[0], 'total_downloads': row[1]}
+                return {'total_users': 0, 'total_downloads': 0}
+        except Exception as e:
+            logger.error("get_file_download_stats failed: {}".format(e))
+            return {'total_users': 0, 'total_downloads': 0}
+
+    # ==================== 用户组管理方法 ====================
+
+    def create_group(self, group_name, description="", created_by=None):
+        """创建用户组，返回group_id"""
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute("INSERT INTO user_groups (group_name, description, created_by) VALUES (?, ?, ?)", (group_name, description, created_by))
+                self.conn.commit()
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error("create_group failed: {}".format(e))
+            raise
+
+    def get_all_groups(self):
+        """获取所有用户组列表（含成员数）"""
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute("""SELECT g.id, g.group_name, g.description, g.created_at, g.created_by, COUNT(u.id) as member_count FROM user_groups g LEFT JOIN users u ON u.group_id = g.id GROUP BY g.id ORDER BY g.created_at DESC""")
+                rows = cursor.fetchall()
+                columns = [desc[0] for desc in cursor.description]
+                return [dict(zip(columns, row)) for row in rows]
+        except Exception as e:
+            logger.error("get_all_groups failed: {}".format(e))
+            return []
+
+    def get_group_members(self, group_id):
+        """获取组成员列表（含密码明文）"""
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute("SELECT id, username, email, created_at, is_active FROM users WHERE group_id = ? ORDER BY username", (group_id,))
+                rows = cursor.fetchall()
+                columns = [desc[0] for desc in cursor.description]
+                return [dict(zip(columns, row)) for row in rows]
+        except Exception as e:
+            logger.error("get_group_members failed: {}".format(e))
+            return []
+
+    def delete_group(self, group_id):
+        """删除用户组及其所有成员"""
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute("DELETE FROM download_records WHERE user_id IN (SELECT id FROM users WHERE group_id = ?)", (group_id,))
+                cursor.execute("DELETE FROM users WHERE group_id = ?", (group_id,))
+                cursor.execute("DELETE FROM user_groups WHERE id = ?", (group_id,))
+                self.conn.commit()
+                return True
+        except Exception as e:
+            logger.error("delete_group failed: {}".format(e))
+            self.conn.rollback()
+            return False
+
+    def batch_create_users(self, group_id, count, prefix):
+        """批量创建用户，返回 [{username, password, user_id}, ...]"""
+        import secrets as _secrets
+        import string as _string
+        created = []
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute("SELECT username FROM users WHERE group_id = ? ORDER BY username DESC LIMIT 1", (group_id,))
+                row = cursor.fetchone()
+                if row:
+                    import re as _re
+                    m = _re.search(r"_user(\d+)$", row[0])
+                    start_seq = int(m.group(1)) + 1 if m else 1
+                else:
+                    start_seq = 1
+                for i in range(count):
+                    seq = start_seq + i
+                    username = f"{prefix}_user{seq:02d}"
+                    password = "".join(_secrets.choice(_string.ascii_letters + _string.digits) for _ in range(8))
+                    email = f"{username}@group.local"
+                    password_hash = self._hash_password(password)
+                    cursor.execute("INSERT INTO users (username, email, password_hash, is_admin, group_id) VALUES (?, ?, ?, 0, ?)", (username, email, password_hash, group_id))
+                    user_id = cursor.lastrowid
+                    created.append({"username": username, "password": password, "user_id": user_id})
+                self.conn.commit()
+                return created
+        except Exception as e:
+            logger.error("batch_create_users failed: {}".format(e))
+            self.conn.rollback()
+            raise
+
+    def remove_group_member(self, user_id):
+        """删除组内单个成员"""
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute("DELETE FROM download_records WHERE user_id = ?", (user_id,))
+                cursor.execute("DELETE FROM users WHERE id = ? AND group_id IS NOT NULL", (user_id,))
+                self.conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error("remove_group_member failed: {}".format(e))
+            self.conn.rollback()
+            return False
+
+
 db_manager = DBManager()
 
 # 确保进程结束时关闭数据库连接
