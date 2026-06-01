@@ -1205,6 +1205,16 @@ static_dir = os.path.join(os.path.dirname(__file__), 'static')
 if not os.path.exists(static_dir):
     os.makedirs(static_dir, exist_ok=True)
 
+# ???????????
+@app.middleware("http")
+async def add_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static/js/") or request.url.path.startswith("/static/css/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 app.mount('/static', StaticFiles(directory=static_dir), name='static')
 
 # 确保图片上传目录存在
@@ -1433,7 +1443,7 @@ async def admin_page():
             css_new_url = f'/static/css/app.css?v={css_version}'
             html_content = re.sub(css_pattern, css_new_url, html_content)
             
-            return HTMLResponse(html_content)
+            return HTMLResponse(html_content, headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"})
     except Exception as e:
         logger.error(f"读取或处理 index.html 失败: {e}")
         return HTMLResponse('<h3>Error loading page</h3>')
