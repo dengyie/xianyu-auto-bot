@@ -256,35 +256,52 @@ async function submitCreateGroup() {
 }
 
 async function loadGroups() {
-    const loading = document.getElementById('groupListLoading');
-    const list = document.getElementById('groupList');
-    const empty = document.getElementById('groupListEmpty');
-    loading.style.display = 'block';
-    list.innerHTML = '';
-    empty.style.display = 'none';
+    var loading = document.getElementById("groupListLoading");
+    var list = document.getElementById("groupList");
+    var empty = document.getElementById("groupListEmpty");
+    if (!loading || !list || !empty) return;
+
+    loading.style.display = "block";
+    list.innerHTML = "";
+    empty.style.display = "none";
+
     try {
-        const res = await apiGet('/api/groups');
+        var res = await apiGet("/api/groups");
+        loading.style.display = "none";
         if (!res.success || !res.data || !res.data.length) {
-            empty.style.display = 'block';
+            empty.style.display = "block";
             return;
         }
-        var html = '<div class="table-responsive"><table class="table table-hover"><thead><tr><th>组名</th><th>描述</th><th>成员数</th><th>创建时间</th><th>操作</th></tr></thead><tbody>';
+        var html = '<div class="table-responsive"><table class="table table-hover"><thead><tr><th>??</th><th>??</th><th>???</th><th>????</th><th>??</th></tr></thead><tbody>';
         for (var i = 0; i < res.data.length; i++) {
             var g = res.data[i];
             html += '<tr><td><strong>' + escapeHtml(g.group_name) + '</strong></td>' +
-                '<td>' + escapeHtml(g.description || '-') + '</td>' +
+                '<td>' + escapeHtml(g.description || "-") + '</td>' +
                 '<td><span class="badge bg-info">' + (g.member_count || 0) + '</span></td>' +
-                '<td>' + escapeHtml(g.created_at || '-') + '</td>' +
-                '<td><button class="btn btn-sm btn-outline-info me-1" onclick="viewGroupMembers(' + g.id + ')"><i class="bi bi-eye me-1"></i>成员</button>' +
-                '<button class="btn btn-sm btn-outline-danger" onclick="deleteGroup(' + g.id + ', \'' + escapeHtml(g.group_name).replace(/'/g, "\\'") + '\')"><i class="bi bi-trash me-1"></i>删除</button></td></tr>';
+                '<td>' + escapeHtml(g.created_at || "-") + '</td>' +
+                '<td><button class="btn btn-sm btn-outline-info me-1" data-action="view-members" data-id="' + g.id + '"><i class="bi bi-eye me-1"></i>??</button>' +
+                '<button class="btn btn-sm btn-outline-danger" data-action="delete-group" data-id="' + g.id + '" data-name="' + g.group_name.replace(/"/g, "&quot;") + '"><i class="bi bi-trash me-1"></i>??</button></td></tr>';
         }
         html += '</tbody></table></div>';
         list.innerHTML = html;
+
+        // Event delegation for buttons
+        list.querySelectorAll('button[data-action="view-members"]').forEach(function(btn) {
+            btn.addEventListener("click", function() {
+                viewGroupMembers(parseInt(this.getAttribute("data-id")));
+            });
+        });
+        list.querySelectorAll('button[data-action="delete-group"]').forEach(function(btn) {
+            btn.addEventListener("click", function() {
+                deleteGroup(parseInt(this.getAttribute("data-id")), this.getAttribute("data-name"));
+            });
+        });
+
     } catch(e) {
-        loading.style.display = 'none';
-        showToast('加载用户组失败', 'danger');
+        loading.style.display = "none";
+        showToast("???????", "danger");
     } finally {
-        loading.style.display = 'none';
+        loading.style.display = "none";
     }
 }
 
@@ -367,4 +384,16 @@ async function removeGroupMember(groupId, userId) {
     } catch(e) {
         showToast('移除成员失败: ' + e.message, 'danger');
     }
+}var _currentGroupId;
+
+function escapeHtml(str) {
+    if (!str) return "";
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
 }
+
+
