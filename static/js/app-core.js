@@ -1,6 +1,46 @@
 
 // ================================
 // 全局变量和配置
+
+// ??????
+window.onerror = function(message, source, lineno, colno, error) {
+    try {
+        var payload = JSON.stringify({
+            message: String(message),
+            source: String(source),
+            lineno: lineno || 0,
+            colno: colno || 0,
+            error: error ? String(error.stack || error) : "",
+            url: window.location.href,
+            userAgent: navigator.userAgent
+        });
+        var xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/analytics/error", true);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.send(payload);
+    } catch(e) {}
+    return false; // ???????? console
+};
+
+// Promise ???????
+window.addEventListener("unhandledrejection", function(event) {
+    try {
+        var payload = JSON.stringify({
+            message: "Promise: " + String(event.reason),
+            source: "",
+            lineno: 0,
+            colno: 0,
+            error: event.reason ? String(event.reason.stack || event.reason) : "",
+            url: window.location.href,
+            userAgent: navigator.userAgent
+        });
+        var xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/analytics/error", true);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.send(payload);
+    } catch(e) {}
+});
+
 // ================================
 const apiBase = location.origin;
 let keywordsData = {};
