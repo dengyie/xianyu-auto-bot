@@ -6765,16 +6765,21 @@ class XianyuLive:
 
             logger.info(f"【{self.cookie_id}】验证URL: {verification_url}")
 
-            # 使用新版 SliderSolver（反检测 + 图像匹配 + 持久化 profile）
+            # 使用 slidex SliderSolver（独立包）
             try:
-                from utils.slider_solver import SliderSolver
-                logger.info(f"[{self.cookie_id}] SliderSolver imported")
+                from slidex import SlidexConfig, SliderSolver
+                logger.info(f"[{self.cookie_id}] SliderSolver imported (slidex)")
 
+                cfg = SlidexConfig(
+                    max_concurrent=SLIDER_VERIFICATION.get('max_concurrent', 3),
+                    wait_timeout=SLIDER_VERIFICATION.get('wait_timeout', 60),
+                )
                 solver = SliderSolver(
                     cookie_id=self.cookie_id,
                     cookies_str=self.cookies_str,
                     headless=True,
                     proxy=self.proxy_config,
+                    config=cfg,
                 )
                 success, cookies = await solver.solve(verification_url)
 
@@ -7252,8 +7257,9 @@ class XianyuLive:
                     )
                 return False
             
-            # 使用集成的 Playwright 登录方法（无需猴子补丁）
-            from utils.xianyu_slider_stealth import XianyuSliderStealth
+            # 使用集成的 Playwright 登录方法（slidex）
+            from slidex.stealth import XianyuSliderStealth
+            from slidex import SlidexConfig as _SlidexConfig
             browser_mode = "有头" if show_browser else "无头"
             logger.info(f"【{self.cookie_id}】开始使用{browser_mode}浏览器进行密码登录刷新Cookie...")
             logger.info(f"【{self.cookie_id}】使用账号: {username}")
@@ -7319,7 +7325,14 @@ class XianyuLive:
             
             # 在单独的线程中运行同步的登录方法
             import asyncio
-            slider = XianyuSliderStealth(user_id=self.cookie_id, enable_learning=True, headless=not show_browser)
+            _slidex_cfg = _SlidexConfig(
+                on_risk_log=lambda **kw: db_manager.add_risk_control_log(**kw),
+                on_risk_log_update=lambda **kw: db_manager.update_risk_control_log(**kw),
+            )
+            slider = XianyuSliderStealth(
+                user_id=self.cookie_id, enable_learning=True, headless=not show_browser,
+                slidex_config=_slidex_cfg,
+            )
             slider.risk_session_id = risk_session_id
             slider.risk_trigger_scene = trigger_scene
             result = await slider._run_sync_method_on_fresh_thread(
@@ -9431,7 +9444,7 @@ class XianyuLive:
             data = {
                 'message': message,
                 'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'source': 'xianyu-auto-reply'
+                'source': 'xianyu-auto-bot'
             }
 
             async with aiohttp.ClientSession() as session:

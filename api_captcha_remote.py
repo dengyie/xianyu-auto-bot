@@ -11,7 +11,7 @@ import asyncio
 import os
 from loguru import logger
 
-from utils.captcha_remote_control import captcha_controller
+from slidex.remote import captcha_controller
 
 
 # 创建路由器
@@ -250,7 +250,8 @@ async def check_completion(request: SessionCheckRequest):
 @router.post("/trajectory")
 async def submit_trajectory(request: TrajectorySubmitRequest):
     try:
-        from utils.slider_trajectory_pool import trajectory_pool
+        from slidex._trajectory_pool import SliderTrajectoryPool
+        trajectory_pool = SliderTrajectoryPool()
         if not request.points or len(request.points) < 3:
             raise HTTPException(status_code=400, detail="too few points")
         trajectory_pool.save_trajectory(request.points, request.cookie_id, request.distance, True, request.verify_url or "")

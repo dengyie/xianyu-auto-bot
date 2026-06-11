@@ -71,7 +71,7 @@ class XianyuSearcher:
         
         if use_remote_control:
             try:
-                from utils.captcha_remote_control import captcha_controller
+                from slidex.remote import captcha_controller
                 
                 # 创建远程控制会话
                 logger.warning(f"🌐 启动远程控制会话: {session_id}")
@@ -567,7 +567,7 @@ class XianyuSearcher:
                     pass  # slider_success 已经在上面设置
                 else:
                     # 普通滑块：使用 XianyuSliderStealth（同步API）
-                    from utils.xianyu_slider_stealth import XianyuSliderStealth
+                    from slidex.stealth import XianyuSliderStealth
                     
                     # 创建滑块处理实例
                     slider_handler = XianyuSliderStealth(

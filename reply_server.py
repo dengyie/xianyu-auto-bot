@@ -4515,20 +4515,26 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                 log_with_user('warning', f"账号已存在手动刷新任务，拒绝重复触发: {account_id}", current_user)
                 return
         
-        # 导入 XianyuSliderStealth
-        from utils.xianyu_slider_stealth import XianyuSliderStealth
+        # 导入 XianyuSliderStealth (slidex)
+        from slidex.stealth import XianyuSliderStealth
+        from slidex import SlidexConfig as _SlidexConfig
         import base64
         import io
-        
+
         # 创建 XianyuSliderStealth 实例
         existing_cookie_info = db_manager.get_cookie_details(account_id) or {}
         proxy_config = db_manager.get_cookie_proxy_config(account_id)
+        _slidex_cfg = _SlidexConfig(
+            on_risk_log=lambda **kw: db_manager.add_risk_control_log(**kw),
+            on_risk_log_update=lambda **kw: db_manager.update_risk_control_log(**kw),
+        )
         slider_instance = XianyuSliderStealth(
             user_id=account_id,
             enable_learning=True,
             headless=not show_browser,
             initial_cookies=existing_cookie_info.get('value', ''),
             proxy=proxy_config,
+            slidex_config=_slidex_cfg,
         )
         slider_instance.risk_session_id = password_login_sessions.get(session_id, {}).get('risk_session_id') or session_id
         slider_instance.risk_trigger_scene = 'manual_password_refresh' if is_refresh_mode else 'password_login'
@@ -4944,7 +4950,7 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
             finally:
                 # 清理实例（释放并发槽位）
                 try:
-                    from utils.xianyu_slider_stealth import concurrency_manager
+                    from slidex._concurrency import concurrency_manager
                     if concurrency_manager.unregister_instance(account_id, slider_instance):
                         log_with_user('debug', f"已释放并发槽位: {account_id}", current_user)
                 except Exception as cleanup_e:
@@ -4999,10 +5005,11 @@ async def _execute_manual_cookie_import(
     current_user: Dict[str, Any],
 ):
     try:
-        from utils.xianyu_slider_stealth import (
+        from slidex.stealth import (
             XianyuSliderStealth,
             probe_cookie_verification_from_cookie,
         )
+        from slidex import SlidexConfig as _SlidexConfig
         from XianyuAutoAsync import XianyuLive
 
         existing_cookie_info = db_manager.get_cookie_details(account_id) or {}
@@ -5013,12 +5020,17 @@ async def _execute_manual_cookie_import(
             'proxy_user': existing_cookie_info.get('proxy_user', ''),
             'proxy_pass': existing_cookie_info.get('proxy_pass', ''),
         }
+        _slidex_cfg = _SlidexConfig(
+            on_risk_log=lambda **kw: db_manager.add_risk_control_log(**kw),
+            on_risk_log_update=lambda **kw: db_manager.update_risk_control_log(**kw),
+        )
         slider_instance = XianyuSliderStealth(
             user_id=account_id,
             enable_learning=True,
             headless=not show_browser,
             initial_cookies=cookie_value,
             proxy=proxy_config,
+            slidex_config=_slidex_cfg,
         )
         manual_cookie_import_sessions[session_id]['slider_instance'] = slider_instance
 
@@ -5208,7 +5220,7 @@ async def _execute_manual_cookie_import(
                 logger.error(traceback.format_exc())
             finally:
                 try:
-                    from utils.xianyu_slider_stealth import concurrency_manager
+                    from slidex._concurrency import concurrency_manager
                     concurrency_manager.unregister_instance(account_id, slider_instance)
                 except Exception:
                     pass
