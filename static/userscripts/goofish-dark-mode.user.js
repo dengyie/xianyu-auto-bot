@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         闲鱼聊天暗色模式
-// @namespace    https://github.com/xianyu-auto-reply
+// @namespace    https://github.com/dengyie/xianyu-auto-bot
 // @version      2.0.0
 // @description  为闲鱼聊天页面添加暗色模式支持
-// @author       XianyuAutoReply
+// @author       XianyuAutoBot
 // @match        https://www.goofish.com/im*
 // @match        https://www.goofish.com/personal*
 // @match        https://goofish.com/im*

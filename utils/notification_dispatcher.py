@@ -443,7 +443,7 @@ async def _send_webhook_notification(config_data: Dict[str, Any], message: str, 
         'type': notification_type,
         'notification_type': notification_type,
         'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-        'source': 'xianyu-auto-reply',
+        'source': 'xianyu-auto-bot',
     }
 
     async with aiohttp.ClientSession() as session:

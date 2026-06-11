@@ -264,7 +264,7 @@ class AutoUpdater:
     def _build_request_headers(self, accept_json: bool = True) -> Dict[str, str]:
         """构建 GitHub 请求头"""
         headers = {
-            "User-Agent": f"XianyuAutoReplyUpdater/{self.current_version}",
+            "User-Agent": f"XianyuAutoBotUpdater/{self.current_version}",
         }
         if accept_json:
             headers["Accept"] = "application/vnd.github+json"
