@@ -9,6 +9,8 @@ from PIL import Image, ImageDraw, ImageFont
 from loguru import logger
 from typing import Any, Dict, Optional, Tuple
 from .base import DBBase
+from .security import hash_user_password, is_legacy_sha256_hash, verify_password_hash
+
 
 class DBUsersMixin:
     """users"""
@@ -224,7 +226,7 @@ class DBUsersMixin:
         with self.lock:
             try:
                 cursor = self.conn.cursor()
-                password_hash = hashlib.sha256(password.encode()).hexdigest()
+                password_hash = hash_user_password(password)
 
                 cursor.execute('''
                 INSERT INTO users (username, email, password_hash)
@@ -330,14 +332,18 @@ class DBUsersMixin:
         if not user:
             return False
 
-        password_hash = hashlib.sha256(password.encode()).hexdigest()
-        return user['password_hash'] == password_hash and user['is_active']
+        stored_hash = user.get('password_hash')
+        password_valid = verify_password_hash(password, stored_hash)
+        if password_valid and is_legacy_sha256_hash(stored_hash):
+            self.update_user_password(username, password)
+            logger.info(f"用户 {username} 密码哈希已升级为bcrypt")
+        return password_valid and user['is_active']
     def update_user_password(self, username: str, new_password: str) -> bool:
         """更新用户密码"""
         with self.lock:
             try:
                 cursor = self.conn.cursor()
-                password_hash = hashlib.sha256(new_password.encode()).hexdigest()
+                password_hash = hash_user_password(new_password)
 
                 cursor.execute('''
                 UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP

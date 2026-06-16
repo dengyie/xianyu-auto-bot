@@ -92,6 +92,39 @@ def track(user="system", action="", target="-", result="success", detail=""):
         h.flush()
 
 
+class _LegacySlidexConfig:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+def _load_slider_runtime():
+    try:
+        from slidex.stealth import (
+            XianyuSliderStealth,
+            probe_cookie_verification_from_cookie,
+        )
+        from slidex import SlidexConfig
+        from slidex._concurrency import concurrency_manager
+        return XianyuSliderStealth, probe_cookie_verification_from_cookie, SlidexConfig, concurrency_manager
+    except ModuleNotFoundError as exc:
+        if exc.name != "slidex":
+            raise
+        from utils.xianyu_slider_stealth import (
+            XianyuSliderStealth,
+            concurrency_manager,
+            probe_cookie_verification_from_cookie,
+        )
+        return XianyuSliderStealth, probe_cookie_verification_from_cookie, _LegacySlidexConfig, concurrency_manager
+
+
+def _create_slider_instance(slider_cls, **kwargs):
+    try:
+        return slider_cls(**kwargs)
+    except TypeError:
+        kwargs.pop("slidex_config", None)
+        return slider_cls(**kwargs)
+
+
 # 刮刮乐远程控制路由
 try:
     from api_captcha_remote import router as captcha_router
@@ -2335,9 +2368,8 @@ async def register(request: RegisterRequest):
 
 # ------------------------- 发送消息接口 -------------------------
 
-# 固定的API秘钥（生产环境中应该从配置文件或环境变量读取）
-# 注意：现在从系统设置中读取QQ回复消息秘钥
-API_SECRET_KEY = "admin-command"  # 保留作为后备
+# /send-message API key must be explicitly configured.
+API_SECRET_ENV = "SEND_MESSAGE_API_KEY"
 
 class SendMessageRequest(BaseModel):
     api_key: str
@@ -2357,17 +2389,20 @@ def verify_api_key(api_key: str) -> bool:
     try:
         # 从系统设置中获取QQ回复消息秘钥
         from db_manager import db_manager
-        qq_secret_key = db_manager.get_system_setting('qq_reply_secret_key')
+        qq_secret_key = (
+            db_manager.get_system_setting('qq_reply_secret_key')
+            or os.getenv(API_SECRET_ENV)
+            or ''
+        ).strip()
 
-        # 如果系统设置中没有配置，使用默认值
         if not qq_secret_key:
-            qq_secret_key = API_SECRET_KEY
+            logger.warning("send-message API key is not configured")
+            return False
 
-        return api_key == qq_secret_key
+        return secrets.compare_digest(api_key, qq_secret_key)
     except Exception as e:
         logger.error(f"验证API秘钥时发生异常: {e}")
-        # 异常情况下使用默认秘钥验证
-        return api_key == API_SECRET_KEY
+        return False
 
 
 @app.post('/send-message', response_model=SendMessageResponse)
@@ -4516,8 +4551,7 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                 return
         
         # 导入 XianyuSliderStealth (slidex)
-        from slidex.stealth import XianyuSliderStealth
-        from slidex import SlidexConfig as _SlidexConfig
+        XianyuSliderStealth, _, _SlidexConfig, _ = _load_slider_runtime()
         import base64
         import io
 
@@ -4528,7 +4562,8 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
             on_risk_log=lambda **kw: db_manager.add_risk_control_log(**kw),
             on_risk_log_update=lambda **kw: db_manager.update_risk_control_log(**kw),
         )
-        slider_instance = XianyuSliderStealth(
+        slider_instance = _create_slider_instance(
+            XianyuSliderStealth,
             user_id=account_id,
             enable_learning=True,
             headless=not show_browser,
@@ -4950,7 +4985,7 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
             finally:
                 # 清理实例（释放并发槽位）
                 try:
-                    from slidex._concurrency import concurrency_manager
+                    _, _, _, concurrency_manager = _load_slider_runtime()
                     if concurrency_manager.unregister_instance(account_id, slider_instance):
                         log_with_user('debug', f"已释放并发槽位: {account_id}", current_user)
                 except Exception as cleanup_e:
@@ -5005,11 +5040,7 @@ async def _execute_manual_cookie_import(
     current_user: Dict[str, Any],
 ):
     try:
-        from slidex.stealth import (
-            XianyuSliderStealth,
-            probe_cookie_verification_from_cookie,
-        )
-        from slidex import SlidexConfig as _SlidexConfig
+        XianyuSliderStealth, probe_cookie_verification_from_cookie, _SlidexConfig, _ = _load_slider_runtime()
         from XianyuAutoAsync import XianyuLive
 
         existing_cookie_info = db_manager.get_cookie_details(account_id) or {}
@@ -5024,7 +5055,8 @@ async def _execute_manual_cookie_import(
             on_risk_log=lambda **kw: db_manager.add_risk_control_log(**kw),
             on_risk_log_update=lambda **kw: db_manager.update_risk_control_log(**kw),
         )
-        slider_instance = XianyuSliderStealth(
+        slider_instance = _create_slider_instance(
+            XianyuSliderStealth,
             user_id=account_id,
             enable_learning=True,
             headless=not show_browser,
@@ -5220,7 +5252,7 @@ async def _execute_manual_cookie_import(
                 logger.error(traceback.format_exc())
             finally:
                 try:
-                    from slidex._concurrency import concurrency_manager
+                    _, _, _, concurrency_manager = _load_slider_runtime()
                     concurrency_manager.unregister_instance(account_id, slider_instance)
                 except Exception:
                     pass
@@ -7274,7 +7306,7 @@ def get_default_notification_template(template_type: str, current_user: Dict[str
 # ------------------------- 系统设置接口 -------------------------
 
 @app.get('/system-settings')
-def get_system_settings(current_user: Dict[str, Any] = Depends(get_current_user)):
+def get_system_settings(current_user: Dict[str, Any] = Depends(require_admin)):
     """获取系统设置（排除敏感信息）"""
     from db_manager import db_manager
     try:
@@ -7291,7 +7323,7 @@ def get_system_settings(current_user: Dict[str, Any] = Depends(get_current_user)
 
 
 @app.put('/system-settings/{key}')
-def update_system_setting(key: str, setting_data: SystemSettingIn, current_user: Dict[str, Any] = Depends(get_current_user)):
+def update_system_setting(key: str, setting_data: SystemSettingIn, current_user: Dict[str, Any] = Depends(require_admin)):
     """更新系统设置"""
     from db_manager import db_manager
     try:
@@ -10995,6 +11027,39 @@ def list_backup_files(admin_user: Dict[str, Any] = Depends(require_admin)):
 
 # ------------------------- 数据管理接口 -------------------------
 
+SENSITIVE_ADMIN_DATA_FIELDS = {
+    'password',
+    'password_hash',
+    'proxy_pass',
+    'smtp_password',
+    'api_key',
+    'secret',
+    'token',
+    'value',
+    'config',
+}
+
+
+def _is_sensitive_admin_data_field(table_name: str, column_name: str) -> bool:
+    normalized = str(column_name or '').lower()
+    if normalized in SENSITIVE_ADMIN_DATA_FIELDS:
+        return True
+    if any(part in normalized for part in ('password', 'secret', 'token', 'api_key', 'cookie', 'proxy_pass')):
+        return True
+    return table_name in {'cookies', 'system_settings', 'ai_reply_settings', 'notification_channels'} and normalized in {'value', 'config'}
+
+
+def _redact_admin_table_data(table_name: str, data: List[Dict[str, Any]], columns: List[str]) -> List[Dict[str, Any]]:
+    redacted_rows = []
+    for row in data:
+        redacted = {}
+        for column in columns:
+            value = row.get(column)
+            redacted[column] = '***REDACTED***' if value not in (None, '') and _is_sensitive_admin_data_field(table_name, column) else value
+        redacted_rows.append(redacted)
+    return redacted_rows
+
+
 @app.get('/admin/data/{table_name}')
 def get_table_data(table_name: str, admin_user: Dict[str, Any] = Depends(require_admin)):
     """获取指定表的所有数据（管理员专用）"""
@@ -11016,6 +11081,7 @@ def get_table_data(table_name: str, admin_user: Dict[str, Any] = Depends(require
 
         # 获取表数据
         data, columns = db_manager.get_table_data(table_name)
+        data = _redact_admin_table_data(table_name, data, columns)
 
         log_with_user('info', f"表 {table_name} 查询成功，共 {len(data)} 条记录", admin_user)
 
@@ -11055,6 +11121,7 @@ def export_table_data(table_name: str, admin_user: Dict[str, Any] = Depends(requ
 
         # 获取表数据
         data, columns = db_manager.get_table_data(table_name)
+        data = _redact_admin_table_data(table_name, data, columns)
 
         if not data:
             raise HTTPException(status_code=400, detail="表中没有数据")

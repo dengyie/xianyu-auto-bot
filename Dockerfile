@@ -111,8 +111,10 @@ RUN mkdir -p /app/logs /app/data /app/backups /app/static/uploads/images && \
 # 配置系统限制，防止core文件生成
 RUN echo "ulimit -c 0" >> /etc/profile
 
-# 注意: 为了简化权限问题，使用root用户运行
-# 在生产环境中，建议配置适当的用户映射
+RUN groupadd -g 1000 appuser && \
+    useradd -m -u 1000 -g appuser appuser && \
+    mkdir -p /app/data /app/logs /app/backups /app/static/uploads/images && \
+    chown -R appuser:appuser /app
 
 # 暴露端口
 EXPOSE 8090
@@ -129,7 +131,10 @@ COPY debug-xvfb.sh /app/debug-xvfb.sh
 # 设置执行权限（使用多种方式确保权限正确）
 RUN chmod +x /app/entrypoint.sh /app/debug-xvfb.sh && \
     chmod 755 /app/entrypoint.sh /app/debug-xvfb.sh && \
+    chown appuser:appuser /app/entrypoint.sh /app/debug-xvfb.sh && \
     ls -la /app/entrypoint.sh /app/debug-xvfb.sh
+
+USER appuser
 
 # 启动命令
 CMD ["/app/entrypoint.sh"]

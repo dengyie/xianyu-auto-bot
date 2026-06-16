@@ -128,8 +128,12 @@ if [ "${USE_XVFB}" = "true" ] || [ "${ENABLE_HEADFUL}" = "true" ]; then
     if [ "$XVFB_STARTED" = "true" ]; then
         # 可选：启动 VNC 服务器用于远程查看（如果需要）
         if [ "${ENABLE_VNC}" = "true" ]; then
+            if [ -z "${VNC_PASSWORD}" ]; then
+                echo "⚠ VNC_PASSWORD 未设置，拒绝启动 VNC 服务"
+                ENABLE_VNC=false
+            else
             echo "启动 VNC 服务器..."
-            x11vnc -display $DISPLAY -forever -shared -rfbport 5900 -nopw > /tmp/x11vnc.log 2>&1 &
+            x11vnc -display $DISPLAY -forever -shared -rfbport 5900 -passwd "$VNC_PASSWORD" > /tmp/x11vnc.log 2>&1 &
             VNC_PID=$!
             sleep 1
             
@@ -138,6 +142,7 @@ if [ "${USE_XVFB}" = "true" ] || [ "${ENABLE_HEADFUL}" = "true" ]; then
                 echo "  可以通过 VNC 客户端连接到 <容器IP>:5900 查看浏览器界面"
             else
                 echo "⚠ VNC 服务器启动失败，查看日志: /tmp/x11vnc.log"
+            fi
             fi
         fi
     else

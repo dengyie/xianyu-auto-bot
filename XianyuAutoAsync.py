@@ -22,7 +22,7 @@ from config import (
     TOKEN_REFRESH_INTERVAL, TOKEN_RETRY_INTERVAL,
     SESSION_KEEPALIVE_INTERVAL, SESSION_KEEPALIVE_RETRY_INTERVAL, COOKIES_STR,
     LOG_CONFIG, AUTO_REPLY, DEFAULT_HEADERS, WEBSOCKET_HEADERS,
-    APP_CONFIG, API_ENDPOINTS, YIFAN_API, RISK_CONTROL
+    APP_CONFIG, API_ENDPOINTS, YIFAN_API, RISK_CONTROL, SLIDER_VERIFICATION
 )
 # from app.logging_config import setup_logging  # 已移除，模块不存在
 import sys
@@ -45,6 +45,30 @@ MANUAL_VERIFICATION_CONTEXTS = {
     'manual_cookie_refresh',
     'manual_refresh',
 }
+
+
+class _LegacySliderConfig:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+def _load_token_refresh_slider_runtime():
+    try:
+        from slidex import SlidexConfig, SliderSolver
+        return SlidexConfig, SliderSolver, 'slidex'
+    except ModuleNotFoundError as exc:
+        if exc.name != 'slidex':
+            raise
+        from utils.slider_solver import SliderSolver
+        return _LegacySliderConfig, SliderSolver, 'legacy'
+
+
+def _create_token_refresh_slider(slider_cls, **kwargs):
+    try:
+        return slider_cls(**kwargs)
+    except TypeError:
+        kwargs.pop('config', None)
+        return slider_cls(**kwargs)
 
 
 DELIVERY_BATCH_MAX_UNITS = 10
@@ -6767,14 +6791,15 @@ class XianyuLive:
 
             # 使用 slidex SliderSolver（独立包）
             try:
-                from slidex import SlidexConfig, SliderSolver
-                logger.info(f"[{self.cookie_id}] SliderSolver imported (slidex)")
+                SlidexConfig, SliderSolver, slider_runtime = _load_token_refresh_slider_runtime()
+                logger.info(f"[{self.cookie_id}] SliderSolver imported ({slider_runtime})")
 
                 cfg = SlidexConfig(
                     max_concurrent=SLIDER_VERIFICATION.get('max_concurrent', 3),
                     wait_timeout=SLIDER_VERIFICATION.get('wait_timeout', 60),
                 )
-                solver = SliderSolver(
+                solver = _create_token_refresh_slider(
+                    SliderSolver,
                     cookie_id=self.cookie_id,
                     cookies_str=self.cookies_str,
                     headless=True,

@@ -2,6 +2,7 @@
 import pytest
 from unittest import mock
 
+import XianyuAutoAsync
 from XianyuAutoAsync import XianyuLive, ConnectionState
 
 
@@ -107,7 +108,7 @@ class TestXianyuTokenRefreshRequest:
         created_sliders = []
 
         class _FakeSlider:
-            def __init__(self, cookie_id="default", cookies_str="", headless=True, proxy=None, trajectory_mode="auto"):
+            def __init__(self, cookie_id="default", cookies_str="", headless=True, proxy=None, trajectory_mode="auto", **_kwargs):
                 self.cookie_id = cookie_id
                 self.cookies_str = cookies_str
                 self.headless = headless
@@ -134,7 +135,7 @@ class TestXianyuTokenRefreshRequest:
 
         with mock.patch("XianyuAutoAsync.db_manager.get_cookie_details", return_value={}), \
              mock.patch("XianyuAutoAsync.log_captcha_event"), \
-             mock.patch("utils.slider_solver.SliderSolver", _FakeSlider):
+             mock.patch.object(XianyuAutoAsync, "_load_token_refresh_slider_runtime", return_value=(XianyuAutoAsync._LegacySliderConfig, _FakeSlider, "test")):
             result = await live._handle_captcha_verification(
                 {"data": {"url": "https://example.com/punish?action=captcha"}}
             )
@@ -147,7 +148,7 @@ class TestXianyuTokenRefreshRequest:
         created_sliders = []
 
         class _FakeSlider:
-            def __init__(self, cookie_id="default", cookies_str="", headless=True, proxy=None, trajectory_mode="auto"):
+            def __init__(self, cookie_id="default", cookies_str="", headless=True, proxy=None, trajectory_mode="auto", **_kwargs):
                 self.cookie_id = cookie_id
                 self.cookies_str = cookies_str
                 self.headless = headless
@@ -174,7 +175,7 @@ class TestXianyuTokenRefreshRequest:
 
         with mock.patch("XianyuAutoAsync.db_manager.get_cookie_details", return_value={}), \
              mock.patch("XianyuAutoAsync.log_captcha_event"), \
-             mock.patch("utils.slider_solver.SliderSolver", _FakeSlider):
+             mock.patch.object(XianyuAutoAsync, "_load_token_refresh_slider_runtime", return_value=(XianyuAutoAsync._LegacySliderConfig, _FakeSlider, "test")):
             result = await live._handle_captcha_verification(
                 {"data": {"url": "https://example.com/punish?action=captcha"}}
             )

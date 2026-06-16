@@ -1,12 +1,12 @@
 import sqlite3
 import os
 import threading
-import hashlib
 import time
 import json
 import random
 import string
 import re
+import sys
 import aiohttp
 import io
 import base64
@@ -16,6 +16,8 @@ from typing import List, Tuple, Dict, Optional, Any
 from urllib.parse import parse_qs, urlparse
 from cryptography.fernet import Fernet, InvalidToken
 from loguru import logger
+
+from .security import generate_initial_admin_password, hash_user_password
 
 
 class DBBase:
@@ -58,7 +60,7 @@ class DBBase:
         self.secret_key_path = None
 
         # SQL日志配置 - 默认启用
-        self.sql_log_enabled = True  # 默认启用SQL日志
+        self.sql_log_enabled = False  # 默认关闭SQL日志，避免生产日志泄露业务数据
         self.sql_log_level = 'INFO'  # 默认使用INFO级别
 
         # 允许通过环境变量覆盖默认设置
@@ -67,7 +69,7 @@ class DBBase:
         if os.getenv('SQL_LOG_LEVEL'):
             self.sql_log_level = os.getenv('SQL_LOG_LEVEL', 'INFO').upper()
 
-        logger.info(f"SQL日志已启用，日志级别: {self.sql_log_level}")
+        logger.info(f"SQL日志{'已启用' if self.sql_log_enabled else '已关闭'}，日志级别: {self.sql_log_level}")
 
         self._init_secret_cipher()
 
@@ -1306,8 +1308,9 @@ Cookie数量: {cookie_count}
             admin_exists = cursor.fetchone()[0] > 0
 
             if not admin_exists:
-                # 首次创建admin用户，设置默认密码和管理员权限
-                default_password_hash = hashlib.sha256("admin123".encode()).hexdigest()
+                # 首次创建admin用户：优先使用显式安全配置，否则生成随机密码。
+                initial_admin_password = generate_initial_admin_password()
+                default_password_hash = hash_user_password(initial_admin_password)
                 # 检查is_admin列是否存在
                 try:
                     cursor.execute('SELECT is_admin FROM users LIMIT 1')
@@ -1321,7 +1324,7 @@ Cookie数量: {cookie_count}
                     INSERT INTO users (username, email, password_hash) VALUES
                     ('admin', 'admin@localhost', ?)
                     ''', (default_password_hash,))
-                logger.info("创建默认admin用户，默认密码已初始化，请尽快修改")
+                logger.warning(f"创建默认admin用户，初始密码: {initial_admin_password}。请首次登录后立即修改。")
 
             # 获取admin用户ID，用于历史数据绑定
             self._execute_sql(cursor, "SELECT id FROM users WHERE username = 'admin'")
@@ -1932,8 +1935,9 @@ Cookie数量: {cookie_count}
             else:
                 params_str = f" | 参数: {repr(params)}"
 
-        # 根据配置的日志级别输出
-        log_message = f"🗄️ SQL {operation}: {formatted_sql}{params_str}"
+        encoding = (getattr(sys.stdout, "encoding", None) or "").lower()
+        icon = "SQL" if encoding and "utf" not in encoding else "🗄️ SQL"
+        log_message = f"{icon} {operation}: {formatted_sql}{params_str}"
 
         if self.sql_log_level == 'DEBUG':
             logger.debug(log_message)

@@ -9,6 +9,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 os.environ["DB_PATH"] = ":memory:"
+os.environ.setdefault("SQL_LOG_ENABLED", "false")
 
 import reply_server
 
@@ -30,7 +31,10 @@ def _make_token(user_id, username="admin", is_admin=True):
 def admin_token() -> str:
     """Create an admin user in DB and return a valid Bearer token."""
     db = reply_server.db_manager
-    db.create_user("admin", "admin@test.local", "admin123")
+    if db.get_user_by_username("admin"):
+        db.update_user_password("admin", "admin123")
+    else:
+        db.create_user("admin", "admin@test.local", "admin123")
     return _make_token(1, "admin", True)
 
 

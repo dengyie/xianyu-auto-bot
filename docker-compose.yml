@@ -14,14 +14,14 @@ services:
     image: dengyie/xianyu-auto-bot:latest
     container_name: xianyu-auto-bot
     restart: unless-stopped
-    # 使用root用户避免权限问题
-    user: "0:0"
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
     # 使用 bash 执行脚本，避免 Windows 行尾格式问题
     # 即使挂载了 Windows 文件，bash 也能正确处理
     entrypoint: ["/bin/bash", "-c", "dos2unix /app/entrypoint.sh 2>/dev/null || true; bash /app/entrypoint.sh"]
     ports:
       - "9000:8090"
-      - "5900:5900"    # VNC 端口（可选，用于远程查看浏览器）
+      # Enable only for trusted local debugging, with VNC_PASSWORD set.
+      # - "127.0.0.1:5900:5900"
     volumes:
       # 数据持久化
       - ./data:/app/data:rw
@@ -31,13 +31,14 @@ services:
       # - ./custom_config.yml:/app/global_config.yml:ro
       # 可选：备份目录
       - ./backups:/app/backups:rw
-      # 开发模式：挂载源代码（修改代码后只需重启容器）
-      - .:/app:rw
+      # Development only: mount source with docker-compose.override.yml when needed.
+      # - .:/app:rw
     environment:
       # 启用虚拟显示（有头模式）
       - USE_XVFB=true           # 启用 Xvfb 虚拟显示
       - ENABLE_HEADFUL=true     # 启用有头模式
-      - ENABLE_VNC=true         # 启用 VNC 服务器（可选）
+      - ENABLE_VNC=${ENABLE_VNC:-false}
+      - VNC_PASSWORD=${VNC_PASSWORD:-}
       - DISPLAY=:99             # 虚拟显示编号
       
       - PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}
@@ -47,12 +48,12 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - DEBUG=${DEBUG:-false}
       - RELOAD=${RELOAD:-false}
-      # SQL日志配置（默认启用，可通过环境变量覆盖）
-      - SQL_LOG_ENABLED=${SQL_LOG_ENABLED:-true}
+      # SQL日志配置（默认关闭，可通过环境变量覆盖）
+      - SQL_LOG_ENABLED=${SQL_LOG_ENABLED:-false}
       - SQL_LOG_LEVEL=${SQL_LOG_LEVEL:-INFO}
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-default-secret-key}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-}
       - SESSION_TIMEOUT=${SESSION_TIMEOUT:-3600}
       # 多用户系统配置
       - MULTIUSER_ENABLED=${MULTIUSER_ENABLED:-true}
