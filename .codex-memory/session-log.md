@@ -1055,3 +1055,22 @@
   - Continue evaluating multi-spec item flag, chat keyword item, and AI reply settings ownership coverage.
 - Blockers:
   - `gh auth status` previously reported an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` can complete.
+## 2026-06-18 01:10
+- Task: Fix phase 70 item flag ownership and add regression coverage.
+- Actions:
+  - Reviewed `PUT /items/{cookie_id}/{item_id}/multi-spec` and `PUT /items/{cookie_id}/{item_id}/multi-quantity-delivery`.
+  - Found both routes mutated item flags without first verifying `cookie_id` belonged to the authenticated user.
+  - Added route-level cookie owner checks and preserved `HTTPException` status codes by re-raising framework exceptions before the generic handler.
+  - Added `.codex-memory/test-coverage-phase70-design.md` and a smoke regression covering foreign-user denial and owner success for both item flag routes.
+  - Re-ran targeted cookie-access smoke tests, full smoke suite, compileall, diff hygiene, and production review context collection.
+- Results:
+  - Targeted cookie-access smoke tests: 14 passed.
+  - Full smoke suite: 188 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-70 change set.
+  - Continue evaluating chat keyword item and AI reply settings ownership coverage.
+- Blockers:
+  - `gh auth status` previously reported an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` can complete.

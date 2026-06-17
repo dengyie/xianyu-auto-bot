@@ -148,6 +148,60 @@ def test_item_reply_routes_are_scoped_to_cookie_owner(client, auth, user_auth):
     assert owner_delete.status_code == 200
 
 
+def test_item_flag_routes_are_scoped_to_cookie_owner(client, auth, user_auth):
+    client.post(
+        "/cookies",
+        headers=auth,
+        json={"id": "admin_item_flag_cookie", "value": "unb=admin"},
+    )
+    from db_manager import db_manager
+
+    assert db_manager.save_item_info(
+        "admin_item_flag_cookie",
+        "flag_item_001",
+        {
+            "title": "Flag item",
+            "description": "Owner only",
+            "category": "digital",
+            "price": "39.90",
+        },
+    )
+
+    foreign_multi_spec = client.put(
+        "/items/admin_item_flag_cookie/flag_item_001/multi-spec",
+        headers=user_auth,
+        json={"is_multi_spec": True},
+    )
+    foreign_multi_quantity = client.put(
+        "/items/admin_item_flag_cookie/flag_item_001/multi-quantity-delivery",
+        headers=user_auth,
+        json={"multi_quantity_delivery": True},
+    )
+    owner_multi_spec = client.put(
+        "/items/admin_item_flag_cookie/flag_item_001/multi-spec",
+        headers=auth,
+        json={"is_multi_spec": True},
+    )
+    owner_multi_quantity = client.put(
+        "/items/admin_item_flag_cookie/flag_item_001/multi-quantity-delivery",
+        headers=auth,
+        json={"multi_quantity_delivery": True},
+    )
+
+    assert foreign_multi_spec.status_code == 403
+    assert foreign_multi_quantity.status_code == 403
+    assert owner_multi_spec.status_code == 200
+    assert owner_multi_quantity.status_code == 200
+    assert db_manager.get_item_multi_spec_status("admin_item_flag_cookie", "flag_item_001") is True
+    assert (
+        db_manager.get_item_multi_quantity_delivery_status(
+            "admin_item_flag_cookie",
+            "flag_item_001",
+        )
+        is True
+    )
+
+
 def test_regular_user_cannot_list_another_users_cookie(client, auth, user_auth):
     client.post(
         "/cookies",

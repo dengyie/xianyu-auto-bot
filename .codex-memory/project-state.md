@@ -1,14 +1,14 @@
 # Current State Snapshot - 2026-06-18
 
 - Security hardening and smoke coverage are still moving in small bounded phases.
-- Phase 69 is now implemented: item-reply ownership smoke coverage added and item-reply metadata joins now bind by cookie plus item id.
+- Phase 70 is now implemented: item flag update routes now enforce cookie ownership before mutating multi-spec or multi-quantity delivery flags.
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_cookie_access_control.py -q` => 13 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 187 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_cookie_access_control.py -q` => 14 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 188 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py db_manager tests` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-69 scope reviewed with `production-code-quality-review` in checkpoint mode
+  - phase-70 scope reviewed with `production-code-quality-review` in checkpoint mode
   - severe issues: none
   - improvement suggestions: none blocking for this focused regression
   - quality score: 96/100
@@ -17,5 +17,5 @@
   - project `venv` still lacks `pytest`, so validation used host Python
 - Next testing priorities:
   - continue evaluating remaining owner/scoped routes for focused smoke gaps
-  - likely next clusters: multi-spec item flags, chat keyword item routes, AI reply settings
+  - likely next clusters: chat keyword item routes, AI reply settings
   - keep ignoring unrelated untracked workspace files

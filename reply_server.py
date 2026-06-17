@@ -11270,6 +11270,11 @@ def update_item_multi_spec(cookie_id: str, item_id: str, spec_data: dict, curren
     try:
         from db_manager import db_manager
 
+        user_id = current_user['user_id']
+        user_cookies = db_manager.get_all_cookies(user_id)
+        if cookie_id not in user_cookies:
+            raise HTTPException(status_code=403, detail="无权限操作该Cookie")
+
         is_multi_spec = spec_data.get('is_multi_spec', False)
 
         success = db_manager.update_item_multi_spec_status(cookie_id, item_id, is_multi_spec)
@@ -11279,6 +11284,8 @@ def update_item_multi_spec(cookie_id: str, item_id: str, spec_data: dict, curren
         else:
             raise HTTPException(status_code=404, detail="商品不存在")
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -11290,6 +11297,11 @@ def update_item_multi_quantity_delivery(cookie_id: str, item_id: str, delivery_d
     try:
         from db_manager import db_manager
 
+        user_id = current_user['user_id']
+        user_cookies = db_manager.get_all_cookies(user_id)
+        if cookie_id not in user_cookies:
+            raise HTTPException(status_code=403, detail="无权限操作该Cookie")
+
         multi_quantity_delivery = delivery_data.get('multi_quantity_delivery', False)
 
         success = db_manager.update_item_multi_quantity_delivery_status(cookie_id, item_id, multi_quantity_delivery)
@@ -11299,6 +11311,8 @@ def update_item_multi_quantity_delivery(cookie_id: str, item_id: str, delivery_d
         else:
             raise HTTPException(status_code=404, detail="商品不存在")
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

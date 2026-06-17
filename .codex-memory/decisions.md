@@ -302,3 +302,7 @@
 - Decision: Update `get_itemReplays_by_cookie(...)` so its `item_info` join matches both `cookie_id` and `item_id`, and add route smoke coverage for item-reply list/read/update/delete/batch-delete ownership.
 - Rationale: Route-level owner checks prevented direct foreign mutations, but the list query could attach metadata from another cookie when two accounts had the same `item_id`. Binding the join to the cookie keeps reply data and item metadata in the same ownership scope.
 - Impact: Item-reply list responses no longer leak or mis-associate cross-cookie item metadata, and the smoke suite protects both owner boundaries and same-`item_id` isolation.
+## 2026-06-18 - Phase 70 should require ownership on item flag mutations
+- Decision: Add cookie ownership checks to the item multi-spec and multi-quantity delivery update routes before calling the item flag data-layer helpers.
+- Rationale: The helpers update by `cookie_id` and `item_id`, but the API routes previously accepted any authenticated user's request for another user's `cookie_id`. Route-level authorization keeps these item-scoped mutations aligned with the surrounding item-info and item-reply route clusters.
+- Impact: Foreign users now receive `403` before item flag mutation, owner updates still work, and smoke coverage protects both route surfaces.
