@@ -44,3 +44,8 @@
 - Decision: Add direct smoke coverage for `on_order_details_fetched(...)` consuming multiple pending updates for one order in sequence.
 - Rationale: The single-update case was already covered, but the real queue consumer loops over an arbitrary list of updates. A sequential progression test guards against future changes that might prematurely stop after the first update or leave stale queue entries behind.
 - Impact: The detail-fetched entrypoint now explicitly proves it can drain a multi-step pending queue and leave the order in the final expected state.
+
+## 2026-06-17 - Phase 16 should prove batch queue draining across multiple orders
+- Decision: Add direct smoke coverage for `process_all_pending_updates()` draining more than one order bucket in the same pass.
+- Rationale: The per-order pending consumer was already covered, but the batch wrapper is the higher-level queue drain path and needs proof that it iterates through all queued order IDs rather than stopping after the first processed bucket.
+- Impact: The pending-update batch processor now explicitly proves it can clear multiple queued orders and leave the in-memory queue empty afterward.
