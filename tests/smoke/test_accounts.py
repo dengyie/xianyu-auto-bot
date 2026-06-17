@@ -1,4 +1,6 @@
 """Smoke tests for 闲鱼 account management (Cookie CRUD)."""
+from pathlib import Path
+
 import pytest
 
 import reply_server
@@ -145,3 +147,29 @@ class TestAccounts:
         owner_check = client.get(f"/qr-login/check/{session_id}", headers=user_auth)
         assert owner_check.status_code == 200
         assert owner_check.json()["status"] == "waiting"
+
+    def test_face_verification_screenshot_is_owner_only(self, client, other_user_auth, user_auth):
+        account_id = "face_verify_owner_only_account"
+        reply_server.db_manager.save_cookie(account_id, "unb=owner; token=value", user_id=2)
+
+        screenshots_dir = Path(reply_server.static_dir) / "uploads" / "images"
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
+        screenshot_path = screenshots_dir / f"face_verify_{account_id}_owner.jpg"
+        screenshot_path.write_bytes(b"fake-jpg-data")
+
+        foreign_read = client.get(f"/face-verification/screenshot/{account_id}", headers=other_user_auth)
+        assert foreign_read.status_code == 200
+        assert foreign_read.json()["success"] is False
+
+        owner_read = client.get(f"/face-verification/screenshot/{account_id}", headers=user_auth)
+        assert owner_read.status_code == 200
+        assert owner_read.json()["success"] is True
+
+        foreign_delete = client.delete(f"/face-verification/screenshot/{account_id}", headers=other_user_auth)
+        assert foreign_delete.status_code == 200
+        assert foreign_delete.json()["success"] is False
+
+        owner_delete = client.delete(f"/face-verification/screenshot/{account_id}", headers=user_auth)
+        assert owner_delete.status_code == 200
+        assert owner_delete.json()["success"] is True
+        assert not screenshot_path.exists()

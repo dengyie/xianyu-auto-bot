@@ -703,3 +703,22 @@
   - Reevaluate remaining route/service coverage gaps outside delivery, refresh, history-sync, password-login, manual-cookie-import, and qr-login.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-18 14:05
+- Task: Finish phase 48 smoke coverage for face-verification screenshot ownership boundaries.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase48-design.md` before implementation.
+  - Extended `tests/conftest.py` with a second regular-user auth fixture so foreign-user access can be tested without using admin privileges.
+  - Extended `tests/smoke/test_accounts.py` with route-level coverage proving face-verification screenshots are owner-scoped for both read and delete paths.
+  - Re-ran targeted account smoke tests, full smoke suite, compileall, diff hygiene, and production review for the phase-48 diff.
+- Results:
+  - Targeted account smoke tests: 10 passed.
+  - Full smoke suite: 165 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Production review: no new P1/P2 findings; status passed.
+- Next:
+  - Stage only the intentional phase-48 files, commit, and push the branch.
+  - Reevaluate remaining high-level route/service coverage gaps outside delivery, refresh, history-sync, password-login, manual-cookie-import, qr-login, and face-verification.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

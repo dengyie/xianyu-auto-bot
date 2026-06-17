@@ -59,6 +59,24 @@ def user_auth(user_token: str) -> dict:
 
 
 @pytest.fixture
+def other_user_token() -> str:
+    """Create a second regular user and return a valid Bearer token."""
+    db = reply_server.db_manager
+    username = "testuser2"
+    if db.get_user_by_username(username):
+        db.update_user_password(username, "test123")
+    else:
+        db.create_user(username, "test2@test.local", "test123")
+    return _make_token(3, username, False)
+
+
+@pytest.fixture
+def other_user_auth(other_user_token: str) -> dict:
+    """Return auth headers for a second regular user."""
+    return {"Authorization": f"Bearer {other_user_token}"}
+
+
+@pytest.fixture
 def client():
     """Return a FastAPI TestClient for the app."""
     from fastapi.testclient import TestClient

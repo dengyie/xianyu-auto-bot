@@ -209,3 +209,8 @@
 - Decision: Persist the creating user on generated qr-login sessions and reject foreign users from `GET /qr-login/check/{session_id}`.
 - Rationale: The standard QR login flow already had a session status endpoint, but it lacked an ownership boundary even though the flow is user-scoped like password-login and qr-login-lite. Adding the owner field and gate keeps the live session status from leaking across accounts.
 - Impact: The suite now explicitly proves qr-login session status stays scoped to the creating user.
+
+## 2026-06-18 - Phase 48 should lock down face-verification screenshot ownership boundaries
+- Decision: Add route-level smoke coverage for both `GET /face-verification/screenshot/{account_id}` and `DELETE /face-verification/screenshot/{account_id}`, using a second non-admin user fixture to model foreign access.
+- Rationale: The screenshot routes expose or destroy sensitive verification artifacts keyed by account id. Admin access is intentionally broader, so the foreign-user regression test needs a true non-owner principal instead of the existing admin fixture.
+- Impact: The suite now explicitly proves face-verification screenshots remain scoped to the owning user for both read and delete flows.

@@ -1,22 +1,21 @@
 # Current State Snapshot - 2026-06-18
 
 - Security hardening phase is implemented and smoke-tested.
-- Test coverage phases 1-47 are implemented for authz, lifecycle, delayed binding, ambiguity rejection, queue cleanup, terminal recent-fallback branches, selector disambiguation, enqueue-entry stale cleanup, bind-gap rejection, terminal discard behavior, refund-related terminal resolution paths, multi-update pending consumption, batch queue draining, mixed-success batch draining, mixed-result detail-fetched queue consumption, direct status-priority rollback protection, completed-terminal discard handling, shipped-terminal discard handling, failed direct-backfill fallback queueing, failed direct system backfill fallback queueing, direct cancelled system-message backfill success handling, ambiguous direct system backfill fallback queueing, ambiguous direct red-reminder fallback queueing, missing-strong-key fallthrough handling, runtime order-status seam propagation from `XianyuAutoAsync`, direct runtime handoff coverage, detail-refresh seams, basic-order-info seams inside `_auto_delivery(...)`, existing-order bypass, data-card reservation preparation, manual-delivery reservation closure, finalize-after-send pending-finalize handling, pending-finalize replay recovery, replay-only pending-finalize completion return handling, refresh-route soft-failure handling, history-sync job ownership boundaries, password-login session ownership boundaries, manual-cookie-import session ownership boundaries, and qr-login session ownership boundaries.
-- Test coverage phase 47 is implemented:
-  - qr-login check endpoint now records and enforces session ownership for generated sessions
-  - foreign users cannot inspect another user's qr-login session
-  - the session owner can still query the session after a denied foreign access attempt
+- Test coverage phases 1-48 are implemented for authz, lifecycle, delayed binding, ambiguity rejection, queue cleanup, terminal recent-fallback branches, selector disambiguation, enqueue-entry stale cleanup, bind-gap rejection, terminal discard behavior, refund-related terminal resolution paths, multi-update pending consumption, batch queue draining, mixed-success batch draining, mixed-result detail-fetched queue consumption, direct status-priority rollback protection, completed-terminal discard handling, shipped-terminal discard handling, failed direct-backfill fallback queueing, failed direct system backfill fallback queueing, direct cancelled system-message backfill success handling, ambiguous direct system backfill fallback queueing, ambiguous direct red-reminder fallback queueing, missing-strong-key fallthrough handling, runtime order-status seam propagation from `XianyuAutoAsync`, direct runtime handoff coverage, detail-refresh seams, basic-order-info seams inside `_auto_delivery(...)`, existing-order bypass, data-card reservation preparation, manual-delivery reservation closure, finalize-after-send pending-finalize handling, pending-finalize replay recovery, replay-only pending-finalize completion return handling, refresh-route soft-failure handling, history-sync job ownership boundaries, password-login session ownership boundaries, manual-cookie-import session ownership boundaries, qr-login session ownership boundaries, and face-verification screenshot ownership boundaries.
+- Test coverage phase 48 is implemented:
+  - face-verification screenshot routes now have direct smoke coverage proving foreign users cannot read or delete another user's verification screenshot
+  - the owning user can still read and delete the screenshot
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_accounts.py -q` => 9 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 164 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_accounts.py -q` => 10 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 165 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py tests order_status_handler.py` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-47 scope reviewed with `production-code-quality-review`
-  - no new P1/P2 findings identified in the phase-47 diff
+  - phase-48 scope reviewed with `production-code-quality-review`
+  - no new P1/P2 findings identified in the phase-48 diff
   - helper script still emits a pre-existing Windows GBK `UnicodeDecodeError` from its reader thread after returning usable JSON context
 - Environment note:
   - project `venv` currently lacks `pytest`, so validation fell back to the available host Python interpreter
 - Next testing priorities:
-  - evaluate whether any broader route or service entrypoint still needs coverage beyond the now-covered runtime detail-refresh, message-handoff, delivery-recovery, refresh, history-sync, password-login, manual-cookie-import, and qr-login seams
-  - evaluate whether the remaining uncovered risk now sits outside the order delivery/refresh/history-sync/login/manual-import/qr-login paths and belongs to a different module cluster
+  - evaluate whether any broader route or service entrypoint still needs coverage beyond the now-covered runtime detail-refresh, message-handoff, delivery-recovery, refresh, history-sync, password-login, manual-cookie-import, qr-login, and face-verification seams
+  - evaluate whether the remaining uncovered risk now sits outside the order delivery/refresh/history-sync/login/manual-import/qr-login/face-verification paths and belongs to a different module cluster
