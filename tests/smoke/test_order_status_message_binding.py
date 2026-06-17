@@ -364,6 +364,69 @@ def test_ambiguous_strong_key_keeps_pending_system_queue_unchanged(mocker):
     assert len(handler._pending_system_messages["cookie-5"]) == 2
 
 
+def test_message_hash_plus_strong_key_binds_unique_system_message_candidate(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["hash-strong-order"] = {
+        "order_id": "hash-strong-order",
+        "order_status": "processing",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-5a",
+        "sid": "chat-5a@goofish",
+        "buyer_id": "buyer-5a",
+        "item_id": "item-5a",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+    handler._pending_system_messages["cookie-5a"] = [
+        {
+            "message": _make_message(5_300, system=True),
+            "send_message": "浣犲凡鍙戣揣",
+            "cookie_id": "cookie-5a",
+            "msg_time": "14:10:00",
+            "new_status": "shipped",
+            "temp_order_id": "temp_hash_strong_keep",
+            "message_hash": 511,
+            "sid": "chat-other@goofish",
+            "buyer_id": "buyer-other",
+            "item_id": "item-other",
+            "message_timestamp_ms": 5_300,
+            "timestamp": 22.0,
+        },
+        {
+            "message": _make_message(5_301, system=True),
+            "send_message": "浣犲凡鍙戣揣",
+            "cookie_id": "cookie-5a",
+            "msg_time": "14:10:01",
+            "new_status": "shipped",
+            "temp_order_id": "temp_hash_strong_bind",
+            "message_hash": 511,
+            "sid": "chat-5a@goofish",
+            "buyer_id": "buyer-5a",
+            "item_id": "item-5a",
+            "message_timestamp_ms": 5_301,
+            "timestamp": 23.0,
+        },
+    ]
+
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    handler.on_order_id_extracted(
+        order_id="hash-strong-order",
+        cookie_id="cookie-5a",
+        message=_make_message(5_400),
+        match_context={
+            "message_hash": 511,
+            "sid": "chat-5a@goofish",
+            "buyer_id": "buyer-5a",
+            "item_id": "item-5a",
+            "message_timestamp_ms": 5_400,
+        },
+    )
+
+    assert fake_db.orders["hash-strong-order"]["order_status"] == "shipped"
+    assert len(handler._pending_system_messages["cookie-5a"]) == 1
+    assert handler._pending_system_messages["cookie-5a"][0]["temp_order_id"] == "temp_hash_strong_keep"
+
+
 def test_terminal_recent_fallback_binds_single_matching_system_message(mocker):
     fake_db = _MessageBindingDB()
     fake_db.orders["recent-order"] = {
@@ -521,6 +584,71 @@ def test_terminal_recent_fallback_binds_single_matching_red_reminder(mocker):
 
     assert fake_db.orders["recent-red-order"]["order_status"] == "cancelled"
     assert "cookie-8" not in handler._pending_red_reminder_messages
+
+
+def test_message_hash_plus_strong_key_binds_unique_red_reminder_candidate(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["hash-strong-red-order"] = {
+        "order_id": "hash-strong-red-order",
+        "order_status": "processing",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-8a",
+        "sid": "chat-8a@goofish",
+        "buyer_id": "buyer-8a",
+        "item_id": "item-8a",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+    handler._pending_red_reminder_messages["cookie-8a"] = [
+        {
+            "message": _make_message(8_500),
+            "red_reminder": "交易关闭",
+            "user_id": "user-8a",
+            "cookie_id": "cookie-8a",
+            "msg_time": "17:10:00",
+            "new_status": "cancelled",
+            "temp_order_id": "temp_red_hash_keep",
+            "message_hash": 811,
+            "sid": "chat-other@goofish",
+            "buyer_id": "buyer-other",
+            "item_id": "item-other",
+            "message_timestamp_ms": 8_500,
+            "timestamp": 52.0,
+        },
+        {
+            "message": _make_message(8_501),
+            "red_reminder": "交易关闭",
+            "user_id": "user-8a",
+            "cookie_id": "cookie-8a",
+            "msg_time": "17:10:01",
+            "new_status": "cancelled",
+            "temp_order_id": "temp_red_hash_bind",
+            "message_hash": 811,
+            "sid": "chat-8a@goofish",
+            "buyer_id": "buyer-8a",
+            "item_id": "item-8a",
+            "message_timestamp_ms": 8_501,
+            "timestamp": 53.0,
+        },
+    ]
+
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    handler.on_order_id_extracted(
+        order_id="hash-strong-red-order",
+        cookie_id="cookie-8a",
+        message=_make_message(8_600),
+        match_context={
+            "message_hash": 811,
+            "sid": "chat-8a@goofish",
+            "buyer_id": "buyer-8a",
+            "item_id": "item-8a",
+            "message_timestamp_ms": 8_600,
+        },
+    )
+
+    assert fake_db.orders["hash-strong-red-order"]["order_status"] == "cancelled"
+    assert len(handler._pending_red_reminder_messages["cookie-8a"]) == 1
+    assert handler._pending_red_reminder_messages["cookie-8a"][0]["temp_order_id"] == "temp_red_hash_keep"
 
 
 def test_terminal_recent_fallback_ambiguity_keeps_pending_red_reminder_queue(mocker):
