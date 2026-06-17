@@ -159,3 +159,31 @@ def test_cookie_auto_confirm_is_scoped_to_owner(client, auth, user_auth):
     assert owner_write.json()["auto_confirm"] is True
     assert owner_read.status_code == 200
     assert owner_read.json()["auto_confirm"] is True
+
+
+def test_cookie_auto_comment_is_scoped_to_owner(client, auth, user_auth):
+    client.post(
+        "/cookies",
+        headers=auth,
+        json={"id": "admin_auto_comment_cookie", "value": "unb=admin"},
+    )
+
+    foreign_read = client.get("/cookies/admin_auto_comment_cookie/auto-comment", headers=user_auth)
+    foreign_write = client.put(
+        "/cookies/admin_auto_comment_cookie/auto-comment",
+        headers=user_auth,
+        json={"auto_comment": True},
+    )
+    owner_write = client.put(
+        "/cookies/admin_auto_comment_cookie/auto-comment",
+        headers=auth,
+        json={"auto_comment": True},
+    )
+    owner_read = client.get("/cookies/admin_auto_comment_cookie/auto-comment", headers=auth)
+
+    assert foreign_read.status_code == 403
+    assert foreign_write.status_code == 403
+    assert owner_write.status_code == 200
+    assert owner_write.json()["auto_comment"] is True
+    assert owner_read.status_code == 200
+    assert owner_read.json()["auto_comment"] is True

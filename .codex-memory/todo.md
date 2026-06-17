@@ -1,10 +1,11 @@
-﻿# TODO
+# TODO
 ## In Progress
-- [ ] Stage and commit phase 63 cookie auto-confirm ownership coverage
-## Next
 - [ ] Evaluate whether any remaining owner/scoped route still lacks a focused smoke regression
+## Next
 - [ ] Evaluate whether the remaining uncovered risk now sits outside the current file/download, notification, account, keyword, and cookie-setting ownership clusters
 ## Done
+- [x] Stage and commit phase 64 cookie auto-comment ownership coverage
+- [x] Stage and commit phase 63 cookie auto-confirm ownership coverage
 - [x] Stage and commit phase 62 cookie pause-duration ownership coverage
 - [x] Stage and commit phase 61 cookie remark ownership coverage
 - [x] Stage and commit phase 60 `keywords-with-item-id` ownership coverage
@@ -76,3 +77,4 @@
 - [x] Add cookie remark ownership coverage so foreign users cannot read or overwrite another user's account remark
 - [x] Add cookie pause-duration ownership coverage so foreign users cannot read or overwrite another user's auto-reply pause duration
 - [x] Add cookie auto-confirm ownership coverage so foreign users cannot read or overwrite another user's auto-confirm setting
+- [x] Add cookie auto-comment ownership coverage so foreign users cannot read or overwrite another user's auto-comment setting

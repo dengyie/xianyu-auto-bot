@@ -946,3 +946,21 @@
   - Stage and commit the phase-63 change set.
 - Blockers:
   - `gh auth status` still reports an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` is completed interactively.
+## 2026-06-18 22:45
+- Task: Add phase 64 smoke coverage for cookie auto-comment ownership.
+- Actions:
+  - Reloaded memory and reviewed the cookie auto-comment route cluster.
+  - Confirmed `GET /cookies/{cid}/auto-comment` and `PUT /cookies/{cid}/auto-comment` already enforce cookie ownership in `reply_server.py`.
+  - Added `.codex-memory/test-coverage-phase64-design.md` and a smoke regression in `tests/smoke/test_cookie_access_control.py` covering foreign-user denial and owner success for auto-comment read/write.
+  - Re-ran targeted cookie-access smoke tests, full smoke suite, compileall, diff hygiene, and production review context collection.
+- Results:
+  - Targeted cookie-access smoke tests: 9 passed.
+  - Full smoke suite: 182 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 95/100, no severe findings.
+- Next:
+  - Stage and commit the phase-64 change set.
+  - Continue evaluating remaining owner/scoped routes for focused smoke gaps.
+- Blockers:
+  - `gh auth status` still reports an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` can complete.
