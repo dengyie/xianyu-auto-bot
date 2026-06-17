@@ -1533,6 +1533,56 @@ def test_cancelled_system_message_direct_backfill_updates_unique_order(mocker):
     assert "cookie-direct-system" not in handler._pending_system_messages
 
 
+def test_cancelled_system_message_queues_when_direct_backfill_has_no_strong_key(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["resolved-no-strong-key-system"] = {
+        "order_id": "resolved-no-strong-key-system",
+        "order_status": "pending_ship",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-no-strong-key-system",
+        "sid": "chat-no-strong-key-system@goofish",
+        "buyer_id": "buyer-no-strong-key-system",
+        "item_id": "item-no-strong-key-system",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+
+    mocker.patch("db_manager.db_manager", fake_db)
+    mocker.patch.object(
+        handler,
+        "_resolve_system_message_status",
+        return_value=(
+            "cancelled",
+            {"is_system_message": True},
+            [{"source": "send_message", "status": "cancelled", "text": "cancelled"}],
+        ),
+    )
+    mocker.patch.object(handler, "extract_order_id", return_value=None)
+    mocker.patch("time.time", return_value=250.0)
+    mocker.patch("uuid.uuid4", return_value=type("FakeUuid", (), {"hex": "5566778899aabbcc"})())
+
+    handled = handler.handle_system_message(
+        message=_make_message(21_000, system=True),
+        send_message="交易关闭系统消息缺少强键",
+        cookie_id="cookie-no-strong-key-system",
+        msg_time="21:30:00",
+        match_context={
+            "message_hash": 2101,
+            "sid": "chat-no-strong-key-system@goofish",
+            "buyer_id": "buyer-no-strong-key-system",
+            "item_id": None,
+            "message_timestamp_ms": 21_000,
+        },
+    )
+
+    assert handled is True
+    assert fake_db.orders["resolved-no-strong-key-system"]["order_status"] == "pending_ship"
+    assert "temp_250000_55667788" in handler.pending_updates
+    assert handler.pending_updates["temp_250000_55667788"][0]["new_status"] == "cancelled"
+    assert [
+        msg["temp_order_id"] for msg in handler._pending_system_messages["cookie-no-strong-key-system"]
+    ] == ["temp_250000_55667788"]
+
+
 def test_cancelled_system_message_queues_when_direct_backfill_is_ambiguous(mocker):
     fake_db = _MessageBindingDB()
     fake_db.orders["resolved-ambiguous-a"] = {

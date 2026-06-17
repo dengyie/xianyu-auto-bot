@@ -99,3 +99,8 @@
 - Decision: Add direct smoke coverage for `handle_red_reminder_message()` when no order id can be extracted and more than one old order matches the strong key.
 - Rationale: The red-reminder path shares the same `_try_resolve_cancelled_message_without_order_id()` ambiguity guard as system messages, so asymmetrical coverage would leave one entrypoint free to regress into mutating an arbitrary old order.
 - Impact: No-order-id red-reminder handling now explicitly proves ambiguous direct backfill attempts preserve the event by queueing it for later binding instead of mutating one of several plausible old orders.
+
+## 2026-06-17 - Phase 27 should lock down missing-strong-key fallthrough for system messages
+- Decision: Add direct smoke coverage for `handle_system_message()` when no order id can be extracted but the strong key is incomplete.
+- Rationale: `_try_resolve_cancelled_message_without_order_id()` requires `has_strong_match_key`; without a focused regression test, a later refactor could accidentally try to backfill from partial match data instead of falling back to the pending queue.
+- Impact: No-order-id system-message handling now explicitly proves incomplete match context preserves the event by queueing it for later binding instead of attempting direct backfill.

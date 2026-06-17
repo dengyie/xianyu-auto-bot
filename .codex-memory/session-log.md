@@ -324,3 +324,19 @@
   - Stage, commit, and push the phase-26 files, then continue evaluating the remaining no-order-id fallthrough gap.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-17 21:05
+- Task: Finish phase 27 missing-strong-key system-message fallthrough coverage for no-order-id system-message handling.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase27-design.md` before implementation.
+  - Extended `tests/smoke/test_order_status_message_binding.py` with direct coverage for falling back into the pending system-message queue when the strong key is incomplete.
+  - Re-ran targeted phase-27 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-27 tests: 27 passed.
+  - Full smoke suite: 140 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-27 diff review.
+- Next:
+  - Stage, commit, and push the phase-27 files, then continue evaluating the red-reminder symmetry gap.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.
