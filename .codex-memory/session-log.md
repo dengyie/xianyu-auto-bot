@@ -179,3 +179,19 @@
   - Stage, commit, and push the phase-17 files, then continue evaluating the next test gap.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-17 16:45
+- Task: Finish phase 18 mixed-result detail-fetched pending-update coverage for the out-of-lock queue consumer.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase18-design.md` before implementation.
+  - Extended `tests/smoke/test_order_status_pending_updates.py` with direct coverage for `on_order_details_fetched()` continuing after one failed queued update.
+  - Re-ran targeted phase-18 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-18 tests: 6 passed.
+  - Full smoke suite: 131 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-18 diff review.
+- Next:
+  - Stage, commit, and push the phase-18 files, then continue evaluating the next test gap.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

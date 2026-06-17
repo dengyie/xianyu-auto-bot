@@ -1,7 +1,7 @@
 # TODO
 
 ## In Progress
-- [ ] Stage, commit, and push phase 17 mixed-success batch pending-drain coverage to the draft GitHub PR
+- [ ] Stage, commit, and push phase 18 mixed-result detail-fetched pending-update coverage to the draft GitHub PR
 
 ## Next
 - [ ] Evaluate whether any pending-queue behavior still needs a broader service/route integration entrypoint test beyond the current handler-focused smoke coverage
@@ -27,3 +27,4 @@
 - [x] Add multi-update pending-consumption coverage for `on_order_details_fetched(...)`
 - [x] Add batch pending-drain coverage for `process_all_pending_updates()`
 - [x] Add mixed-success batch pending-drain coverage so one requeued bucket does not block later queued orders
+- [x] Add mixed-result detail-fetched pending-update coverage so one failed queued update does not block a later valid update

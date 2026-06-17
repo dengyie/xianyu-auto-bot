@@ -191,3 +191,35 @@ def test_process_all_pending_updates_continues_after_one_bucket_requeues(mocker)
     assert "queued-order-missing" in handler.pending_updates
     assert handler.pending_updates["queued-order-missing"][0]["new_status"] == "pending_ship"
     assert handler.get_pending_updates_count() == 1
+
+
+def test_on_order_details_fetched_continues_after_one_failed_update(mocker):
+    fake_db = _PendingQueueDB()
+    fake_db.orders["queued-order-failure-then-success"] = {
+        "order_id": "queued-order-failure-then-success",
+        "order_status": "processing",
+        "pre_refund_status": None,
+        "cookie_id": "queued-cookie-failure-then-success",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+    handler.pending_updates["queued-order-failure-then-success"] = [
+        {
+            "new_status": "refunding",
+            "cookie_id": "queued-cookie-failure-then-success",
+            "context": "queued invalid refunding transition",
+            "timestamp": 1.0,
+        },
+        {
+            "new_status": "pending_ship",
+            "cookie_id": "queued-cookie-failure-then-success",
+            "context": "queued valid pending ship transition",
+            "timestamp": 2.0,
+        },
+    ]
+
+    mocker.patch("db_manager.db_manager", fake_db)
+    handler.on_order_details_fetched("queued-order-failure-then-success")
+
+    assert handler.get_pending_updates_count() == 0
+    assert "queued-order-failure-then-success" not in handler.pending_updates
+    assert fake_db.orders["queued-order-failure-then-success"]["order_status"] == "pending_ship"

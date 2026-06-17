@@ -54,3 +54,8 @@
 - Decision: Add direct smoke coverage for `process_all_pending_updates()` when one queued order still requeues while a later order bucket can be processed successfully.
 - Rationale: The all-success path is useful, but the batch wrapper's real production value is that it keeps making progress even when one bucket cannot be applied yet. Without direct coverage, a future refactor could accidentally stop iteration after the first failed bucket.
 - Impact: The batch queue processor now explicitly proves it continues through mixed-success pending work and preserves the failed bucket for later retry.
+
+## 2026-06-17 - Phase 18 should prove detail-fetched queue draining survives a failed update
+- Decision: Add direct smoke coverage for `on_order_details_fetched()` when one queued update fails validation but a later queued update for the same order is still valid.
+- Rationale: The detail-fetched entrypoint uses its own out-of-lock consumer path instead of `process_pending_updates()`, so the mixed-result behavior needed independent proof. Otherwise a refactor could accidentally stop after the first failed update and strand later valid work.
+- Impact: The detail-fetched queue consumer now explicitly proves it keeps draining the fetched order's updates and applies later valid transitions even when an earlier queued update fails.
