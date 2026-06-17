@@ -1,6 +1,8 @@
 """Notification API ownership and template authorization regressions."""
 
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
 def _add_cookie(client, headers, cookie_id):
@@ -24,6 +26,38 @@ def _create_channel(client, headers, name="webhook channel"):
     )
     assert resp.status_code == 200
     return resp.json()["id"]
+
+
+class _WebhookRecorder:
+    def __init__(self):
+        self.requests = []
+        self._event = threading.Event()
+
+    def record(self, body):
+        self.requests.append(body)
+        self._event.set()
+
+    def wait(self, timeout=2.0):
+        return self._event.wait(timeout)
+
+
+def _run_webhook_server(recorder):
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("content-length", "0") or "0")
+            body = self.rfile.read(length).decode("utf-8")
+            recorder.record(body)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, format, *args):
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
 
 
 def test_notification_channels_are_scoped_to_current_user(client, auth, user_auth):
@@ -199,6 +233,41 @@ def test_notification_template_test_send_uses_only_current_users_channels(client
 
     assert resp.status_code == 400
     assert "没有已启用的通知渠道" in resp.json()["detail"]
+
+
+def test_notification_template_test_send_succeeds_with_current_users_enabled_channel(client, user_auth, monkeypatch):
+    recorder = _WebhookRecorder()
+    server, _thread = _run_webhook_server(recorder)
+    webhook_url = f"http://127.0.0.1:{server.server_port}/webhook"
+    try:
+        channel_id = _create_channel(
+            client,
+            user_auth,
+            name="user webhook channel",
+        )
+        client.put(
+            f"/notification-channels/{channel_id}",
+            headers=user_auth,
+            json={
+                "name": "user webhook channel",
+                "config": json.dumps({"webhook_url": webhook_url}),
+                "enabled": True,
+            },
+        )
+
+        resp = client.post(
+            "/notification-templates/test",
+            headers=user_auth,
+            json={"template_type": "message", "template": "test message: {message}"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        assert recorder.wait()
+        assert recorder.requests
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_notification_template_mutation_is_admin_only(client, auth, user_auth):

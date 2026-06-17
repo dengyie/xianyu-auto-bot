@@ -247,3 +247,8 @@
 - Decision: Add smoke coverage for `DELETE /message-notifications/{notification_id}` so foreign users cannot delete another user's individual notification row.
 - Rationale: The delete-by-id route already filters by the current user's owned channels at the data layer, but it was still unpinned by a regression test. A focused smoke case covers the last mutation seam in the notification cluster without broadening runtime behavior.
 - Impact: Single notification deletion is now explicitly guarded by ownership, and the smoke suite covers both foreign-user denial and owner cleanup success.
+
+## 2026-06-18 - Phase 58 should lock notification test-send success
+- Decision: Add smoke coverage for `POST /notification-templates/test` using a local webhook recorder to prove the owner can send a test notification through their own enabled channel.
+- Rationale: The route already had failure coverage for missing channels, but its success path still lacked direct proof and depended on real outbound delivery if exercised naively. A local recorder keeps the test deterministic while verifying the real send flow and current-user channel scoping.
+- Impact: Notification test-send success is now explicitly covered without external network dependence, and the suite proves the current user's enabled channel is used.
