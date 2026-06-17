@@ -1036,3 +1036,22 @@
   - Continue evaluating item-reply, multi-spec item flag, chat keyword item, and AI reply settings ownership coverage.
 - Blockers:
   - `gh auth status` previously reported an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` can complete.
+## 2026-06-18 00:45
+- Task: Fix phase 69 item-reply metadata isolation and add ownership coverage.
+- Actions:
+  - Reviewed `/itemReplays/cookie/{cookie_id}`, `/item-reply/{cookie_id}/{item_id}`, and `/item-reply/batch`.
+  - Confirmed route-level owner checks exist, then found `get_itemReplays_by_cookie(...)` joined `item_info` only by `item_id`.
+  - Updated both `db_manager.py` and `db_manager/items.py` so item-reply list metadata joins bind on `cookie_id` plus `item_id`.
+  - Added `.codex-memory/test-coverage-phase69-design.md` and a smoke regression covering foreign-user denial for list/read/update/delete/batch-delete plus owner success and same-`item_id` metadata isolation.
+  - Re-ran targeted cookie-access smoke tests, full smoke suite, compileall, diff hygiene, and production review context collection.
+- Results:
+  - Targeted cookie-access smoke tests: 13 passed.
+  - Full smoke suite: 187 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-69 change set.
+  - Continue evaluating multi-spec item flag, chat keyword item, and AI reply settings ownership coverage.
+- Blockers:
+  - `gh auth status` previously reported an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` can complete.

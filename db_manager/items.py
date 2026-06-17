@@ -1113,7 +1113,7 @@ class DBItemsMixin:
                 cursor.execute('''
                 SELECT r.item_id, r.cookie_id, r.reply_content, r.created_at, r.updated_at, i.item_title, i.item_detail
                     FROM item_replay r
-                    LEFT JOIN item_info i ON i.item_id = r.item_id
+                    LEFT JOIN item_info i ON i.cookie_id = r.cookie_id AND i.item_id = r.item_id
                     WHERE r.cookie_id = ?
                     ORDER BY r.updated_at DESC
                 ''', (cookie_id,))

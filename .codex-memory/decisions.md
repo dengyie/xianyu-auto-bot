@@ -298,3 +298,7 @@
 - Decision: Add smoke coverage for `GET /items/cookie/{cookie_id}`, `GET /items/{cookie_id}/{item_id}`, `PUT /items/{cookie_id}/{item_id}`, and `DELETE /items/{cookie_id}/{item_id}`.
 - Rationale: The item-info routes already enforce cookie ownership and use `cookie_id` in data-layer item operations, but the route cluster lacked focused cross-user regression coverage. A route-level smoke test is the smallest way to prove foreign users cannot list, read, update, or delete another user's item records while the owner path still works.
 - Impact: Item-info route ownership is now explicitly covered without changing production behavior.
+## 2026-06-18 - Phase 69 should bind item-reply metadata joins to cookie
+- Decision: Update `get_itemReplays_by_cookie(...)` so its `item_info` join matches both `cookie_id` and `item_id`, and add route smoke coverage for item-reply list/read/update/delete/batch-delete ownership.
+- Rationale: Route-level owner checks prevented direct foreign mutations, but the list query could attach metadata from another cookie when two accounts had the same `item_id`. Binding the join to the cookie keeps reply data and item metadata in the same ownership scope.
+- Impact: Item-reply list responses no longer leak or mis-associate cross-cookie item metadata, and the smoke suite protects both owner boundaries and same-`item_id` isolation.

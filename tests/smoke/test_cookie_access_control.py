@@ -52,6 +52,102 @@ def test_item_info_routes_are_scoped_to_cookie_owner(client, auth, user_auth):
     assert owner_delete.status_code == 200
 
 
+def test_item_reply_routes_are_scoped_to_cookie_owner(client, auth, user_auth):
+    client.post(
+        "/cookies",
+        headers=auth,
+        json={"id": "admin_reply_cookie", "value": "unb=admin"},
+    )
+    client.post(
+        "/cookies",
+        headers=user_auth,
+        json={"id": "user_reply_cookie", "value": "unb=user"},
+    )
+    from db_manager import db_manager
+
+    shared_item_id = "shared_reply_item"
+    assert db_manager.save_item_info(
+        "admin_reply_cookie",
+        shared_item_id,
+        {
+            "title": "Owner reply item",
+            "description": "Owner metadata",
+            "category": "digital",
+            "price": "19.90",
+        },
+    )
+    assert db_manager.save_item_info(
+        "user_reply_cookie",
+        shared_item_id,
+        {
+            "title": "Foreign reply item",
+            "description": "Foreign metadata",
+            "category": "digital",
+            "price": "29.90",
+        },
+    )
+    assert db_manager.update_item_reply(
+        "admin_reply_cookie",
+        shared_item_id,
+        "owner reply",
+    )
+
+    foreign_list = client.get("/itemReplays/cookie/admin_reply_cookie", headers=user_auth)
+    foreign_read = client.get(
+        f"/item-reply/admin_reply_cookie/{shared_item_id}",
+        headers=user_auth,
+    )
+    foreign_update = client.put(
+        f"/item-reply/admin_reply_cookie/{shared_item_id}",
+        headers=user_auth,
+        json={"reply_content": "stolen reply"},
+    )
+    foreign_delete = client.delete(
+        f"/item-reply/admin_reply_cookie/{shared_item_id}",
+        headers=user_auth,
+    )
+    foreign_batch_delete = client.request(
+        "DELETE",
+        "/item-reply/batch",
+        headers=user_auth,
+        json={"items": [{"cookie_id": "admin_reply_cookie", "item_id": shared_item_id}]},
+    )
+    owner_list = client.get("/itemReplays/cookie/admin_reply_cookie", headers=auth)
+    owner_read = client.get(
+        f"/item-reply/admin_reply_cookie/{shared_item_id}",
+        headers=auth,
+    )
+    owner_update = client.put(
+        f"/item-reply/admin_reply_cookie/{shared_item_id}",
+        headers=auth,
+        json={"reply_content": "updated owner reply"},
+    )
+    owner_delete = client.delete(
+        f"/item-reply/admin_reply_cookie/{shared_item_id}",
+        headers=auth,
+    )
+
+    assert foreign_list.status_code == 403
+    assert foreign_read.status_code == 403
+    assert foreign_update.status_code == 403
+    assert foreign_delete.status_code == 403
+    assert foreign_batch_delete.status_code == 403
+    assert owner_list.status_code == 200
+    assert owner_list.json()["items"] == [
+        {
+            **owner_list.json()["items"][0],
+            "item_id": shared_item_id,
+            "cookie_id": "admin_reply_cookie",
+            "reply_content": "owner reply",
+            "item_title": "Owner reply item",
+        }
+    ]
+    assert owner_read.status_code == 200
+    assert owner_read.json()["reply_content"] == "owner reply"
+    assert owner_update.status_code == 200
+    assert owner_delete.status_code == 200
+
+
 def test_regular_user_cannot_list_another_users_cookie(client, auth, user_auth):
     client.post(
         "/cookies",
