@@ -11600,7 +11600,7 @@ async def _run_order_history_sync_job(job_id: str) -> None:
 async def start_order_history_sync(request: OrderHistorySyncRequest, current_user: Dict[str, Any] = Depends(get_current_user)):
     """按时间范围同步历史订单。"""
     try:
-        request_data = request.dict()
+        request_data = request.model_dump()
         start_date = str(request_data.get('start_date') or '').strip()
         end_date = str(request_data.get('end_date') or '').strip()
         if not start_date or not end_date:
