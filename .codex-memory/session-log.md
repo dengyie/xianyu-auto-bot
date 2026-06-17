@@ -983,3 +983,20 @@
   - Continue evaluating remaining owner/scoped routes for focused smoke gaps.
 - Blockers:
   - `gh auth status` still reports an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` can complete.
+## 2026-06-18 23:45
+- Task: Add phase 66 smoke coverage for comment-template list/create ownership.
+- Actions:
+  - Reviewed the remaining comment-template list/create route pair after phase 65 fixed template-id binding.
+  - Added `.codex-memory/test-coverage-phase66-design.md` and a smoke regression in `tests/smoke/test_cookie_access_control.py` covering foreign-user denial and owner success for list/create.
+  - Re-ran targeted cookie-access smoke tests, full smoke suite, compileall, diff hygiene, and production review context collection.
+- Results:
+  - Targeted cookie-access smoke tests: 11 passed.
+  - Full smoke suite: 184 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 95/100, no severe findings.
+- Next:
+  - Stage and commit the phase-66 change set.
+  - Continue evaluating remaining owner/scoped routes for focused smoke gaps.
+- Blockers:
+  - `gh auth status` still reports an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` can complete.

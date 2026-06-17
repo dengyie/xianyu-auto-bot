@@ -235,3 +235,41 @@ def test_comment_template_id_must_belong_to_cookie(client, auth, user_auth):
             "is_active": True,
         }
     ]
+
+
+def test_comment_template_list_and_create_are_scoped_to_owner(client, auth, user_auth):
+    client.post(
+        "/cookies",
+        headers=auth,
+        json={"id": "admin_template_list_cookie", "value": "unb=admin"},
+    )
+
+    foreign_read = client.get(
+        "/cookies/admin_template_list_cookie/comment-templates",
+        headers=user_auth,
+    )
+    foreign_create = client.post(
+        "/cookies/admin_template_list_cookie/comment-templates",
+        headers=user_auth,
+        json={"name": "foreign template", "content": "foreign comment", "is_active": True},
+    )
+    owner_create = client.post(
+        "/cookies/admin_template_list_cookie/comment-templates",
+        headers=auth,
+        json={"name": "owner template", "content": "owner comment", "is_active": True},
+    )
+    owner_read = client.get(
+        "/cookies/admin_template_list_cookie/comment-templates",
+        headers=auth,
+    )
+
+    assert foreign_read.status_code == 403
+    assert foreign_create.status_code == 403
+    assert owner_create.status_code == 200
+    assert owner_read.status_code == 200
+    templates = owner_read.json()["templates"]
+    assert len(templates) == 1
+    assert templates[0]["id"] == owner_create.json()["template_id"]
+    assert templates[0]["name"] == "owner template"
+    assert templates[0]["content"] == "owner comment"
+    assert templates[0]["is_active"] is True

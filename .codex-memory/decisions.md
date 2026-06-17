@@ -286,3 +286,7 @@
 - Decision: Require comment-template update/delete/activate operations to prove `template_id` belongs to the URL `cid` before mutating state.
 - Rationale: Route-level cookie ownership alone was insufficient because a user could combine their own `cid` with another cookie's `template_id`. Binding at the DB helper boundary keeps route and data-layer behavior aligned.
 - Impact: Cross-cookie template update, delete, and activation attempts now fail as not found, and smoke coverage locks the boundary.
+## 2026-06-18 - Phase 66 should lock comment-template list/create ownership
+- Decision: Add smoke coverage for `GET /cookies/{cid}/comment-templates` and `POST /cookies/{cid}/comment-templates` so foreign users cannot list or create templates under another user's cookie.
+- Rationale: Phase 65 closed template-id mutation risks, but the list/create route pair also needs direct regression coverage for the route-level cookie owner gate.
+- Impact: Comment-template list/create ownership is now explicitly covered for foreign-user denial and owner success.
