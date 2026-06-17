@@ -237,3 +237,32 @@ def test_history_sync_uses_live_instance_detail_refresh_when_available(client, u
     assert order["order_status"] == "shipped"
     assert order["buyer_nick"] == "runtime buyer"
     assert str(order["quantity"]) == "2"
+
+
+def test_history_sync_job_is_forbidden_for_other_user(client, auth, user_auth, mocker):
+    _add_cookie(client, user_auth, "history_cookie")
+    mocker.patch("utils.order_history_sync.OrderHistoryPageFetcher", _FakeHistoryFetcher)
+
+    create = client.post(
+        "/api/orders/history-sync",
+        headers=user_auth,
+        json={
+            "cookie_id": "history_cookie",
+            "start_date": "2026-06-16",
+            "end_date": "2026-06-18",
+            "max_orders": 5,
+            "fetch_details": False,
+        },
+    )
+    assert create.status_code == 200
+    job_id = create.json()["data"]["job_id"]
+
+    status = client.get(f"/api/orders/history-sync/{job_id}", headers=auth)
+    assert status.status_code == 403
+
+    cancel = client.post(f"/api/orders/history-sync/{job_id}/cancel", headers=auth)
+    assert cancel.status_code == 403
+
+    owner_status = client.get(f"/api/orders/history-sync/{job_id}", headers=user_auth)
+    assert owner_status.status_code == 200
+    assert owner_status.json()["data"]["job_id"] == job_id

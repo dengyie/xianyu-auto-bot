@@ -627,3 +627,22 @@
   - Reevaluate remaining route/service coverage gaps outside the delivery and refresh chains.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-18 10:45
+- Task: Finish phase 44 smoke coverage for history-sync job ownership boundaries.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase44-design.md` before implementation.
+  - Extended `tests/smoke/test_order_history_sync.py` with route-level coverage for foreign-user access to history-sync job status and cancel endpoints.
+  - Verified that another user receives 403 on both endpoints while the job owner can still query the task successfully.
+  - Re-ran targeted phase-44 tests, full smoke suite, compileall, diff hygiene, and production review for the phase-44 diff.
+- Results:
+  - Targeted phase-44 tests: 5 passed.
+  - Full smoke suite: 161 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Production review: no new P1/P2 findings; score 97/100; status passed.
+- Next:
+  - Stage only the intentional phase-44 files, commit, and push the branch.
+  - Reevaluate remaining high-level route/service coverage gaps outside delivery, refresh, and history-sync.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

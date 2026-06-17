@@ -189,3 +189,8 @@
 - Decision: Add route-level smoke coverage for `/api/orders/{order_id}/refresh` when `fetch_order_detail_info(...)` returns a falsey result instead of raising.
 - Rationale: The success path and ownership rejection path were already covered, but the adjacent production contract is the soft-failure branch where the live refresh cannot produce detail data. Without a focused test, the route could regress into silently reporting success or mutating stored state after a no-result refresh.
 - Impact: The suite now explicitly proves refresh failures with no returned detail leave order state unchanged and surface a user-visible `updated=False` response.
+
+## 2026-06-18 - Phase 44 should lock down history-sync job ownership boundaries
+- Decision: Add route-level smoke coverage for foreign-user access to `GET /api/orders/history-sync/{job_id}` and `POST /api/orders/history-sync/{job_id}/cancel`.
+- Rationale: The history-sync route cluster already had lifecycle and business-result coverage, but the background job object itself carries account scope, progress, and warning details. A focused ownership test is the cheapest way to prevent regressions that would expose or cancel another user's sync task.
+- Impact: The suite now explicitly proves history-sync job status and cancellation stay scoped to the creating user.
