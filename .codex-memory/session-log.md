@@ -530,3 +530,23 @@
   - Continue with the data-card mark-sent/release seam if todo remains open.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-17 23:55
+- Task: Finish phase 39 smoke coverage for data-card reservation mark/release behavior after manual delivery send.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase39-design.md` before implementation.
+  - Extended `tests/smoke/test_order_delivery_transitions.py` so the fake runtime can emit reservation metadata and record mark/release helper calls.
+  - Added one route-level smoke test proving successful manual delivery marks a data-card reservation as sent and finalizes the order.
+  - Added one route-level smoke test proving post-send mark failure releases the reservation and keeps the order out of finalized delivery state.
+  - Re-ran targeted phase-39 tests, full smoke suite, compileall, diff hygiene, and production review for the phase-39 diff.
+- Results:
+  - Targeted phase-39 tests: 8 passed.
+  - Full smoke suite: 155 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Production review: no new P1/P2 findings; score 93/100; status passed.
+- Next:
+  - Stage only the intentional phase-39 files, commit, and push the branch.
+  - Continue evaluating the send-success but finalize-after-send failure seam for reservation-backed delivery units.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

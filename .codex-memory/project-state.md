@@ -1,21 +1,21 @@
 # Current State Snapshot - 2026-06-17
 
 - Security hardening phase is implemented and smoke-tested.
-- Test coverage phases 1-38 are implemented for authz, lifecycle, delayed binding, ambiguity rejection, queue cleanup, terminal recent-fallback branches, selector disambiguation, enqueue-entry stale cleanup, bind-gap rejection, terminal discard behavior, refund-related terminal resolution paths, multi-update pending consumption, batch queue draining, mixed-success batch draining, mixed-result detail-fetched queue consumption, direct status-priority rollback protection, completed-terminal discard handling, shipped-terminal discard handling, failed direct-backfill fallback queueing, failed direct system backfill fallback queueing, direct cancelled system-message backfill success handling, ambiguous direct system backfill fallback queueing, ambiguous direct red-reminder fallback queueing, missing-strong-key fallthrough handling, runtime order-status seam propagation from `XianyuAutoAsync`, direct runtime handoff coverage, detail-refresh seams, basic-order-info seams inside `_auto_delivery(...)`, existing-order bypass, and data-card reservation success/failure handling.
-- Test coverage phase 38 is implemented:
-  - `XianyuLive._auto_delivery(...)` now has direct smoke coverage proving data-card reservation success returns the reserved line and reservation metadata
-  - the empty/reservation-failure branch returns a failed prepared-delivery result without fabricating pending-consume metadata
+- Test coverage phases 1-39 are implemented for authz, lifecycle, delayed binding, ambiguity rejection, queue cleanup, terminal recent-fallback branches, selector disambiguation, enqueue-entry stale cleanup, bind-gap rejection, terminal discard behavior, refund-related terminal resolution paths, multi-update pending consumption, batch queue draining, mixed-success batch draining, mixed-result detail-fetched queue consumption, direct status-priority rollback protection, completed-terminal discard handling, shipped-terminal discard handling, failed direct-backfill fallback queueing, failed direct system backfill fallback queueing, direct cancelled system-message backfill success handling, ambiguous direct system backfill fallback queueing, ambiguous direct red-reminder fallback queueing, missing-strong-key fallthrough handling, runtime order-status seam propagation from `XianyuAutoAsync`, direct runtime handoff coverage, detail-refresh seams, basic-order-info seams inside `_auto_delivery(...)`, existing-order bypass, data-card reservation preparation, and manual-delivery reservation mark/release handling.
+- Test coverage phase 39 is implemented:
+  - manual delivery now has direct smoke coverage proving data-card reservations are marked sent after a successful send
+  - the post-send mark failure branch releases the reservation and leaves the order undelivered/finalization-incomplete
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_xianyu_order_status_runtime_seam.py -q` => 12 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 153 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_order_delivery_transitions.py -q` => 8 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 155 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py tests order_status_handler.py` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-38 scope reviewed with `production-code-quality-review`
-  - no new P1/P2 findings identified in the phase-38 diff
+  - phase-39 scope reviewed with `production-code-quality-review`
+  - no new P1/P2 findings identified in the phase-39 diff
   - helper script still emits a pre-existing Windows GBK `UnicodeDecodeError` from its reader thread after returning usable JSON context
 - Environment note:
   - project `venv` currently lacks `pytest`, so validation fell back to the available host Python interpreter
 - Next testing priorities:
-  - evaluate data-card reservation mark-sent/release behavior around `_mark_data_reservation_sent_if_needed(...)` and `_release_data_reservation_if_needed(...)`
-  - evaluate whether any broader route or service entrypoint still needs coverage beyond the now-covered runtime detail-refresh and message-handoff seams
+  - evaluate whether the send-success but finalize-after-send failure path still needs tighter route-level coverage for reservation-backed units
+  - evaluate whether any broader route or service entrypoint still needs coverage beyond the now-covered runtime detail-refresh, message-handoff, and delivery-reservation seams

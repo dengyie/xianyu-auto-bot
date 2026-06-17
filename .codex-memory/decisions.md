@@ -164,3 +164,8 @@
 - Decision: Add focused `_auto_delivery(...)` seam tests for data-card reservation success and reservation failure instead of broadening into live message sending.
 - Rationale: The reservation branch is the contract that prevents duplicate batch-data delivery and produces metadata needed by later mark-sent/release hooks. A deterministic seam test can prove the reservation call, returned content, and metadata without involving websocket delivery or live platform state.
 - Impact: The suite now explicitly proves data-card preparation returns reserved content only after a successful reservation and leaves pending-consume metadata empty when no reservation is available.
+
+## 2026-06-17 - Phase 39 should cover reservation closure at the delivery route
+- Decision: Cover reservation mark-sent and release behavior through the manual delivery route smoke tests instead of adding a narrower helper-only unit test.
+- Rationale: The production contract is not just the helper return value; it is the route-level behavior that threads `_auto_delivery(...)` metadata through message sending, reservation closure, delivery logs, and finalization progress. A route smoke test catches metadata wiring regressions that a helper-only test would miss.
+- Impact: The suite now explicitly proves reservation-backed manual delivery both closes the reservation on success and releases it when post-send mark-sent handling fails.
