@@ -1,15 +1,15 @@
 ﻿# Current State Snapshot - 2026-06-18
 
 - Security hardening and smoke coverage are still moving in small bounded phases.
-- Phase 53 is now implemented for notification-channel read ownership regression coverage.
+- Phase 54 is now implemented for message-notification read ownership regression coverage.
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_notifications.py -q` => 7 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 171 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_notifications.py -q` => 8 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 172 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py tests` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-53 scope reviewed with `production-code-quality-review`
-  - no new P1/P2 findings identified in the phase-53 diff
+  - phase-54 scope reviewed with `production-code-quality-review`
+  - no new P1/P2 findings identified in the phase-54 diff
   - helper script still emits a pre-existing Windows GBK `UnicodeDecodeError` from its reader thread after returning usable JSON context
 - Environment note:
   - project `venv` still lacks `pytest`, so validation used host Python

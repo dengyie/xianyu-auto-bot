@@ -61,6 +61,31 @@ def test_regular_user_cannot_read_another_users_channel(client, auth, user_auth)
     assert read.status_code == 404
 
 
+def test_message_notifications_read_is_scoped_to_cookie_owner(client, auth, user_auth):
+    _add_cookie(client, auth, "admin_notify_cookie")
+    _add_cookie(client, user_auth, "user_notify_cookie")
+    admin_channel_id = _create_channel(client, auth, name="admin channel")
+    user_channel_id = _create_channel(client, user_auth, name="user channel")
+
+    client.post(
+        "/message-notifications/admin_notify_cookie",
+        headers=auth,
+        json={"channel_id": admin_channel_id, "enabled": True},
+    )
+    client.post(
+        "/message-notifications/user_notify_cookie",
+        headers=user_auth,
+        json={"channel_id": user_channel_id, "enabled": True},
+    )
+
+    foreign = client.get("/message-notifications/admin_notify_cookie", headers=user_auth)
+    owner = client.get("/message-notifications/admin_notify_cookie", headers=auth)
+
+    assert foreign.status_code == 403
+    assert owner.status_code == 200
+    assert owner.json()
+
+
 def test_message_notification_requires_owned_cookie_and_owned_channel(client, auth, user_auth):
     _add_cookie(client, auth, "admin_notify_cookie")
     _add_cookie(client, user_auth, "user_notify_cookie")

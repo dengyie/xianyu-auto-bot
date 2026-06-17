@@ -232,3 +232,8 @@
 - Decision: Add smoke coverage for `GET /notification-channels/{channel_id}` so foreign users cannot read another user's channel details.
 - Rationale: The update/delete paths for notification channels were already protected, but the read path remained the last unverified owner-scoped route in that cluster. A small read regression keeps the access model consistent without changing runtime behavior.
 - Impact: Notification channel details are now explicitly guarded on read as well as mutation, and the smoke suite covers the foreign-user denial path.
+
+## 2026-06-18 - Phase 54 should lock message-notification read ownership
+- Decision: Add smoke coverage for `GET /message-notifications/{cid}` so foreign users cannot read another user's account notification config.
+- Rationale: The endpoint already checks cookie ownership in production code, but the read path had not yet been pinned by a regression test. A narrow smoke case keeps the notification cluster's account-bound reads covered without broadening runtime behavior.
+- Impact: Account notification reads are now explicitly guarded by ownership, and the smoke suite covers both denial and owner success paths.

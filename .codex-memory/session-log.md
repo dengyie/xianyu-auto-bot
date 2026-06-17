@@ -793,3 +793,20 @@
   - Stage and commit the phase-53 change set when ready.
 - Blockers:
   - Project virtual environment still does not provide `pytest`.
+
+## 2026-06-18 18:40
+- Task: Add the next focused ownership regression in the notification cluster.
+- Actions:
+  - Reloaded project memory and reviewed the phase-54 design note.
+  - Confirmed `GET /message-notifications/{cid}` enforces cookie ownership in `reply_server.py`.
+  - Added a smoke regression in `tests/smoke/test_notifications.py` covering foreign-user denial and owner success for account notification reads.
+  - Re-ran targeted notification smoke tests, full smoke suite, compileall, diff hygiene, and production review context collection.
+- Results:
+  - Targeted notification smoke tests: 8 passed.
+  - Full smoke suite: 172 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+- Next:
+  - Stage and commit the phase-54 change set.
+- Blockers:
+  - `gh auth status` still reports an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` is completed interactively.

@@ -1,6 +1,6 @@
 ﻿# TODO
 ## In Progress
-- [ ] Stage, commit, and push phase 53 notification-channel read ownership coverage to the draft GitHub PR
+- [ ] Stage and commit phase 54 message-notification read ownership coverage
 ## Next
 - [ ] Evaluate whether any remaining owner/scoped route still lacks a focused smoke regression
 - [ ] Evaluate whether the remaining uncovered risk now sits outside the current file/download, notification, and account ownership clusters
@@ -63,3 +63,4 @@
 - [x] Add manual-delivery reservation closure coverage so data-card sends mark reservations sent on success and release them when post-send marking fails
 - [x] Add finalize-after-send failure coverage so reservation-backed manual delivery units stay in `partial_pending_finalize` after send-side finalization fails
 - [x] Add pending-finalize replay coverage so manual delivery retry finishes persisted `sent` units without duplicating buyer-visible delivery
+- [x] Add message-notification read ownership coverage so foreign users cannot read another user's account notification config
