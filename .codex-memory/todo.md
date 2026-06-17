@@ -1,11 +1,11 @@
 # TODO
 
 ## In Progress
-- [ ] Stage, commit, and push phase 35 basic-order-info handler-failure seam coverage to the draft GitHub PR
+- [ ] Stage, commit, and push phase 36 basic-order-info write-failure seam coverage to the draft GitHub PR
 
 ## Next
 - [ ] Evaluate whether any broader route or service entrypoint still needs coverage beyond the now-covered runtime detail-refresh and message-handoff seams
-- [ ] Evaluate whether the next highest-value uncovered contract is the basic-order-info write-failure branch or an existing-order bypass seam in `_auto_delivery(...)`
+- [ ] Evaluate whether the next highest-value uncovered contract is the existing-order bypass seam or the data-card path in `_auto_delivery(...)`
 
 ## Done
 - [x] Add authz/cookie isolation/file token/system settings smoke coverage
@@ -45,3 +45,4 @@
 - [x] Add detail-refresh failure-isolation seam coverage so `XianyuLive.fetch_order_detail_info(...)` still returns fetched detail when handler follow-up raises after persistence
 - [x] Add detail-refresh write-failure seam coverage so `XianyuLive.fetch_order_detail_info(...)` returns fetched detail but skips handler follow-up when persistence returns `False`
 - [x] Add basic-order-info handler-failure seam coverage so `XianyuLive._auto_delivery(...)` still returns prepared delivery content when the post-write status helper raises
+- [x] Add basic-order-info write-failure seam coverage so `XianyuLive._auto_delivery(...)` still returns prepared delivery content when the initial write returns `False`

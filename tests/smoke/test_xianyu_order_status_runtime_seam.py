@@ -544,3 +544,59 @@ async def test_auto_delivery_returns_content_when_basic_info_handler_raises(mock
         cookie_id="runtime-auto-delivery-cookie",
         context="自动发货-基本信息",
     )
+
+
+@pytest.mark.asyncio
+async def test_auto_delivery_returns_content_when_basic_info_persistence_fails(mocker):
+    order_status_handler = mock.Mock()
+    live = _make_auto_delivery_live(order_status_handler)
+
+    fake_db = mock.Mock()
+    fake_db.get_item_info.return_value = {
+        "item_title": "Demo item",
+        "item_detail": "detail body",
+        "is_multi_spec": False,
+    }
+    fake_db.get_item_multi_spec_status.return_value = False
+    fake_db.get_delivery_rules_by_keyword.return_value = [
+        {
+            "id": 302,
+            "keyword": "Demo item",
+            "card_name": "Text Card 2",
+            "card_type": "text",
+            "text_content": "delivery body 2",
+            "card_description": "",
+            "card_id": 9002,
+            "card_delay_seconds": 0,
+            "spec_name": "",
+            "spec_value": "",
+            "spec_name_2": "",
+            "spec_value_2": "",
+        }
+    ]
+    fake_db.get_cookie_by_id.return_value = {"id": "runtime-auto-delivery-cookie", "value": "cookie"}
+    fake_db.get_order_by_id.return_value = None
+    fake_db.insert_or_update_order.return_value = False
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    result = await live._auto_delivery(
+        item_id="item-auto-2",
+        item_title="Demo item",
+        order_id="order-auto-2",
+        send_user_id="buyer-auto-2",
+        send_user_name="buyer two",
+        include_meta=True,
+    )
+
+    assert result["success"] is True
+    assert result["content"] == "delivery body 2"
+    assert result["rule_id"] == 302
+    assert result["card_type"] == "text"
+    fake_db.insert_or_update_order.assert_called_once_with(
+        order_id="order-auto-2",
+        item_id="item-auto-2",
+        buyer_id="buyer-auto-2",
+        buyer_nick="buyer two",
+        cookie_id="runtime-auto-delivery-cookie",
+    )
+    order_status_handler.handle_order_basic_info_status.assert_not_called()

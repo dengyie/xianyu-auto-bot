@@ -149,3 +149,8 @@
 - Decision: Add a focused `_auto_delivery(...)` seam test proving prepared delivery content still returns when `handle_order_basic_info_status(...)` raises after the new order shell is written.
 - Rationale: The adjacent runtime seam after the detail-refresh series is the basic-order-info path inside `_auto_delivery(...)`. It shares the same production risk shape: a post-write status helper can fail even though the core business action still has enough information to continue. Locking this down prevents a helper exception from incorrectly aborting otherwise valid automatic delivery preparation.
 - Impact: The suite now explicitly proves `_auto_delivery(...)` isolates basic-order-info handler failures and keeps returning prepared delivery content after successful initial order persistence.
+
+## 2026-06-17 - Phase 36 should lock down basic-order-info write-failure isolation
+- Decision: Add a focused `_auto_delivery(...)` seam test proving prepared delivery content still returns when initial basic-order-info persistence returns `False`, while `handle_order_basic_info_status(...)` is not called.
+- Rationale: Phase 35 covered the post-write handler failure branch. The symmetric production boundary is the write-failure branch: automatic delivery preparation can continue, but status helpers must not run against an order shell that did not persist. Locking both sides keeps the runtime contract explicit.
+- Impact: The suite now explicitly proves `_auto_delivery(...)` does not advance basic order status when prewrite fails, while still returning the prepared delivery content to its caller.
