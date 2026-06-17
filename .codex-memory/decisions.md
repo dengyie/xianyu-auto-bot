@@ -34,3 +34,8 @@
 - Decision: Add direct smoke coverage for the branch where a uniquely matched terminal pending message is refused because its timestamp gap from the newly extracted order exceeds `pending_terminal_bind_max_gap_seconds`.
 - Rationale: This guard prevents stale terminal updates from being rebound onto later orders that happen to share match keys, but it was only indirectly protected before. A focused regression test is the cheapest way to preserve that safety behavior.
 - Impact: System-message and red-reminder terminal queues now both guarantee that oversized bind gaps keep the pending message queued instead of silently rebinding it.
+
+## 2026-06-17 - Phase 14 should protect terminal discard-on-resolution behavior
+- Decision: Add smoke tests for the path where a terminal pending message is not bound because another recent order with the same strong match key already consumed that terminal outcome.
+- Rationale: The discard branch is the last safety valve after bind-gap rejection, and it is easy to regress when tuning terminal matching or resolution-status lookup.
+- Impact: The system-message `refund_cancelled` path and the red-reminder `cancelled` path now both prove that already-consumed terminal updates are dropped and cleaned up correctly.

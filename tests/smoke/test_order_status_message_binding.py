@@ -1031,3 +1031,136 @@ def test_terminal_red_reminder_remains_queued_when_bind_gap_is_too_large(mocker)
     assert len(handler._pending_red_reminder_messages["cookie-gap-red"]) == 1
     assert handler._pending_red_reminder_messages["cookie-gap-red"][0]["temp_order_id"] == "temp_gap_red"
     assert "temp_gap_red" in handler.pending_updates
+
+
+def test_refund_cancelled_system_message_is_discarded_when_another_order_already_resolved(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["new-system-order"] = {
+        "order_id": "new-system-order",
+        "order_status": "processing",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-system-resolved",
+        "sid": "chat-system-resolved@goofish",
+        "buyer_id": "buyer-system-resolved",
+        "item_id": "item-system-resolved",
+    }
+    fake_db.orders["resolved-system-order"] = {
+        "order_id": "resolved-system-order",
+        "order_status": "refund_cancelled",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-system-resolved",
+        "sid": "chat-system-resolved@goofish",
+        "buyer_id": "buyer-system-resolved",
+        "item_id": "item-system-resolved",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+    handler._pending_system_messages["cookie-system-resolved"] = [
+        {
+            "message": _make_message(12_000, system=True),
+            "send_message": "refund-cancelled",
+            "cookie_id": "cookie-system-resolved",
+            "msg_time": "20:00:00",
+            "new_status": "refund_cancelled",
+            "temp_order_id": "temp_refund_cancelled_system",
+            "message_hash": 1201,
+            "sid": "chat-system-resolved@goofish",
+            "buyer_id": "buyer-system-resolved",
+            "item_id": "item-system-resolved",
+            "message_timestamp_ms": 12_000,
+            "timestamp": 80.0,
+        }
+    ]
+    handler.pending_updates["temp_refund_cancelled_system"] = [
+        {
+            "new_status": "refund_cancelled",
+            "cookie_id": "cookie-system-resolved",
+            "context": "queued refund-cancelled system message",
+            "timestamp": 80.0,
+        }
+    ]
+
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    handler.on_order_id_extracted(
+        order_id="new-system-order",
+        cookie_id="cookie-system-resolved",
+        message=_make_message(300_000),
+        match_context={
+            "message_hash": 1201,
+            "sid": "chat-system-resolved@goofish",
+            "buyer_id": "buyer-system-resolved",
+            "item_id": "item-system-resolved",
+            "message_timestamp_ms": 300_000,
+        },
+    )
+
+    assert fake_db.orders["new-system-order"]["order_status"] == "processing"
+    assert "cookie-system-resolved" not in handler._pending_system_messages
+    assert "temp_refund_cancelled_system" not in handler.pending_updates
+
+
+def test_cancelled_red_reminder_is_discarded_when_another_order_already_resolved(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["new-red-order"] = {
+        "order_id": "new-red-order",
+        "order_status": "processing",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-red-resolved",
+        "sid": "chat-red-resolved@goofish",
+        "buyer_id": "buyer-red-resolved",
+        "item_id": "item-red-resolved",
+    }
+    fake_db.orders["resolved-red-order"] = {
+        "order_id": "resolved-red-order",
+        "order_status": "cancelled",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-red-resolved",
+        "sid": "chat-red-resolved@goofish",
+        "buyer_id": "buyer-red-resolved",
+        "item_id": "item-red-resolved",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+    handler._pending_red_reminder_messages["cookie-red-resolved"] = [
+        {
+            "message": _make_message(13_000),
+            "red_reminder": "浜ゆ槗鍏抽棴",
+            "user_id": "user-red-resolved",
+            "cookie_id": "cookie-red-resolved",
+            "msg_time": "20:10:00",
+            "new_status": "cancelled",
+            "temp_order_id": "temp_cancelled_red",
+            "message_hash": 1301,
+            "sid": "chat-red-resolved@goofish",
+            "buyer_id": "buyer-red-resolved",
+            "item_id": "item-red-resolved",
+            "message_timestamp_ms": 13_000,
+            "timestamp": 81.0,
+        }
+    ]
+    handler.pending_updates["temp_cancelled_red"] = [
+        {
+            "new_status": "cancelled",
+            "cookie_id": "cookie-red-resolved",
+            "context": "queued cancelled red reminder",
+            "timestamp": 81.0,
+        }
+    ]
+
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    handler.on_order_id_extracted(
+        order_id="new-red-order",
+        cookie_id="cookie-red-resolved",
+        message=_make_message(320_000),
+        match_context={
+            "message_hash": 1301,
+            "sid": "chat-red-resolved@goofish",
+            "buyer_id": "buyer-red-resolved",
+            "item_id": "item-red-resolved",
+            "message_timestamp_ms": 320_000,
+        },
+    )
+
+    assert fake_db.orders["new-red-order"]["order_status"] == "processing"
+    assert "cookie-red-resolved" not in handler._pending_red_reminder_messages
+    assert "temp_cancelled_red" not in handler.pending_updates

@@ -115,3 +115,19 @@
   - Stage only the intentional phase-13 files, commit, and push the branch to update the draft PR.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-17 14:55
+- Task: Finish phase 14 terminal discard coverage for already-consumed terminal outcomes.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase14-design.md` before implementation.
+  - Extended `tests/smoke/test_order_status_message_binding.py` with `refund_cancelled` system-message discard coverage and cancelled red-reminder discard coverage.
+  - Re-ran targeted phase-14 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-14 tests: 18 passed.
+  - Full smoke suite: 127 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-14 diff review.
+- Next:
+  - Stage only the intentional phase-14 files, commit, and push the branch to update the draft PR.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.
