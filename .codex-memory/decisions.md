@@ -199,3 +199,8 @@
 - Decision: Add route-level smoke coverage for foreign-user access to `GET /password-login/check/{session_id}` and `POST /password-login/cancel/{session_id}`.
 - Rationale: The password-login flow already has session lifecycle code, but the route surfaces live verification and error details and can mutate shared session state on cancel. A focused ownership test is the cheapest way to prevent regressions that would expose or cancel another user's login session.
 - Impact: The suite now explicitly proves password-login session status and cancellation stay scoped to the creating user.
+
+## 2026-06-18 - Phase 46 should lock down manual-cookie-import session ownership boundaries
+- Decision: Add route-level smoke coverage for foreign-user access to `GET /manual-cookie-import/check/{session_id}`.
+- Rationale: The manual cookie import flow uses the same session-scoped status pattern as password-login, but current smoke coverage only checked request validation. A focused ownership test is the cheapest way to prevent regressions that would expose another user's import-session verification state.
+- Impact: The suite now explicitly proves manual-cookie-import session status stays scoped to the creating user.

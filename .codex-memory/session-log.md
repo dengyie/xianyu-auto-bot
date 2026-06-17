@@ -665,3 +665,22 @@
   - Reevaluate remaining high-level route/service coverage gaps outside delivery, refresh, history-sync, and password-login.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-18 11:55
+- Task: Finish phase 46 smoke coverage for manual-cookie-import session ownership boundaries.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase46-design.md` before implementation.
+  - Extended `tests/smoke/test_accounts.py` with route-level coverage for foreign-user access to the manual-cookie-import session status endpoint.
+  - Verified that another user receives a forbidden response while the session owner can still query the session successfully.
+  - Re-ran targeted phase-46 tests, full smoke suite, compileall, diff hygiene, and production review for the phase-46 diff.
+- Results:
+  - Targeted phase-46 tests: 8 passed.
+  - Full smoke suite: 163 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Production review: no new P1/P2 findings; score 97/100; status passed.
+- Next:
+  - Stage only the intentional phase-46 files, commit, and push the branch.
+  - Reevaluate remaining high-level route/service coverage gaps outside delivery, refresh, history-sync, password-login, and manual-cookie-import.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

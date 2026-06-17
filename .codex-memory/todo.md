@@ -1,13 +1,14 @@
 # TODO
 
 ## In Progress
-- [ ] Stage, commit, and push phase 45 password-login ownership coverage to the draft GitHub PR
+- [ ] Stage, commit, and push phase 46 manual-cookie-import ownership coverage to the draft GitHub PR
 
 ## Next
-- [ ] Evaluate whether any broader route or service entrypoint still needs coverage beyond the now-covered runtime detail-refresh, message-handoff, delivery, refresh, history-sync, and password-login seams
-- [ ] Evaluate whether the remaining uncovered risk is now outside the delivery/retry, refresh, history-sync, and password-login chains and belongs to a different module cluster
+- [ ] Evaluate whether any broader route or service entrypoint still needs coverage beyond the now-covered runtime detail-refresh, message-handoff, delivery, refresh, history-sync, password-login, and manual-cookie-import seams
+- [ ] Evaluate whether the remaining uncovered risk is now outside the delivery/retry, refresh, history-sync, password-login, and manual-cookie-import chains and belongs to a different module cluster
 
 ## Done
+- [x] Stage, commit, and push phase 45 password-login ownership coverage to the draft GitHub PR
 - [x] Stage, commit, and push phase 44 history-sync ownership coverage to the draft GitHub PR
 - [x] Stage, commit, and push phase 43 refresh-route soft-failure coverage to the draft GitHub PR
 - [x] Stage, commit, and push phase 42 replay-only pending-finalize coverage to the draft GitHub PR

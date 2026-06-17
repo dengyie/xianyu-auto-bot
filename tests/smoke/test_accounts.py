@@ -93,3 +93,22 @@ class TestAccounts:
         owner_check = client.get(f"/password-login/check/{session_id}", headers=user_auth)
         assert owner_check.status_code == 200
         assert owner_check.json()["status"] == "processing"
+
+    def test_manual_cookie_import_session_is_forbidden_for_other_user(self, client, auth, user_auth):
+        session_id = "manual_cookie_import_owner_only_session"
+        reply_server.manual_cookie_import_sessions[session_id] = {
+            "session_id": session_id,
+            "user_id": 2,
+            "account_id": "owner-cookie",
+            "status": "processing",
+            "timestamp": 9999999999,
+            "error": None,
+        }
+
+        foreign_check = client.get(f"/manual-cookie-import/check/{session_id}", headers=auth)
+        assert foreign_check.status_code == 200
+        assert foreign_check.json()["status"] == "forbidden"
+
+        owner_check = client.get(f"/manual-cookie-import/check/{session_id}", headers=user_auth)
+        assert owner_check.status_code == 200
+        assert owner_check.json()["status"] == "processing"
