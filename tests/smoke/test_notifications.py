@@ -53,6 +53,14 @@ def test_regular_user_cannot_update_or_delete_another_users_channel(client, auth
     assert delete.status_code == 404
 
 
+def test_regular_user_cannot_read_another_users_channel(client, auth, user_auth):
+    channel_id = _create_channel(client, auth, name="admin channel")
+
+    read = client.get(f"/notification-channels/{channel_id}", headers=user_auth)
+
+    assert read.status_code == 404
+
+
 def test_message_notification_requires_owned_cookie_and_owned_channel(client, auth, user_auth):
     _add_cookie(client, auth, "admin_notify_cookie")
     _add_cookie(client, user_auth, "user_notify_cookie")

@@ -228,3 +228,7 @@
 - Decision: Keep the current `/api/files/{file_id}/download-token` behavior unchanged and add a focused smoke regression around the existing forbidden outcome for a missing file id.
 - Rationale: During phase-52 exploration, the suspected production bug turned out to be a false alarm after reconciling the live worktree against git history. The useful remaining work was to preserve the current route contract with a direct regression test instead of changing access semantics.
 - Impact: The file-download token flow now has explicit smoke coverage for the missing-file branch without expanding the production change surface.
+## 2026-06-18 - Phase 53 should lock notification-channel read ownership
+- Decision: Add smoke coverage for `GET /notification-channels/{channel_id}` so foreign users cannot read another user's channel details.
+- Rationale: The update/delete paths for notification channels were already protected, but the read path remained the last unverified owner-scoped route in that cluster. A small read regression keeps the access model consistent without changing runtime behavior.
+- Impact: Notification channel details are now explicitly guarded on read as well as mutation, and the smoke suite covers the foreign-user denial path.
