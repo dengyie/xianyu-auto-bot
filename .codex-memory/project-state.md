@@ -1,16 +1,16 @@
 # Current State Snapshot - 2026-06-17
 
 - Security hardening phase is implemented and smoke-tested.
-- Test coverage phases 1-21 are implemented for authz, lifecycle, delayed binding, ambiguity rejection, queue cleanup, terminal recent-fallback branches, selector disambiguation, enqueue-entry stale cleanup, bind-gap rejection, terminal discard behavior, refund-related terminal resolution paths, multi-update pending consumption, batch queue draining, mixed-success batch draining, mixed-result detail-fetched queue consumption, direct status-priority rollback protection, completed-terminal discard handling, and shipped-terminal discard handling.
-- Test coverage phase 21 is implemented:
-  - `on_order_id_extracted()` now has direct smoke coverage proving a shipped terminal system message is discarded when another recent order already consumed that outcome
+- Test coverage phases 1-22 are implemented for authz, lifecycle, delayed binding, ambiguity rejection, queue cleanup, terminal recent-fallback branches, selector disambiguation, enqueue-entry stale cleanup, bind-gap rejection, terminal discard behavior, refund-related terminal resolution paths, multi-update pending consumption, batch queue draining, mixed-success batch draining, mixed-result detail-fetched queue consumption, direct status-priority rollback protection, completed-terminal discard handling, shipped-terminal discard handling, and failed direct-backfill fallback queueing.
+- Test coverage phase 22 is implemented:
+  - `handle_red_reminder_message()` now has direct smoke coverage proving a failed no-order-id direct backfill falls through into the pending queue instead of dropping the event
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_order_status_message_binding.py -q` => 21 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 134 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_order_status_message_binding.py -q` => 22 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 135 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager tests order_status_handler.py` => passed
 - Production review status:
-  - phase-21 scope reviewed with `production-code-quality-review`
-  - no new P1/P2 findings identified in the phase-21 diff
+  - phase-22 scope reviewed with `production-code-quality-review`
+  - no new P1/P2 findings identified in the phase-22 diff
   - helper script still emits a pre-existing Windows GBK `UnicodeDecodeError` from its reader thread after returning usable JSON context
 - Environment note:
   - project `venv` currently lacks `pytest`, so validation fell back to the available host Python interpreter

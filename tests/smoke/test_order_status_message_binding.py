@@ -1340,3 +1340,46 @@ def test_shipped_system_message_is_discarded_when_another_order_already_resolved
     assert fake_db.orders["new-shipped-order"]["order_status"] == "processing"
     assert "cookie-shipped-resolved" not in handler._pending_system_messages
     assert "temp_shipped_system" not in handler.pending_updates
+
+
+def test_cancelled_red_reminder_queues_when_direct_backfill_update_fails(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["resolved-fallback"] = {
+        "order_id": "resolved-fallback",
+        "order_status": "pending_ship",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-fallback-red",
+        "sid": "chat-fallback-red@goofish",
+        "buyer_id": "buyer-fallback-red",
+        "item_id": "item-fallback-red",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+
+    mocker.patch("db_manager.db_manager", fake_db)
+    mocker.patch.object(handler, "extract_order_id", return_value=None)
+    mocker.patch.object(handler, "update_order_status", return_value=False)
+    mocker.patch("time.time", return_value=210.0)
+    mocker.patch("uuid.uuid4", return_value=type("FakeUuid", (), {"hex": "abcdef1234567890"})())
+
+    handled = handler.handle_red_reminder_message(
+        message=_make_message(16_000),
+        red_reminder="交易关闭",
+        user_id="user-fallback-red",
+        cookie_id="cookie-fallback-red",
+        msg_time="20:40:00",
+        match_context={
+            "message_hash": 1601,
+            "sid": "chat-fallback-red@goofish",
+            "buyer_id": "buyer-fallback-red",
+            "item_id": "item-fallback-red",
+            "message_timestamp_ms": 16_000,
+        },
+    )
+
+    assert handled is True
+    assert fake_db.orders["resolved-fallback"]["order_status"] == "pending_ship"
+    assert "temp_210000_abcdef12" in handler.pending_updates
+    assert handler.pending_updates["temp_210000_abcdef12"][0]["new_status"] == "cancelled"
+    assert [msg["temp_order_id"] for msg in handler._pending_red_reminder_messages["cookie-fallback-red"]] == [
+        "temp_210000_abcdef12"
+    ]

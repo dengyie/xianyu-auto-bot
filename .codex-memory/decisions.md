@@ -74,3 +74,8 @@
 - Decision: Add direct smoke coverage for `on_order_id_extracted()` when a queued terminal system message with `new_status == "shipped"` should be discarded because another recent order with the same strong key is already in a shipment-compatible resolved state.
 - Rationale: The shipped terminal branch in `_get_terminal_resolution_statuses()` is symmetric with the completed branch but had not yet been directly locked down. This keeps the discard behavior consistent across terminal outcomes and prevents rebinding already-consumed shipment events to later orders.
 - Impact: Delayed terminal system-message handling now explicitly proves shipped outcomes are discarded and cleaned up once a matching recent order has already consumed them.
+
+## 2026-06-17 - Phase 22 should prove failed direct backfill falls through to pending queue
+- Decision: Add direct smoke coverage for `handle_red_reminder_message()` when no order id can be extracted, a unique old order is found, but updating that old order fails.
+- Rationale: The no-order-id fast path is only safe if a failed direct backfill does not silently drop the event. The implementation already falls through to the pending-queue path when `_try_resolve_cancelled_message_without_order_id()` returns `False`, so a focused regression test is the cleanest way to lock that fallback behavior in.
+- Impact: No-order-id red-reminder handling now explicitly proves failed direct backfill attempts still preserve the event by queueing a temporary pending update and reminder entry.

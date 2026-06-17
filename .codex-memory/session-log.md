@@ -243,3 +243,19 @@
   - Stage, commit, and push the phase-21 files, then continue evaluating the next test gap.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-17 18:25
+- Task: Finish phase 22 failed direct-backfill fallback coverage for no-order-id red-reminder handling.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase22-design.md` before implementation.
+  - Extended `tests/smoke/test_order_status_message_binding.py` with direct coverage for falling back into the pending red-reminder queue when direct old-order backfill fails.
+  - Re-ran targeted phase-22 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-22 tests: 22 passed.
+  - Full smoke suite: 135 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-22 diff review.
+- Next:
+  - Stage, commit, and push the phase-22 files, then continue evaluating the next test gap.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

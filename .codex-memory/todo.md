@@ -1,7 +1,7 @@
 # TODO
 
 ## In Progress
-- [ ] Stage, commit, and push phase 21 shipped-terminal delayed-binding discard coverage to the draft GitHub PR
+- [ ] Stage, commit, and push phase 22 failed direct-backfill fallback coverage to the draft GitHub PR
 
 ## Next
 - [ ] Evaluate whether any pending-queue behavior still needs a broader service/route integration entrypoint test beyond the current handler-focused smoke coverage
@@ -31,3 +31,4 @@
 - [x] Add direct system-message rollback guard coverage so a lower-priority update cannot roll back a shipped order
 - [x] Add completed-terminal delayed-binding discard coverage so already-consumed completion messages are cleaned up instead of rebound
 - [x] Add shipped-terminal delayed-binding discard coverage so already-consumed shipment messages are cleaned up instead of rebound
+- [x] Add failed direct-backfill fallback coverage so no-order-id red reminders still queue when direct old-order update fails
