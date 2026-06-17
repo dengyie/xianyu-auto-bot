@@ -237,3 +237,8 @@
 - Decision: Add smoke coverage for `GET /message-notifications/{cid}` so foreign users cannot read another user's account notification config.
 - Rationale: The endpoint already checks cookie ownership in production code, but the read path had not yet been pinned by a regression test. A narrow smoke case keeps the notification cluster's account-bound reads covered without broadening runtime behavior.
 - Impact: Account notification reads are now explicitly guarded by ownership, and the smoke suite covers both denial and owner success paths.
+
+## 2026-06-18 - Phase 55 should lock message-notification account-delete ownership
+- Decision: Add smoke coverage for `DELETE /message-notifications/account/{cid}` so foreign users cannot clear another user's account notification config.
+- Rationale: The delete route already threads `user_id` through both route and data-layer filters, but it remained an unverified owner-scoped mutation in the same notification cluster. A focused regression keeps the delete contract aligned with the read and create protections already covered.
+- Impact: Account-level notification deletion is now explicitly guarded by ownership, and the smoke suite covers both foreign-user denial and owner cleanup success.

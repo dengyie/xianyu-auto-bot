@@ -131,6 +131,33 @@ def test_message_notifications_list_filters_foreign_cookie_entries(client, auth,
     assert "admin_notify_cookie" not in data
 
 
+def test_message_notifications_account_delete_is_scoped_to_cookie_owner(client, auth, user_auth):
+    _add_cookie(client, auth, "admin_notify_cookie")
+    _add_cookie(client, user_auth, "user_notify_cookie")
+    admin_channel_id = _create_channel(client, auth, name="admin channel")
+    user_channel_id = _create_channel(client, user_auth, name="user channel")
+
+    client.post(
+        "/message-notifications/admin_notify_cookie",
+        headers=auth,
+        json={"channel_id": admin_channel_id, "enabled": True},
+    )
+    client.post(
+        "/message-notifications/user_notify_cookie",
+        headers=user_auth,
+        json={"channel_id": user_channel_id, "enabled": True},
+    )
+
+    foreign = client.delete("/message-notifications/account/admin_notify_cookie", headers=user_auth)
+    owner = client.delete("/message-notifications/account/admin_notify_cookie", headers=auth)
+    owner_after = client.get("/message-notifications/admin_notify_cookie", headers=auth)
+
+    assert foreign.status_code == 403
+    assert owner.status_code == 200
+    assert owner_after.status_code == 200
+    assert owner_after.json() == []
+
+
 def test_notification_template_mutation_is_admin_only(client, auth, user_auth):
     regular_update = client.put(
         "/notification-templates/message",
