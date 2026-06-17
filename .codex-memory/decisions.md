@@ -242,3 +242,8 @@
 - Decision: Add smoke coverage for `DELETE /message-notifications/account/{cid}` so foreign users cannot clear another user's account notification config.
 - Rationale: The delete route already threads `user_id` through both route and data-layer filters, but it remained an unverified owner-scoped mutation in the same notification cluster. A focused regression keeps the delete contract aligned with the read and create protections already covered.
 - Impact: Account-level notification deletion is now explicitly guarded by ownership, and the smoke suite covers both foreign-user denial and owner cleanup success.
+
+## 2026-06-18 - Phase 56 should lock single message-notification delete ownership
+- Decision: Add smoke coverage for `DELETE /message-notifications/{notification_id}` so foreign users cannot delete another user's individual notification row.
+- Rationale: The delete-by-id route already filters by the current user's owned channels at the data layer, but it was still unpinned by a regression test. A focused smoke case covers the last mutation seam in the notification cluster without broadening runtime behavior.
+- Impact: Single notification deletion is now explicitly guarded by ownership, and the smoke suite covers both foreign-user denial and owner cleanup success.

@@ -1,6 +1,6 @@
 ﻿# TODO
 ## In Progress
-- [ ] Stage and commit phase 55 message-notification account-delete ownership coverage
+- [ ] Stage and commit phase 56 single message-notification delete ownership coverage
 ## Next
 - [ ] Evaluate whether any remaining owner/scoped route still lacks a focused smoke regression
 - [ ] Evaluate whether the remaining uncovered risk now sits outside the current file/download, notification, and account ownership clusters
@@ -65,3 +65,4 @@
 - [x] Add pending-finalize replay coverage so manual delivery retry finishes persisted `sent` units without duplicating buyer-visible delivery
 - [x] Add message-notification read ownership coverage so foreign users cannot read another user's account notification config
 - [x] Add message-notification account-delete ownership coverage so foreign users cannot clear another user's account notification config
+- [x] Add single message-notification delete ownership coverage so foreign users cannot delete another user's individual notification row
