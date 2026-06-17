@@ -1434,3 +1434,48 @@ def test_cancelled_system_message_queues_when_direct_backfill_update_fails(mocke
     assert [msg["temp_order_id"] for msg in handler._pending_system_messages["cookie-fallback-system"]] == [
         "temp_220000_fedcba98"
     ]
+
+
+def test_cancelled_system_message_direct_backfill_updates_unique_order(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["resolved-direct-system"] = {
+        "order_id": "resolved-direct-system",
+        "order_status": "pending_ship",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-direct-system",
+        "sid": "chat-direct-system@goofish",
+        "buyer_id": "buyer-direct-system",
+        "item_id": "item-direct-system",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+
+    mocker.patch("db_manager.db_manager", fake_db)
+    mocker.patch.object(
+        handler,
+        "_resolve_system_message_status",
+        return_value=(
+            "cancelled",
+            {"is_system_message": True},
+            [{"source": "send_message", "status": "cancelled", "text": "cancelled"}],
+        ),
+    )
+    mocker.patch.object(handler, "extract_order_id", return_value=None)
+
+    handled = handler.handle_system_message(
+        message=_make_message(18_000, system=True),
+        send_message="交易关闭系统消息直回填",
+        cookie_id="cookie-direct-system",
+        msg_time="21:00:00",
+        match_context={
+            "message_hash": 1801,
+            "sid": "chat-direct-system@goofish",
+            "buyer_id": "buyer-direct-system",
+            "item_id": "item-direct-system",
+            "message_timestamp_ms": 18_000,
+        },
+    )
+
+    assert handled is True
+    assert fake_db.orders["resolved-direct-system"]["order_status"] == "cancelled"
+    assert handler.get_pending_updates_count() == 0
+    assert "cookie-direct-system" not in handler._pending_system_messages

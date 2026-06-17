@@ -275,3 +275,19 @@
   - Stage, commit, and push the phase-23 files, then continue evaluating the next test gap.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-17 19:15
+- Task: Finish phase 24 direct cancelled system-message backfill success coverage.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase24-design.md` before implementation.
+  - Extended `tests/smoke/test_order_status_message_binding.py` with direct coverage for successful no-order-id cancelled system-message backfill onto a unique old order.
+  - Re-ran targeted phase-24 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-24 tests: 24 passed.
+  - Full smoke suite: 137 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-24 diff review.
+- Next:
+  - Stage, commit, and push the phase-24 files, then continue evaluating the next test gap.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

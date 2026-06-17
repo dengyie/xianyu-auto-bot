@@ -84,3 +84,8 @@
 - Decision: Add direct smoke coverage for `handle_system_message()` when no order id can be extracted, the resolved status is `cancelled`, a unique old order is found, but updating that old order fails.
 - Rationale: This is the system-message twin of the red-reminder fallback path. Locking both sides down keeps no-order-id cancellation handling behaviorally symmetric and reduces the chance that one path silently drops events while the other preserves them.
 - Impact: No-order-id system-message handling now explicitly proves failed direct backfill attempts still preserve the event by queueing a temporary pending update and system-message entry.
+
+## 2026-06-17 - Phase 24 should prove direct cancelled system backfill succeeds without queueing
+- Decision: Add direct smoke coverage for `handle_system_message()` when no order id can be extracted, the resolved status is `cancelled`, and a unique old order can be updated successfully by strong match key.
+- Rationale: After locking down the failure fallback in phase 23, the matching success path also needed direct proof so the no-order-id system-message branch is covered on both sides of the decision. This confirms the handler can resolve the event immediately and avoid unnecessary pending-queue churn.
+- Impact: No-order-id system-message handling now explicitly proves a unique cancelled message can be backfilled straight onto the old order without creating temporary pending entries.
