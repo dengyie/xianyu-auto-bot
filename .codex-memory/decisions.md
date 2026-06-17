@@ -267,3 +267,8 @@
 - Decision: Add smoke coverage for `GET /cookies/{cid}/remark` and `PUT /cookies/{cid}/remark` so foreign users cannot read or overwrite another user's account remark.
 - Rationale: The remark surface is a small but distinct account-scoped endpoint pair, and it had no direct regression coverage even though the route already enforces ownership. A single focused test keeps the access model consistent without broadening behavior.
 - Impact: Cookie remarks are now explicitly guarded by ownership, and the smoke suite covers both foreign-user denial and owner success.
+
+## 2026-06-18 - Phase 62 should lock cookie pause-duration ownership
+- Decision: Add smoke coverage for `GET /cookies/{cid}/pause-duration` and `PUT /cookies/{cid}/pause-duration` so foreign users cannot read or overwrite another user's auto-reply pause duration.
+- Rationale: Pause-duration is another narrow cookie-metadata surface with its own read/write route pair and owner gate, but it had no direct regression protection. A focused owner-boundary test keeps the cookie-metadata cluster consistent without expanding runtime behavior.
+- Impact: Cookie pause-duration reads and writes are now explicitly guarded by ownership, and the smoke suite covers both foreign-user denial and owner success.

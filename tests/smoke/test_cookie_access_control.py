@@ -103,3 +103,31 @@ def test_cookie_remark_is_scoped_to_owner(client, auth, user_auth):
     assert owner_write.json()["remark"] == "admin remark"
     assert owner_read.status_code == 200
     assert owner_read.json()["remark"] == "admin remark"
+
+
+def test_cookie_pause_duration_is_scoped_to_owner(client, auth, user_auth):
+    client.post(
+        "/cookies",
+        headers=auth,
+        json={"id": "admin_pause_cookie", "value": "unb=admin"},
+    )
+
+    foreign_read = client.get("/cookies/admin_pause_cookie/pause-duration", headers=user_auth)
+    foreign_write = client.put(
+        "/cookies/admin_pause_cookie/pause-duration",
+        headers=user_auth,
+        json={"pause_duration": 15},
+    )
+    owner_write = client.put(
+        "/cookies/admin_pause_cookie/pause-duration",
+        headers=auth,
+        json={"pause_duration": 15},
+    )
+    owner_read = client.get("/cookies/admin_pause_cookie/pause-duration", headers=auth)
+
+    assert foreign_read.status_code == 403
+    assert foreign_write.status_code == 403
+    assert owner_write.status_code == 200
+    assert owner_write.json()["pause_duration"] == 15
+    assert owner_read.status_code == 200
+    assert owner_read.json()["pause_duration"] == 15
