@@ -356,3 +356,20 @@
   - Stage, commit, and push the phase-28 files, then continue evaluating whether broader route/runtime seam coverage is still needed.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-17 22:35
+- Task: Finish phase 29 runtime seam coverage for `XianyuAutoAsync` order-status context propagation.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase29-design.md` before implementation.
+  - Added `tests/smoke/test_xianyu_order_status_runtime_seam.py`.
+  - Covered the live `XianyuLive.handle_message(...)` path with a base64 sync payload and verified it forwards parsed `sid`, `buyer_id`, and `item_id` into `order_status_handler.on_order_id_extracted(...)`.
+  - Re-ran targeted phase-29 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-29 tests: 1 passed.
+  - Full smoke suite: 142 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-29 diff review.
+- Next:
+  - Stage only the intentional phase-29 files, commit, and push the branch to update the draft PR.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

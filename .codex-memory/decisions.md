@@ -109,3 +109,8 @@
 - Decision: Add direct smoke coverage for `handle_red_reminder_message()` when no order id can be extracted but the strong key is incomplete.
 - Rationale: The red-reminder entrypoint shares the same strong-key gate as system messages, so asymmetrical coverage would still leave one no-order-id cancellation path open to accidental direct backfill from partial match data.
 - Impact: No-order-id red-reminder handling now explicitly proves incomplete match context preserves the event by queueing it for later binding instead of attempting direct backfill.
+
+## 2026-06-17 - Phase 29 should target the live runtime seam before more handler branches
+- Decision: Add smoke coverage for `XianyuLive.handle_message(...)` forwarding parsed `sid`, `buyer_id`, and `item_id` into `order_status_handler.on_order_id_extracted(...)`.
+- Rationale: Handler-level delayed-binding tests were already strong, but they could not detect a regression where the runtime entrypoint stopped passing `match_context` through. A focused seam test closes that gap with much less noise than a broader end-to-end automation harness.
+- Impact: The test suite now proves the production live-message path preserves delayed-binding context at the handoff between `XianyuAutoAsync` and `OrderStatusHandler`.

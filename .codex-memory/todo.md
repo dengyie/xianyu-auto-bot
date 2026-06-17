@@ -1,11 +1,11 @@
 # TODO
 
 ## In Progress
-- [ ] Stage, commit, and push phase 28 missing-strong-key red-reminder fallthrough coverage to the draft GitHub PR
+- [ ] Stage, commit, and push phase 29 runtime order-status seam coverage to the draft GitHub PR
 
 ## Next
-- [ ] Evaluate whether any pending-queue behavior still needs a broader service/route integration entrypoint test beyond the current handler-focused smoke coverage
-- [ ] Evaluate whether delayed-binding queue entrypoints still need a higher-level route or runtime seam test beyond handler-focused smoke coverage
+- [ ] Evaluate whether any pending-queue behavior still needs a broader service or route integration entrypoint test beyond the current handler and runtime seam smoke coverage
+- [ ] Evaluate whether direct system-message and red-reminder runtime entrypoints still need explicit higher-level seam coverage beyond the current order-id extraction path
 
 ## Done
 - [x] Add authz/cookie isolation/file token/system settings smoke coverage
@@ -38,3 +38,4 @@
 - [x] Add ambiguous direct red-reminder backfill fallback coverage so no-order-id red reminders queue instead of mutating one of multiple matching old orders
 - [x] Add missing-strong-key system-message fallthrough coverage so incomplete match context queues instead of attempting direct backfill
 - [x] Add missing-strong-key red-reminder fallthrough coverage so incomplete match context queues instead of attempting direct backfill
+- [x] Add runtime seam coverage so `XianyuLive.handle_message(...)` forwards parsed order match context into `OrderStatusHandler`
