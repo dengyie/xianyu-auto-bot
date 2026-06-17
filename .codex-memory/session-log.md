@@ -493,3 +493,20 @@
   - Stage only the intentional phase-36 files, commit, and push the branch to update the draft PR.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-18 02:00
+- Task: Finish phase 37 smoke coverage for existing-order basic-info bypass.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase37-design.md` before implementation.
+  - Extended `tests/smoke/test_xianyu_order_status_runtime_seam.py`.
+  - Added direct coverage for `XianyuLive._auto_delivery(...)` proving an existing order skips basic-order-info prewrite and `handle_order_basic_info_status(...)`, while prepared delivery content still returns.
+  - Re-ran targeted phase-37 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-37 tests: 10 passed.
+  - Full smoke suite: 151 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-37 diff review.
+- Next:
+  - Stage only the intentional phase-37 files, commit, and push the branch to update the draft PR.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

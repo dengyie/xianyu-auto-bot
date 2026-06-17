@@ -600,3 +600,57 @@ async def test_auto_delivery_returns_content_when_basic_info_persistence_fails(m
         cookie_id="runtime-auto-delivery-cookie",
     )
     order_status_handler.handle_order_basic_info_status.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_auto_delivery_skips_basic_info_prewrite_when_order_exists(mocker):
+    order_status_handler = mock.Mock()
+    live = _make_auto_delivery_live(order_status_handler)
+
+    fake_db = mock.Mock()
+    fake_db.get_item_info.return_value = {
+        "item_title": "Demo item",
+        "item_detail": "detail body",
+        "is_multi_spec": False,
+    }
+    fake_db.get_item_multi_spec_status.return_value = False
+    fake_db.get_delivery_rules_by_keyword.return_value = [
+        {
+            "id": 303,
+            "keyword": "Demo item",
+            "card_name": "Text Card Existing",
+            "card_type": "text",
+            "text_content": "delivery body existing",
+            "card_description": "",
+            "card_id": 9003,
+            "card_delay_seconds": 0,
+            "spec_name": "",
+            "spec_value": "",
+            "spec_name_2": "",
+            "spec_value_2": "",
+        }
+    ]
+    fake_db.get_cookie_by_id.return_value = {"id": "runtime-auto-delivery-cookie", "value": "cookie"}
+    fake_db.get_order_by_id.return_value = {
+        "order_id": "order-auto-existing",
+        "item_id": "item-auto-existing",
+        "buyer_id": "buyer-auto-existing",
+        "order_status": "pending_ship",
+    }
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    result = await live._auto_delivery(
+        item_id="item-auto-existing",
+        item_title="Demo item",
+        order_id="order-auto-existing",
+        send_user_id="buyer-auto-existing",
+        send_user_name="buyer existing",
+        include_meta=True,
+    )
+
+    assert result["success"] is True
+    assert result["content"] == "delivery body existing"
+    assert result["rule_id"] == 303
+    assert result["card_type"] == "text"
+    fake_db.insert_or_update_order.assert_not_called()
+    order_status_handler.handle_order_basic_info_status.assert_not_called()

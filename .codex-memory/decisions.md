@@ -154,3 +154,8 @@
 - Decision: Add a focused `_auto_delivery(...)` seam test proving prepared delivery content still returns when initial basic-order-info persistence returns `False`, while `handle_order_basic_info_status(...)` is not called.
 - Rationale: Phase 35 covered the post-write handler failure branch. The symmetric production boundary is the write-failure branch: automatic delivery preparation can continue, but status helpers must not run against an order shell that did not persist. Locking both sides keeps the runtime contract explicit.
 - Impact: The suite now explicitly proves `_auto_delivery(...)` does not advance basic order status when prewrite fails, while still returning the prepared delivery content to its caller.
+
+## 2026-06-17 - Phase 37 should lock down existing-order basic-info bypass
+- Decision: Add a focused `_auto_delivery(...)` seam test proving existing orders skip basic-order-info prewrite and `handle_order_basic_info_status(...)`, while still returning prepared delivery content.
+- Rationale: After covering new-order write success, handler failure, and write failure, the remaining adjacent branch is the already-persisted order bypass. This branch prevents duplicate writes and duplicate status-helper side effects, so it should be directly guarded before moving to data-card-specific behavior.
+- Impact: The suite now explicitly proves `_auto_delivery(...)` leaves existing order shells untouched during delivery-content preparation.
