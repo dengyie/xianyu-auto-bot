@@ -722,3 +722,21 @@
   - Reevaluate remaining high-level route/service coverage gaps outside delivery, refresh, history-sync, password-login, manual-cookie-import, qr-login, and face-verification.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-18 16:10
+- Task: Finish phase 50 unmatched cancellation fallback coverage for delayed terminal message binding.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase50-design.md` before implementation.
+  - Extended `tests/smoke/test_order_status_message_binding.py` with zero-candidate fallback coverage for both cancelled red reminders and cancelled system messages.
+  - Re-ran targeted message-binding smoke tests, full smoke suite, compileall, and diff hygiene checks.
+  - Collected production review context for the updated scope.
+- Results:
+  - Targeted message-binding smoke tests: 30 passed.
+  - Full smoke suite: 168 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Production review: no new P1/P2 findings in the phase-50 test diff; status passed.
+- Next:
+  - Reevaluate whether any remaining high-risk coverage gaps now sit outside the delayed order-lifecycle binding flow.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

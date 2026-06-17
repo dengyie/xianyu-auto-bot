@@ -148,6 +148,37 @@ class TestAccounts:
         assert owner_check.status_code == 200
         assert owner_check.json()["status"] == "waiting"
 
+    def test_qr_login_refresh_cookies_is_owner_only(self, client, other_user_auth, user_auth, monkeypatch):
+        class FakeXianyuLive:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def refresh_cookies_from_qr_login(self, qr_cookies_str, cookie_id=None, user_id=None):
+                return True
+
+        import XianyuAutoAsync
+
+        monkeypatch.setattr(XianyuAutoAsync, "XianyuLive", FakeXianyuLive)
+
+        cookie_id = "qr_refresh_owner_only_cookie"
+        reply_server.db_manager.save_cookie(cookie_id, "unb=owner; token=value", user_id=2)
+
+        foreign_resp = client.post(
+            "/qr-login/refresh-cookies",
+            json={"cookie_id": cookie_id, "qr_cookies": "unb=foreign; token=value"},
+            headers=other_user_auth,
+        )
+        assert foreign_resp.status_code == 200
+        assert foreign_resp.json()["success"] is False
+
+        owner_resp = client.post(
+            "/qr-login/refresh-cookies",
+            json={"cookie_id": cookie_id, "qr_cookies": "unb=owner-new; token=value"},
+            headers=user_auth,
+        )
+        assert owner_resp.status_code == 200
+        assert owner_resp.json()["success"] is True
+
     def test_face_verification_screenshot_is_owner_only(self, client, other_user_auth, user_auth):
         account_id = "face_verify_owner_only_account"
         reply_server.db_manager.save_cookie(account_id, "unb=owner; token=value", user_id=2)

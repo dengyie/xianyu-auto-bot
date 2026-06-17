@@ -334,6 +334,38 @@ def test_cancelled_red_reminder_queues_when_direct_backfill_has_no_strong_key(mo
     ]
 
 
+def test_cancelled_red_reminder_queues_when_direct_backfill_has_no_candidates(mocker):
+    fake_db = _MessageBindingDB()
+    handler = order_status_handler.OrderStatusHandler()
+
+    mocker.patch("db_manager.db_manager", fake_db)
+    mocker.patch.object(handler, "extract_order_id", return_value=None)
+    mocker.patch("time.time", return_value=270.0)
+    mocker.patch("uuid.uuid4", return_value=type("FakeUuid", (), {"hex": "0102030405060708"})())
+
+    handled = handler.handle_red_reminder_message(
+        message=_make_message(23_000),
+        red_reminder="交易关闭",
+        user_id="user-no-candidate-red",
+        cookie_id="cookie-no-candidate-red",
+        msg_time="21:50:00",
+        match_context={
+            "message_hash": 2301,
+            "sid": "chat-no-candidate-red@goofish",
+            "buyer_id": "buyer-no-candidate-red",
+            "item_id": "item-no-candidate-red",
+            "message_timestamp_ms": 23_000,
+        },
+    )
+
+    assert handled is True
+    assert "temp_270000_01020304" in handler.pending_updates
+    assert handler.pending_updates["temp_270000_01020304"][0]["new_status"] == "cancelled"
+    assert [msg["temp_order_id"] for msg in handler._pending_red_reminder_messages["cookie-no-candidate-red"]] == [
+        "temp_270000_01020304"
+    ]
+
+
 def test_direct_system_message_ignores_lower_priority_status_rollback(mocker):
     fake_db = _MessageBindingDB()
     fake_db.orders["stable-order"] = {
@@ -1623,6 +1655,46 @@ def test_cancelled_system_message_queues_when_direct_backfill_has_no_strong_key(
     assert [
         msg["temp_order_id"] for msg in handler._pending_system_messages["cookie-no-strong-key-system"]
     ] == ["temp_250000_55667788"]
+
+
+def test_cancelled_system_message_queues_when_direct_backfill_has_no_candidates(mocker):
+    fake_db = _MessageBindingDB()
+    handler = order_status_handler.OrderStatusHandler()
+
+    mocker.patch("db_manager.db_manager", fake_db)
+    mocker.patch.object(
+        handler,
+        "_resolve_system_message_status",
+        return_value=(
+            "cancelled",
+            {"is_system_message": True},
+            [{"source": "send_message", "status": "cancelled", "text": "cancelled"}],
+        ),
+    )
+    mocker.patch.object(handler, "extract_order_id", return_value=None)
+    mocker.patch("time.time", return_value=280.0)
+    mocker.patch("uuid.uuid4", return_value=type("FakeUuid", (), {"hex": "1020304050607080"})())
+
+    handled = handler.handle_system_message(
+        message=_make_message(24_000, system=True),
+        send_message="交易关闭系统消息无候选",
+        cookie_id="cookie-no-candidate-system",
+        msg_time="22:00:00",
+        match_context={
+            "message_hash": 2401,
+            "sid": "chat-no-candidate-system@goofish",
+            "buyer_id": "buyer-no-candidate-system",
+            "item_id": "item-no-candidate-system",
+            "message_timestamp_ms": 24_000,
+        },
+    )
+
+    assert handled is True
+    assert "temp_280000_10203040" in handler.pending_updates
+    assert handler.pending_updates["temp_280000_10203040"][0]["new_status"] == "cancelled"
+    assert [msg["temp_order_id"] for msg in handler._pending_system_messages["cookie-no-candidate-system"]] == [
+        "temp_280000_10203040"
+    ]
 
 
 def test_cancelled_system_message_queues_when_direct_backfill_is_ambiguous(mocker):

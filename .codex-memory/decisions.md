@@ -214,3 +214,8 @@
 - Decision: Add route-level smoke coverage for both `GET /face-verification/screenshot/{account_id}` and `DELETE /face-verification/screenshot/{account_id}`, using a second non-admin user fixture to model foreign access.
 - Rationale: The screenshot routes expose or destroy sensitive verification artifacts keyed by account id. Admin access is intentionally broader, so the foreign-user regression test needs a true non-owner principal instead of the existing admin fixture.
 - Impact: The suite now explicitly proves face-verification screenshots remain scoped to the owning user for both read and delete flows.
+
+## 2026-06-18 - Phase 50 should lock down zero-candidate unmatched cancellation fallback
+- Decision: Add smoke coverage for cancelled red reminders and cancelled system messages when strong match keys exist but no historical order candidates can be found.
+- Rationale: The existing message-binding suite already covered ambiguous, missing-strong-key, and failed-direct-update fallback behavior, but the zero-candidate unmatched-cancellation branch was still only implied. This is the cleanest remaining fallback path in the delayed terminal-resolution flow.
+- Impact: The suite now explicitly proves unmatched cancellation messages stay in the strict pending queues instead of mutating unrelated orders when no direct backfill target exists.

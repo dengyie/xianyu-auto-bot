@@ -6416,6 +6416,10 @@ async def refresh_cookies_from_qr_login(
         if not cookie_id:
             return {'success': False, 'message': '缺少cookie_id'}
 
+        user_cookies = db_manager.get_all_cookies(current_user['user_id'])
+        if cookie_id not in user_cookies:
+            return {'success': False, 'message': 'forbidden'}
+
         log_with_user('info', f"开始使用扫码cookie刷新真实cookie: {cookie_id}", current_user)
 
         # 记录扫码刷新Cookie到风控日志
