@@ -195,3 +195,19 @@
   - Stage, commit, and push the phase-18 files, then continue evaluating the next test gap.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-17 17:10
+- Task: Finish phase 19 direct system-message rollback guard coverage for the status-priority filter.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase19-design.md` before implementation.
+  - Extended `tests/smoke/test_order_status_message_binding.py` with direct coverage for `handle_system_message()` preserving a higher-priority shipped order when the incoming update would roll it back.
+  - Re-ran targeted phase-19 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-19 tests: 19 passed.
+  - Full smoke suite: 132 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-19 diff review.
+- Next:
+  - Stage, commit, and push the phase-19 files, then continue evaluating the next test gap.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

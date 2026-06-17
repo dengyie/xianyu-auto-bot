@@ -59,3 +59,8 @@
 - Decision: Add direct smoke coverage for `on_order_details_fetched()` when one queued update fails validation but a later queued update for the same order is still valid.
 - Rationale: The detail-fetched entrypoint uses its own out-of-lock consumer path instead of `process_pending_updates()`, so the mixed-result behavior needed independent proof. Otherwise a refactor could accidentally stop after the first failed update and strand later valid work.
 - Impact: The detail-fetched queue consumer now explicitly proves it keeps draining the fetched order's updates and applies later valid transitions even when an earlier queued update fails.
+
+## 2026-06-17 - Phase 19 should prove direct system updates cannot roll back a shipped order
+- Decision: Add direct smoke coverage for `handle_system_message()` when a lower-priority system update arrives for an order already in a later state.
+- Rationale: The priority guard sits outside the pending-queue paths and protects already-advanced orders from unrelated regression or replay noise. It needs a focused regression test so a refactor does not accidentally remove the guard or start surfacing rollback side effects.
+- Impact: Direct system-message handling now explicitly proves a lower-priority update is treated as handled without mutating the stored higher-priority order state.

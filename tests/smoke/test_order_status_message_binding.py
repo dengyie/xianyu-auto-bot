@@ -240,6 +240,50 @@ def test_cancelled_red_reminder_without_order_id_directly_resolves_single_matchi
     assert "cookie-3" not in handler._pending_red_reminder_messages
 
 
+def test_direct_system_message_ignores_lower_priority_status_rollback(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["stable-order"] = {
+        "order_id": "stable-order",
+        "order_status": "shipped",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-3a",
+        "sid": "chat-3a@goofish",
+        "buyer_id": "buyer-3a",
+        "item_id": "item-3a",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+
+    mocker.patch("db_manager.db_manager", fake_db)
+    mocker.patch.object(
+        handler,
+        "_resolve_system_message_status",
+        return_value=(
+            "pending_ship",
+            {"is_system_message": True},
+            [{"source": "send_message", "status": "pending_ship", "text": "pending_ship"}],
+        ),
+    )
+    mocker.patch.object(handler, "extract_order_id", return_value="stable-order")
+
+    handled = handler.handle_system_message(
+        message=_make_message(3_500, system=True),
+        send_message="待发货回退信号",
+        cookie_id="cookie-3a",
+        msg_time="12:30:00",
+        match_context={
+            "message_hash": 331,
+            "sid": "chat-3a@goofish",
+            "buyer_id": "buyer-3a",
+            "item_id": "item-3a",
+            "message_timestamp_ms": 3_500,
+        },
+    )
+
+    assert handled is True
+    assert fake_db.orders["stable-order"]["order_status"] == "shipped"
+    assert handler.get_pending_updates_count() == 0
+
+
 def test_ambiguous_message_hash_keeps_pending_system_queue_unchanged(mocker):
     fake_db = _MessageBindingDB()
     fake_db.orders["candidate-order"] = {
