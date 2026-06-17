@@ -459,3 +459,20 @@
   - Stage only the intentional phase-34 files, commit, and push the branch to update the draft PR.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-18 01:10
+- Task: Finish phase 35 smoke coverage for basic-order-info handler failure isolation.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase35-design.md` before implementation.
+  - Extended `tests/smoke/test_xianyu_order_status_runtime_seam.py`.
+  - Added direct coverage for `XianyuLive._auto_delivery(...)` proving prepared delivery content still returns when `handle_order_basic_info_status(...)` raises after the new order shell is written.
+  - Re-ran targeted phase-35 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-35 tests: 8 passed.
+  - Full smoke suite: 149 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-35 diff review.
+- Next:
+  - Stage only the intentional phase-35 files, commit, and push the branch to update the draft PR.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

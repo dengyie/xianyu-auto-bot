@@ -106,6 +106,18 @@ def _make_detail_refresh_live(order_status_handler):
     return live
 
 
+def _make_auto_delivery_live(order_status_handler):
+    live = XianyuLive.__new__(XianyuLive)
+    live.cookie_id = "runtime-auto-delivery-cookie"
+    live.user_id = 2
+    live.myid = "seller-self"
+    live.order_status_handler = order_status_handler
+    live._safe_str = lambda exc: str(exc)
+    live.fetch_order_detail_info = mock.AsyncMock(return_value=None)
+    live._build_delivery_steps = lambda content, _desc: [{"type": "text", "content": content}]
+    return live
+
+
 @pytest.mark.asyncio
 async def test_handle_message_passes_order_match_context_into_order_status_handler():
     live = XianyuLive.__new__(XianyuLive)
@@ -471,3 +483,64 @@ async def test_fetch_order_detail_info_skips_handler_followups_when_persistence_
     fake_db.insert_or_update_order.assert_called_once()
     order_status_handler.handle_order_detail_fetched_status.assert_not_called()
     order_status_handler.on_order_details_fetched.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_auto_delivery_returns_content_when_basic_info_handler_raises(mocker):
+    order_status_handler = mock.Mock()
+    order_status_handler.handle_order_basic_info_status.side_effect = RuntimeError("basic info boom")
+    live = _make_auto_delivery_live(order_status_handler)
+
+    fake_db = mock.Mock()
+    fake_db.get_item_info.return_value = {
+        "item_title": "Demo item",
+        "item_detail": "detail body",
+        "is_multi_spec": False,
+    }
+    fake_db.get_item_multi_spec_status.return_value = False
+    fake_db.get_delivery_rules_by_keyword.return_value = [
+        {
+            "id": 301,
+            "keyword": "Demo item",
+            "card_name": "Text Card",
+            "card_type": "text",
+            "text_content": "delivery body",
+            "card_description": "",
+            "card_id": 9001,
+            "card_delay_seconds": 0,
+            "spec_name": "",
+            "spec_value": "",
+            "spec_name_2": "",
+            "spec_value_2": "",
+        }
+    ]
+    fake_db.get_cookie_by_id.return_value = {"id": "runtime-auto-delivery-cookie", "value": "cookie"}
+    fake_db.get_order_by_id.return_value = None
+    fake_db.insert_or_update_order.return_value = True
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    result = await live._auto_delivery(
+        item_id="item-auto-1",
+        item_title="Demo item",
+        order_id="order-auto-1",
+        send_user_id="buyer-auto-1",
+        send_user_name="buyer name",
+        include_meta=True,
+    )
+
+    assert result["success"] is True
+    assert result["content"] == "delivery body"
+    assert result["rule_id"] == 301
+    assert result["card_type"] == "text"
+    fake_db.insert_or_update_order.assert_called_once_with(
+        order_id="order-auto-1",
+        item_id="item-auto-1",
+        buyer_id="buyer-auto-1",
+        buyer_nick="buyer name",
+        cookie_id="runtime-auto-delivery-cookie",
+    )
+    order_status_handler.handle_order_basic_info_status.assert_called_once_with(
+        order_id="order-auto-1",
+        cookie_id="runtime-auto-delivery-cookie",
+        context="自动发货-基本信息",
+    )

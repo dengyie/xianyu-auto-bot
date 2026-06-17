@@ -144,3 +144,8 @@
 - Decision: Add a failure-path smoke test proving `XianyuLive.fetch_order_detail_info(...)` still returns the fetched detail payload when `insert_or_update_order(...)` returns `False`, while skipping handler follow-up hooks.
 - Rationale: After proving both the success path and post-persistence handler-failure isolation, the adjacent consistency boundary is the persistence failure branch itself. If write-through fails, downstream status handlers must not run against undurable state. A focused seam test pins that contract without broadening scope into unrelated delivery or route behavior.
 - Impact: The suite now explicitly proves detail-refresh callers still receive the fetched payload, but no handler-side state advancement occurs when the persistence layer declines the write.
+
+## 2026-06-17 - Phase 35 should lock down basic-order-info handler failure isolation
+- Decision: Add a focused `_auto_delivery(...)` seam test proving prepared delivery content still returns when `handle_order_basic_info_status(...)` raises after the new order shell is written.
+- Rationale: The adjacent runtime seam after the detail-refresh series is the basic-order-info path inside `_auto_delivery(...)`. It shares the same production risk shape: a post-write status helper can fail even though the core business action still has enough information to continue. Locking this down prevents a helper exception from incorrectly aborting otherwise valid automatic delivery preparation.
+- Impact: The suite now explicitly proves `_auto_delivery(...)` isolates basic-order-info handler failures and keeps returning prepared delivery content after successful initial order persistence.
