@@ -550,3 +550,22 @@
   - Continue evaluating the send-success but finalize-after-send failure seam for reservation-backed delivery units.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-18 00:10
+- Task: Finish phase 40 smoke coverage for finalize-after-send failure on reservation-backed manual delivery units.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase40-design.md` before implementation.
+  - Extended `tests/smoke/test_order_delivery_transitions.py` with a route-level smoke case for successful send plus failed `finalize_delivery_after_send(...)`.
+  - Verified the unit remains in `partial_pending_finalize`, logs the finalize failure, and does not release an already-marked reservation.
+  - Re-ran targeted phase-40 tests, full smoke suite, compileall, diff hygiene, and production review for the phase-40 diff.
+- Results:
+  - Targeted phase-40 tests: 9 passed.
+  - Full smoke suite: 156 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Production review: no new P1/P2 findings; score 94/100; status passed.
+- Next:
+  - Stage only the intentional phase-40 files, commit, and push the branch.
+  - Continue evaluating the pending-finalize replay path for manual-delivery retry coverage.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

@@ -284,6 +284,59 @@ def test_manual_deliver_releases_data_reservation_when_mark_sent_fails(client, u
     assert progress["finalized_count"] == 0
 
 
+def test_manual_deliver_keeps_data_reservation_unit_pending_finalize_when_finalize_fails(client, user_auth, mocker):
+    _add_cookie(client, user_auth, "data_delivery_finalize_fail_cookie")
+    _insert_order(
+        reply_server.db_manager,
+        order_id="deliver-data-finalize-fail",
+        cookie_id="data_delivery_finalize_fail_cookie",
+        item_id="item-data-88",
+        buyer_id="buyer-data-88",
+        quantity=1,
+    )
+    mocker.patch.object(reply_server.db_manager, "get_item_info", return_value={"item_title": "Data Finalize Fail item"})
+    runtime = _FakeRuntime(
+        auto_delivery_result={
+            "success": True,
+            "content": "DATA-CARD-LINE-88",
+            "delivery_steps": ["DATA-CARD-LINE-88"],
+            "rule_id": 204,
+            "rule_keyword": "data finalize keyword",
+            "card_type": "data",
+            "card_id": 9204,
+            "match_mode": "keyword",
+            "order_spec_mode": None,
+            "rule_spec_mode": None,
+            "item_config_mode": None,
+            "data_card_pending_consume": True,
+            "data_line": "DATA-CARD-LINE-88",
+            "data_reservation_id": 8204,
+            "data_reservation_status": "reserved",
+        },
+        finalize_result={"success": False, "error": "finalize hook failed"},
+    )
+    mocker.patch.object(reply_server.cookie_manager, "manager", _FakeCookieManager(runtime=runtime))
+    mocker.patch.object(reply_server, "publish_order_update_event")
+
+    resp = client.post("/api/orders/deliver-data-finalize-fail/deliver", headers=user_auth)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert body["delivered"] is False
+    assert len(runtime.mark_sent_calls) == 1
+    assert runtime.mark_sent_calls[0]["data_reservation_id"] == 8204
+    assert runtime.release_calls == []
+    logs = reply_server.db_manager.get_recent_delivery_logs(user_id=2, limit=5)
+    assert logs[0]["order_id"] == "deliver-data-finalize-fail"
+    assert logs[0]["status"] == "failed"
+    assert "finalize hook failed" in (logs[0]["reason"] or "")
+    progress = reply_server.db_manager.get_delivery_progress_summary("deliver-data-finalize-fail", expected_quantity=1)
+    assert progress["aggregate_status"] == "partial_pending_finalize"
+    assert progress["pending_finalize_count"] == 1
+    assert progress["finalized_count"] == 0
+
+
 def test_refresh_rejects_foreign_order(client, auth, user_auth):
     _add_cookie(client, auth, "admin_refresh_cookie")
     _insert_order(reply_server.db_manager, order_id="foreign-refresh", cookie_id="admin_refresh_cookie")

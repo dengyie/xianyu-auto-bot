@@ -1,13 +1,14 @@
 # TODO
 
 ## In Progress
-- [ ] Stage, commit, and push phase 39 manual-delivery reservation closure coverage to the draft GitHub PR
+- [ ] Stage, commit, and push phase 40 finalize-after-send failure coverage to the draft GitHub PR
 
 ## Next
-- [ ] Evaluate the send-success but finalize-after-send failure path for reservation-backed delivery units
+- [ ] Evaluate the pending-finalize replay path (`_get_pending_delivery_finalization_meta(...)` plus manual delivery retry) for direct route coverage
 - [ ] Evaluate whether any broader route or service entrypoint still needs coverage beyond the now-covered runtime detail-refresh and message-handoff seams
 
 ## Done
+- [x] Stage, commit, and push phase 39 manual-delivery reservation closure coverage to the draft GitHub PR
 - [x] Stage, commit, and push phase 38 data-card reservation seam coverage to the draft GitHub PR
 - [x] Stage, commit, and push phase 37 existing-order basic-info bypass seam coverage to the draft GitHub PR
 - [x] Add authz/cookie isolation/file token/system settings smoke coverage
@@ -51,3 +52,4 @@
 - [x] Add existing-order basic-info bypass seam coverage so `XianyuLive._auto_delivery(...)` skips duplicate prewrite and handler side effects for persisted orders
 - [x] Add data-card reservation success/failure seam coverage so `XianyuLive._auto_delivery(...)` returns reserved content and metadata only when a reservation is available
 - [x] Add manual-delivery reservation closure coverage so data-card sends mark reservations sent on success and release them when post-send marking fails
+- [x] Add finalize-after-send failure coverage so reservation-backed manual delivery units stay in `partial_pending_finalize` after send-side finalization fails

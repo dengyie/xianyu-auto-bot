@@ -169,3 +169,8 @@
 - Decision: Cover reservation mark-sent and release behavior through the manual delivery route smoke tests instead of adding a narrower helper-only unit test.
 - Rationale: The production contract is not just the helper return value; it is the route-level behavior that threads `_auto_delivery(...)` metadata through message sending, reservation closure, delivery logs, and finalization progress. A route smoke test catches metadata wiring regressions that a helper-only test would miss.
 - Impact: The suite now explicitly proves reservation-backed manual delivery both closes the reservation on success and releases it when post-send mark-sent handling fails.
+
+## 2026-06-18 - Phase 40 should lock down pending-finalize state after send-side finalization failure
+- Decision: Add route-level smoke coverage for the branch where manual delivery sends successfully, reservation mark-sent succeeds, but `finalize_delivery_after_send(...)` returns a failure payload.
+- Rationale: This branch carries a subtle but important contract: once the buyer has already received the content, the system must preserve a recoverable pending-finalize state instead of reverting to pending ship or falsely claiming delivery is complete. The route owns that state transition, so the test should live there.
+- Impact: The suite now explicitly proves finalize-after-send failures keep reservation-backed units recoverable in `partial_pending_finalize` with a visible failure log.
