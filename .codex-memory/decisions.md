@@ -272,3 +272,8 @@
 - Decision: Add smoke coverage for `GET /cookies/{cid}/pause-duration` and `PUT /cookies/{cid}/pause-duration` so foreign users cannot read or overwrite another user's auto-reply pause duration.
 - Rationale: Pause-duration is another narrow cookie-metadata surface with its own read/write route pair and owner gate, but it had no direct regression protection. A focused owner-boundary test keeps the cookie-metadata cluster consistent without expanding runtime behavior.
 - Impact: Cookie pause-duration reads and writes are now explicitly guarded by ownership, and the smoke suite covers both foreign-user denial and owner success.
+
+## 2026-06-18 - Phase 63 should lock cookie auto-confirm ownership
+- Decision: Add smoke coverage for `GET /cookies/{cid}/auto-confirm` and `PUT /cookies/{cid}/auto-confirm` so foreign users cannot read or overwrite another user's auto-confirm setting.
+- Rationale: Auto-confirm is another cookie-scoped settings pair with an ownership check that had no direct regression coverage. A single focused test keeps the cookie-settings cluster coherent without changing runtime behavior.
+- Impact: Cookie auto-confirm reads and writes are now explicitly guarded by ownership, and the smoke suite covers both foreign-user denial and owner success.

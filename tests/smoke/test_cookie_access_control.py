@@ -131,3 +131,31 @@ def test_cookie_pause_duration_is_scoped_to_owner(client, auth, user_auth):
     assert owner_write.json()["pause_duration"] == 15
     assert owner_read.status_code == 200
     assert owner_read.json()["pause_duration"] == 15
+
+
+def test_cookie_auto_confirm_is_scoped_to_owner(client, auth, user_auth):
+    client.post(
+        "/cookies",
+        headers=auth,
+        json={"id": "admin_auto_confirm_cookie", "value": "unb=admin"},
+    )
+
+    foreign_read = client.get("/cookies/admin_auto_confirm_cookie/auto-confirm", headers=user_auth)
+    foreign_write = client.put(
+        "/cookies/admin_auto_confirm_cookie/auto-confirm",
+        headers=user_auth,
+        json={"auto_confirm": True},
+    )
+    owner_write = client.put(
+        "/cookies/admin_auto_confirm_cookie/auto-confirm",
+        headers=auth,
+        json={"auto_confirm": True},
+    )
+    owner_read = client.get("/cookies/admin_auto_confirm_cookie/auto-confirm", headers=auth)
+
+    assert foreign_read.status_code == 403
+    assert foreign_write.status_code == 403
+    assert owner_write.status_code == 200
+    assert owner_write.json()["auto_confirm"] is True
+    assert owner_read.status_code == 200
+    assert owner_read.json()["auto_confirm"] is True
