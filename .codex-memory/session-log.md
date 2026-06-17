@@ -307,3 +307,20 @@
   - Stage, commit, and push the phase-25 files, then continue evaluating the next symmetry gap.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-17 20:40
+- Task: Finish phase 26 ambiguous direct red-reminder backfill fallback coverage for no-order-id red-reminder handling.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase26-design.md` before implementation.
+  - Extended `tests/smoke/test_order_status_message_binding.py` with direct coverage for falling back into the pending red-reminder queue when multiple old orders match a cancelled no-order-id red reminder.
+  - Fixed the new test fixture to use the production `交易关闭` literal so it exercises the real cancelled-reminder branch instead of a malformed text path.
+  - Re-ran targeted phase-26 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-26 tests: 26 passed.
+  - Full smoke suite: 139 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-26 diff review.
+- Next:
+  - Stage, commit, and push the phase-26 files, then continue evaluating the remaining no-order-id fallthrough gap.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

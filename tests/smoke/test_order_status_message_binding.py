@@ -240,6 +240,58 @@ def test_cancelled_red_reminder_without_order_id_directly_resolves_single_matchi
     assert "cookie-3" not in handler._pending_red_reminder_messages
 
 
+def test_cancelled_red_reminder_queues_when_direct_backfill_is_ambiguous(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["resolved-ambiguous-red-a"] = {
+        "order_id": "resolved-ambiguous-red-a",
+        "order_status": "pending_ship",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-ambiguous-red",
+        "sid": "chat-ambiguous-red@goofish",
+        "buyer_id": "buyer-ambiguous-red",
+        "item_id": "item-ambiguous-red",
+    }
+    fake_db.orders["resolved-ambiguous-red-b"] = {
+        "order_id": "resolved-ambiguous-red-b",
+        "order_status": "processing",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-ambiguous-red",
+        "sid": "chat-ambiguous-red@goofish",
+        "buyer_id": "buyer-ambiguous-red",
+        "item_id": "item-ambiguous-red",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+
+    mocker.patch("db_manager.db_manager", fake_db)
+    mocker.patch.object(handler, "extract_order_id", return_value=None)
+    mocker.patch("time.time", return_value=240.0)
+    mocker.patch("uuid.uuid4", return_value=type("FakeUuid", (), {"hex": "99aabbccddeeff00"})())
+
+    handled = handler.handle_red_reminder_message(
+        message=_make_message(20_000),
+        red_reminder="交易关闭",
+        user_id="user-ambiguous-red",
+        cookie_id="cookie-ambiguous-red",
+        msg_time="21:20:00",
+        match_context={
+            "message_hash": 2001,
+            "sid": "chat-ambiguous-red@goofish",
+            "buyer_id": "buyer-ambiguous-red",
+            "item_id": "item-ambiguous-red",
+            "message_timestamp_ms": 20_000,
+        },
+    )
+
+    assert handled is True
+    assert fake_db.orders["resolved-ambiguous-red-a"]["order_status"] == "pending_ship"
+    assert fake_db.orders["resolved-ambiguous-red-b"]["order_status"] == "processing"
+    assert "temp_240000_99aabbcc" in handler.pending_updates
+    assert handler.pending_updates["temp_240000_99aabbcc"][0]["new_status"] == "cancelled"
+    assert [msg["temp_order_id"] for msg in handler._pending_red_reminder_messages["cookie-ambiguous-red"]] == [
+        "temp_240000_99aabbcc"
+    ]
+
+
 def test_direct_system_message_ignores_lower_priority_status_rollback(mocker):
     fake_db = _MessageBindingDB()
     fake_db.orders["stable-order"] = {
