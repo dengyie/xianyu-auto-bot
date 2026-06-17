@@ -211,3 +211,19 @@
   - Stage, commit, and push the phase-19 files, then continue evaluating the next test gap.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-17 17:35
+- Task: Finish phase 20 completed-terminal discard coverage for delayed system-message binding.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase20-design.md` before implementation.
+  - Extended `tests/smoke/test_order_status_message_binding.py` with direct coverage for discarding a queued `completed` system message when another recent order already consumed that outcome.
+  - Re-ran targeted phase-20 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-20 tests: 20 passed.
+  - Full smoke suite: 133 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-20 diff review.
+- Next:
+  - Stage, commit, and push the phase-20 files, then continue evaluating the next test gap.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

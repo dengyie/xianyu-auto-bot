@@ -64,3 +64,8 @@
 - Decision: Add direct smoke coverage for `handle_system_message()` when a lower-priority system update arrives for an order already in a later state.
 - Rationale: The priority guard sits outside the pending-queue paths and protects already-advanced orders from unrelated regression or replay noise. It needs a focused regression test so a refactor does not accidentally remove the guard or start surfacing rollback side effects.
 - Impact: Direct system-message handling now explicitly proves a lower-priority update is treated as handled without mutating the stored higher-priority order state.
+
+## 2026-06-17 - Phase 20 should prove completed-terminal delayed messages are discarded after prior consumption
+- Decision: Add direct smoke coverage for `on_order_id_extracted()` when a queued terminal system message with `new_status == "completed"` should be discarded because another recent order with the same strong key is already completed.
+- Rationale: The delayed-binding discard logic already had focused coverage for `refund_cancelled` and red-reminder `cancelled`, but the `completed` branch in `_get_terminal_resolution_statuses()` was still unproven. Locking it down reduces the chance of silently rebinding already-consumed completion outcomes onto later orders.
+- Impact: Delayed terminal system-message handling now explicitly proves completed outcomes are discarded and cleaned up once a matching recent order has already consumed them.
