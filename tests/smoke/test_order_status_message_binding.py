@@ -364,6 +364,116 @@ def test_ambiguous_strong_key_keeps_pending_system_queue_unchanged(mocker):
     assert len(handler._pending_system_messages["cookie-5"]) == 2
 
 
+def test_terminal_recent_fallback_binds_single_matching_system_message(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["recent-order"] = {
+        "order_id": "recent-order",
+        "order_status": "processing",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-6",
+        "sid": "chat-6@goofish",
+        "buyer_id": "buyer-6",
+        "item_id": "item-6",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+    handler._pending_system_messages["cookie-6"] = [
+        {
+            "message": _make_message(6_000, system=True),
+            "send_message": "浣犲凡鍙戣揣",
+            "cookie_id": "cookie-6",
+            "msg_time": "15:00:00",
+            "new_status": "shipped",
+            "temp_order_id": "temp_recent_single",
+            "message_hash": 601,
+            "sid": "chat-6@goofish",
+            "buyer_id": None,
+            "item_id": None,
+            "message_timestamp_ms": 6_000,
+            "timestamp": 30.0,
+        }
+    ]
+
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    handler.on_order_id_extracted(
+        order_id="recent-order",
+        cookie_id="cookie-6",
+        message=_make_message(6_500),
+        match_context={
+            "message_hash": 699,
+            "sid": "chat-6@goofish",
+            "buyer_id": "buyer-6",
+            "item_id": "item-6",
+            "message_timestamp_ms": 6_500,
+        },
+    )
+
+    assert fake_db.orders["recent-order"]["order_status"] == "shipped"
+    assert "cookie-6" not in handler._pending_system_messages
+
+
+def test_terminal_recent_fallback_ambiguity_keeps_pending_system_queue(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["recent-order"] = {
+        "order_id": "recent-order",
+        "order_status": "processing",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-7",
+        "sid": "chat-7@goofish",
+        "buyer_id": "buyer-7",
+        "item_id": "item-7",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+    handler._pending_system_messages["cookie-7"] = [
+        {
+            "message": _make_message(7_000, system=True),
+            "send_message": "浣犲凡鍙戣揣",
+            "cookie_id": "cookie-7",
+            "msg_time": "16:00:00",
+            "new_status": "shipped",
+            "temp_order_id": "temp_recent_1",
+            "message_hash": 701,
+            "sid": "chat-7@goofish",
+            "buyer_id": None,
+            "item_id": None,
+            "message_timestamp_ms": 7_000,
+            "timestamp": 40.0,
+        },
+        {
+            "message": _make_message(7_100, system=True),
+            "send_message": "浣犲凡鍙戣揣",
+            "cookie_id": "cookie-7",
+            "msg_time": "16:00:01",
+            "new_status": "shipped",
+            "temp_order_id": "temp_recent_2",
+            "message_hash": 702,
+            "sid": "chat-7@goofish",
+            "buyer_id": None,
+            "item_id": None,
+            "message_timestamp_ms": 7_100,
+            "timestamp": 41.0,
+        },
+    ]
+
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    handler.on_order_id_extracted(
+        order_id="recent-order",
+        cookie_id="cookie-7",
+        message=_make_message(7_500),
+        match_context={
+            "message_hash": 799,
+            "sid": "chat-7@goofish",
+            "buyer_id": "buyer-7",
+            "item_id": "item-7",
+            "message_timestamp_ms": 7_500,
+        },
+    )
+
+    assert fake_db.orders["recent-order"]["order_status"] == "processing"
+    assert len(handler._pending_system_messages["cookie-7"]) == 2
+
+
 def test_cleanup_expired_pending_updates_removes_only_stale_entries(mocker):
     handler = order_status_handler.OrderStatusHandler()
     handler.pending_updates = {
