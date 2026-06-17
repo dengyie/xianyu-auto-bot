@@ -291,3 +291,19 @@
   - Stage, commit, and push the phase-24 files, then continue evaluating the next test gap.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-17 20:05
+- Task: Finish phase 25 ambiguous direct system-backfill fallback coverage for no-order-id system-message handling.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase25-design.md` before implementation.
+  - Extended `tests/smoke/test_order_status_message_binding.py` with direct coverage for falling back into the pending system-message queue when multiple old orders match a cancelled no-order-id system message.
+  - Re-ran targeted phase-25 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-25 tests: 25 passed.
+  - Full smoke suite: 138 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-25 diff review.
+- Next:
+  - Stage, commit, and push the phase-25 files, then continue evaluating the next symmetry gap.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

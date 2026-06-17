@@ -1,11 +1,11 @@
 # TODO
 
 ## In Progress
-- [ ] Stage, commit, and push phase 24 direct cancelled system-message backfill success coverage to the draft GitHub PR
+- [ ] Stage, commit, and push phase 25 ambiguous direct system-backfill fallback coverage to the draft GitHub PR
 
 ## Next
+- [ ] Evaluate whether the red-reminder no-order-id ambiguity path also deserves its own direct regression test for symmetry with the system-message branch
 - [ ] Evaluate whether any pending-queue behavior still needs a broader service/route integration entrypoint test beyond the current handler-focused smoke coverage
-- [ ] Evaluate whether any additional delayed-binding branches around alternate status transitions still deserve direct regression coverage
 
 ## Done
 - [x] Add authz/cookie isolation/file token/system settings smoke coverage
@@ -34,3 +34,4 @@
 - [x] Add failed direct-backfill fallback coverage so no-order-id red reminders still queue when direct old-order update fails
 - [x] Add failed direct system-backfill fallback coverage so no-order-id system messages still queue when direct old-order update fails
 - [x] Add direct cancelled system-message backfill success coverage so unique old orders can be updated without queueing
+- [x] Add ambiguous direct system-backfill fallback coverage so no-order-id system messages queue instead of mutating one of multiple matching old orders

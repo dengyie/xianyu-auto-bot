@@ -89,3 +89,8 @@
 - Decision: Add direct smoke coverage for `handle_system_message()` when no order id can be extracted, the resolved status is `cancelled`, and a unique old order can be updated successfully by strong match key.
 - Rationale: After locking down the failure fallback in phase 23, the matching success path also needed direct proof so the no-order-id system-message branch is covered on both sides of the decision. This confirms the handler can resolve the event immediately and avoid unnecessary pending-queue churn.
 - Impact: No-order-id system-message handling now explicitly proves a unique cancelled message can be backfilled straight onto the old order without creating temporary pending entries.
+
+## 2026-06-17 - Phase 25 should prove ambiguous direct system backfill falls through to queueing
+- Decision: Add direct smoke coverage for `handle_system_message()` when no order id can be extracted, the resolved status is `cancelled`, and more than one old order matches the strong key.
+- Rationale: `_try_resolve_cancelled_message_without_order_id()` has an ambiguity guard that must refuse direct mutation when multiple candidates are plausible. Without a focused regression test, a later refactor could silently update the first matched order and corrupt order history.
+- Impact: No-order-id system-message handling now explicitly proves ambiguous direct backfill attempts preserve the event by queueing it for later binding instead of mutating an arbitrary old order.

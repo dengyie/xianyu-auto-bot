@@ -1479,3 +1479,63 @@ def test_cancelled_system_message_direct_backfill_updates_unique_order(mocker):
     assert fake_db.orders["resolved-direct-system"]["order_status"] == "cancelled"
     assert handler.get_pending_updates_count() == 0
     assert "cookie-direct-system" not in handler._pending_system_messages
+
+
+def test_cancelled_system_message_queues_when_direct_backfill_is_ambiguous(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["resolved-ambiguous-a"] = {
+        "order_id": "resolved-ambiguous-a",
+        "order_status": "pending_ship",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-ambiguous-system",
+        "sid": "chat-ambiguous-system@goofish",
+        "buyer_id": "buyer-ambiguous-system",
+        "item_id": "item-ambiguous-system",
+    }
+    fake_db.orders["resolved-ambiguous-b"] = {
+        "order_id": "resolved-ambiguous-b",
+        "order_status": "processing",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-ambiguous-system",
+        "sid": "chat-ambiguous-system@goofish",
+        "buyer_id": "buyer-ambiguous-system",
+        "item_id": "item-ambiguous-system",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+
+    mocker.patch("db_manager.db_manager", fake_db)
+    mocker.patch.object(
+        handler,
+        "_resolve_system_message_status",
+        return_value=(
+            "cancelled",
+            {"is_system_message": True},
+            [{"source": "send_message", "status": "cancelled", "text": "cancelled"}],
+        ),
+    )
+    mocker.patch.object(handler, "extract_order_id", return_value=None)
+    mocker.patch("time.time", return_value=230.0)
+    mocker.patch("uuid.uuid4", return_value=type("FakeUuid", (), {"hex": "1122334455667788"})())
+
+    handled = handler.handle_system_message(
+        message=_make_message(19_000, system=True),
+        send_message="交易关闭系统消息多候选",
+        cookie_id="cookie-ambiguous-system",
+        msg_time="21:10:00",
+        match_context={
+            "message_hash": 1901,
+            "sid": "chat-ambiguous-system@goofish",
+            "buyer_id": "buyer-ambiguous-system",
+            "item_id": "item-ambiguous-system",
+            "message_timestamp_ms": 19_000,
+        },
+    )
+
+    assert handled is True
+    assert fake_db.orders["resolved-ambiguous-a"]["order_status"] == "pending_ship"
+    assert fake_db.orders["resolved-ambiguous-b"]["order_status"] == "processing"
+    assert "temp_230000_11223344" in handler.pending_updates
+    assert handler.pending_updates["temp_230000_11223344"][0]["new_status"] == "cancelled"
+    assert [msg["temp_order_id"] for msg in handler._pending_system_messages["cookie-ambiguous-system"]] == [
+        "temp_230000_11223344"
+    ]
