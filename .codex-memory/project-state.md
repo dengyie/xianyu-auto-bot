@@ -1,21 +1,21 @@
 # Current State Snapshot - 2026-06-18
 
 - Security hardening phase is implemented and smoke-tested.
-- Test coverage phases 1-41 are implemented for authz, lifecycle, delayed binding, ambiguity rejection, queue cleanup, terminal recent-fallback branches, selector disambiguation, enqueue-entry stale cleanup, bind-gap rejection, terminal discard behavior, refund-related terminal resolution paths, multi-update pending consumption, batch queue draining, mixed-success batch draining, mixed-result detail-fetched queue consumption, direct status-priority rollback protection, completed-terminal discard handling, shipped-terminal discard handling, failed direct-backfill fallback queueing, failed direct system backfill fallback queueing, direct cancelled system-message backfill success handling, ambiguous direct system backfill fallback queueing, ambiguous direct red-reminder fallback queueing, missing-strong-key fallthrough handling, runtime order-status seam propagation from `XianyuAutoAsync`, direct runtime handoff coverage, detail-refresh seams, basic-order-info seams inside `_auto_delivery(...)`, existing-order bypass, data-card reservation preparation, manual-delivery reservation closure, finalize-after-send pending-finalize handling, and pending-finalize replay recovery.
-- Test coverage phase 41 is implemented:
-  - manual delivery retry now has direct smoke coverage proving pending-finalize units can be recovered through `_get_pending_delivery_finalization_meta(...)` without re-sending content
-  - the replay failure branch leaves the unit in `partial_pending_finalize` and returns a visible failure response
+- Test coverage phases 1-42 are implemented for authz, lifecycle, delayed binding, ambiguity rejection, queue cleanup, terminal recent-fallback branches, selector disambiguation, enqueue-entry stale cleanup, bind-gap rejection, terminal discard behavior, refund-related terminal resolution paths, multi-update pending consumption, batch queue draining, mixed-success batch draining, mixed-result detail-fetched queue consumption, direct status-priority rollback protection, completed-terminal discard handling, shipped-terminal discard handling, failed direct-backfill fallback queueing, failed direct system backfill fallback queueing, direct cancelled system-message backfill success handling, ambiguous direct system backfill fallback queueing, ambiguous direct red-reminder fallback queueing, missing-strong-key fallthrough handling, runtime order-status seam propagation from `XianyuAutoAsync`, direct runtime handoff coverage, detail-refresh seams, basic-order-info seams inside `_auto_delivery(...)`, existing-order bypass, data-card reservation preparation, manual-delivery reservation closure, finalize-after-send pending-finalize handling, pending-finalize replay recovery, and replay-only pending-finalize completion return handling.
+- Test coverage phase 42 is implemented:
+  - manual delivery retry now has direct smoke coverage proving persisted pending-finalize work can complete and return success when no unsent units remain
+  - the replay-only branch exits without re-sending content and without preparing any new `_auto_delivery(...)` units
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_order_delivery_transitions.py -q` => 11 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 158 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_order_delivery_transitions.py -q` => 12 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 159 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py tests order_status_handler.py` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-41 scope reviewed with `production-code-quality-review`
-  - no new P1/P2 findings identified in the phase-41 diff
+  - phase-42 scope reviewed with `production-code-quality-review`
+  - no new P1/P2 findings identified in the phase-42 diff
   - helper script still emits a pre-existing Windows GBK `UnicodeDecodeError` from its reader thread after returning usable JSON context
 - Environment note:
   - project `venv` currently lacks `pytest`, so validation fell back to the available host Python interpreter
 - Next testing priorities:
-  - evaluate whether any broader route or service entrypoint still needs coverage beyond the now-covered runtime detail-refresh, message-handoff, and delivery-reservation seams
-  - evaluate whether the remaining uncovered risk is now outside the delivery recovery chain and belongs to a different module cluster
+  - evaluate whether any broader route or service entrypoint still needs coverage beyond the now-covered runtime detail-refresh, message-handoff, and delivery-recovery seams
+  - evaluate whether the remaining uncovered risk now sits outside the delivery retry path and belongs to a different module cluster

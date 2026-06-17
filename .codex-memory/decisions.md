@@ -179,3 +179,8 @@
 - Decision: Add route-level smoke coverage for manual delivery retry when a unit already has persisted `sent` finalization state and must replay only the finalize hook.
 - Rationale: After phase 40 established the recoverable state, the adjacent contract is recovery itself. The riskiest regression here is duplicate delivery to the buyer or silent failure to consume the saved pending-finalize record. A route smoke test can prove both the absence of re-send behavior and the correctness of the replay result.
 - Impact: The suite now explicitly proves pending-finalize recovery uses persisted metadata to complete side effects without re-sending content, and that replay failures remain visible and recoverable.
+
+## 2026-06-18 - Phase 42 should lock down replay-only early return after pending-finalize recovery
+- Decision: Add route-level smoke coverage for the manual delivery branch where pending-finalize replay succeeds and no unsent units remain, rather than adding a helper-only assertion around `remaining_unit_indexes`.
+- Rationale: The production contract lives at the delivery route boundary: after replaying saved finalization work, the route must stop before any new send or `_auto_delivery(...)` preparation if there is nothing left to ship. A route smoke test is the smallest place that can prove the absence of duplicate buyer-visible actions.
+- Impact: The suite now explicitly proves replay-only retries return success immediately after consuming the saved pending-finalize record, with no new delivery preparation or resend side effects.

@@ -589,3 +589,22 @@
   - Continue evaluating whether any broader route/service entrypoint still needs direct coverage.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-18 09:20
+- Task: Finish phase 42 smoke coverage for replay-only pending-finalize completion during manual delivery retry.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase42-design.md` before implementation.
+  - Extended `tests/smoke/test_order_delivery_transitions.py` so the fake runtime records `_auto_delivery(...)` preparation calls.
+  - Added a route-level smoke test proving persisted `sent` finalization state can replay successfully and return early when no remaining units need new delivery preparation.
+  - Re-ran targeted phase-42 tests, full smoke suite, compileall, diff hygiene, and production review for the phase-42 diff.
+- Results:
+  - Targeted phase-42 tests: 12 passed.
+  - Full smoke suite: 159 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Production review: no new P1/P2 findings; score 96/100; status passed.
+- Next:
+  - Stage only the intentional phase-42 files, commit, and push the branch.
+  - Reevaluate the remaining test-gap map outside the delivery recovery chain.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

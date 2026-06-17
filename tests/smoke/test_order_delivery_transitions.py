@@ -28,6 +28,7 @@ def _insert_order(db, *, order_id, cookie_id=None, item_id="item-1", buyer_id="b
 class _FakeRuntime:
     def __init__(self, *, auto_delivery_result=None, mark_sent_result=True, finalize_result=None):
         self.sent_once = []
+        self.auto_delivery_calls = []
         self.mark_sent_calls = []
         self.release_calls = []
         self.pending_finalize_meta = {}
@@ -43,6 +44,14 @@ class _FakeRuntime:
         return self.pending_finalize_meta.get((order_id, unit_index))
 
     async def _auto_delivery(self, item_id, item_title=None, order_id=None, send_user_id=None, delivery_unit_index=1, **_kwargs):
+        self.auto_delivery_calls.append(
+            {
+                "item_id": item_id,
+                "order_id": order_id,
+                "send_user_id": send_user_id,
+                "delivery_unit_index": delivery_unit_index,
+            }
+        )
         if self._auto_delivery_result is not None:
             result = dict(self._auto_delivery_result)
             result.setdefault("delivery_unit_index", delivery_unit_index)
@@ -472,6 +481,71 @@ def test_manual_deliver_retry_returns_failure_when_pending_finalize_replay_fails
     assert progress["aggregate_status"] == "partial_pending_finalize"
     assert progress["pending_finalize_count"] == 1
     assert progress["finalized_count"] == 0
+
+
+def test_manual_deliver_retry_completes_pending_finalize_without_preparing_new_units(client, user_auth, mocker):
+    _add_cookie(client, user_auth, "data_delivery_replay_only_cookie")
+    _insert_order(
+        reply_server.db_manager,
+        order_id="deliver-data-replay-only",
+        cookie_id="data_delivery_replay_only_cookie",
+        item_id="item-data-replay-only",
+        buyer_id="buyer-data-replay-only",
+        quantity=1,
+    )
+    reply_server.db_manager.upsert_delivery_finalization_state(
+        order_id="deliver-data-replay-only",
+        unit_index=1,
+        cookie_id="data_delivery_replay_only_cookie",
+        item_id="item-data-replay-only",
+        buyer_id="buyer-data-replay-only",
+        channel="manual",
+        status="sent",
+        delivery_meta={
+            "rule_id": 207,
+            "rule_keyword": "replay only keyword",
+            "card_id": 9207,
+            "card_type": "data",
+            "match_mode": "keyword",
+            "data_card_pending_consume": True,
+            "data_line": "DATA-CARD-LINE-REPLAY-ONLY",
+            "data_reservation_id": 8207,
+            "data_reservation_status": "sent",
+            "delivery_unit_index": 1,
+        },
+        last_error="pending finalize only",
+    )
+    runtime = _FakeRuntime()
+    runtime.pending_finalize_meta[("deliver-data-replay-only", 1)] = {
+        "rule_id": 207,
+        "rule_keyword": "replay only keyword",
+        "card_id": 9207,
+        "card_type": "data",
+        "match_mode": "keyword",
+        "data_card_pending_consume": True,
+        "data_line": "DATA-CARD-LINE-REPLAY-ONLY",
+        "data_reservation_id": 8207,
+        "data_reservation_status": "sent",
+        "delivery_unit_index": 1,
+        "cookie_id": "data_delivery_replay_only_cookie",
+    }
+    mocker.patch.object(reply_server.cookie_manager, "manager", _FakeCookieManager(runtime=runtime))
+    mocker.patch.object(reply_server, "publish_order_update_event")
+
+    resp = client.post("/api/orders/deliver-data-replay-only/deliver", headers=user_auth)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert body["delivered"] is True
+    assert runtime.sent_once == []
+    assert runtime.auto_delivery_calls == []
+    assert len(runtime.finalize_calls) == 1
+    progress = reply_server.db_manager.get_delivery_progress_summary("deliver-data-replay-only", expected_quantity=1)
+    assert progress["aggregate_status"] == "shipped"
+    assert progress["pending_finalize_count"] == 0
+    assert progress["finalized_count"] == 1
+    assert "补完成未收尾记录" in body["message"]
 
 
 def test_refresh_rejects_foreign_order(client, auth, user_auth):
