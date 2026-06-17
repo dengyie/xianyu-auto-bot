@@ -277,7 +277,12 @@
 - Decision: Add smoke coverage for `GET /cookies/{cid}/auto-confirm` and `PUT /cookies/{cid}/auto-confirm` so foreign users cannot read or overwrite another user's auto-confirm setting.
 - Rationale: Auto-confirm is another cookie-scoped settings pair with an ownership check that had no direct regression coverage. A single focused test keeps the cookie-settings cluster coherent without changing runtime behavior.
 - Impact: Cookie auto-confirm reads and writes are now explicitly guarded by ownership, and the smoke suite covers both foreign-user denial and owner success.
+
 ## 2026-06-18 - Phase 64 should lock cookie auto-comment ownership
 - Decision: Add smoke coverage for `GET /cookies/{cid}/auto-comment` and `PUT /cookies/{cid}/auto-comment` so foreign users cannot read or overwrite another user's auto-comment setting.
 - Rationale: Auto-comment is another cookie-scoped setting pair with an ownership check but no direct regression coverage. A single focused test keeps the cookie-settings cluster coherent without changing runtime behavior.
 - Impact: Cookie auto-comment reads and writes are now explicitly guarded by ownership, and the smoke suite covers both foreign-user denial and owner success.
+## 2026-06-18 - Phase 65 should bind comment-template mutations to cid
+- Decision: Require comment-template update/delete/activate operations to prove `template_id` belongs to the URL `cid` before mutating state.
+- Rationale: Route-level cookie ownership alone was insufficient because a user could combine their own `cid` with another cookie's `template_id`. Binding at the DB helper boundary keeps route and data-layer behavior aligned.
+- Impact: Cross-cookie template update, delete, and activation attempts now fail as not found, and smoke coverage locks the boundary.

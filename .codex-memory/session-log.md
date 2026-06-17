@@ -964,3 +964,22 @@
   - Continue evaluating remaining owner/scoped routes for focused smoke gaps.
 - Blockers:
   - `gh auth status` still reports an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` can complete.
+## 2026-06-18 23:20
+- Task: Fix phase 65 comment-template template-id ownership and add regression coverage.
+- Actions:
+  - Reviewed `/cookies/{cid}/comment-templates` route cluster and DB template mutation helpers.
+  - Found that update/delete accepted `template_id` without proving it belonged to the URL `cid`.
+  - Updated `reply_server.py`, `db_manager.py`, and `db_manager/accounts.py` so update/delete/activate bind `template_id` to `cid` before mutation.
+  - Added `.codex-memory/test-coverage-phase65-design.md` and a smoke regression proving own-`cid` plus foreign-`template_id` cannot update, activate, or delete another cookie's template.
+  - Re-ran targeted cookie-access smoke tests, full smoke suite, compileall, diff hygiene, and production review context collection.
+- Results:
+  - Targeted cookie-access smoke tests: 10 passed.
+  - Full smoke suite: 183 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-65 change set.
+  - Continue evaluating remaining owner/scoped routes for focused smoke gaps.
+- Blockers:
+  - `gh auth status` still reports an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` can complete.

@@ -187,3 +187,51 @@ def test_cookie_auto_comment_is_scoped_to_owner(client, auth, user_auth):
     assert owner_write.json()["auto_comment"] is True
     assert owner_read.status_code == 200
     assert owner_read.json()["auto_comment"] is True
+
+
+def test_comment_template_id_must_belong_to_cookie(client, auth, user_auth):
+    client.post(
+        "/cookies",
+        headers=auth,
+        json={"id": "admin_template_cookie", "value": "unb=admin"},
+    )
+    client.post(
+        "/cookies",
+        headers=user_auth,
+        json={"id": "user_template_cookie", "value": "unb=user"},
+    )
+    create_resp = client.post(
+        "/cookies/admin_template_cookie/comment-templates",
+        headers=auth,
+        json={"name": "admin template", "content": "admin comment", "is_active": True},
+    )
+    template_id = create_resp.json()["template_id"]
+
+    update_resp = client.put(
+        f"/cookies/user_template_cookie/comment-templates/{template_id}",
+        headers=user_auth,
+        json={"name": "stolen template", "content": "stolen comment", "is_active": True},
+    )
+    activate_resp = client.put(
+        f"/cookies/user_template_cookie/comment-templates/{template_id}/activate",
+        headers=user_auth,
+    )
+    delete_resp = client.delete(
+        f"/cookies/user_template_cookie/comment-templates/{template_id}",
+        headers=user_auth,
+    )
+    owner_read = client.get("/cookies/admin_template_cookie/comment-templates", headers=auth)
+
+    assert update_resp.status_code == 404
+    assert activate_resp.status_code == 404
+    assert delete_resp.status_code == 404
+    assert owner_read.status_code == 200
+    assert owner_read.json()["templates"] == [
+        {
+            **owner_read.json()["templates"][0],
+            "id": template_id,
+            "name": "admin template",
+            "content": "admin comment",
+            "is_active": True,
+        }
+    ]

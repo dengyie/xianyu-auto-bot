@@ -7781,10 +7781,11 @@ def update_comment_template(cid: str, template_id: int, template_data: CommentTe
             template_id,
             name=template_data.name,
             content=template_data.content,
-            is_active=template_data.is_active
+            is_active=template_data.is_active,
+            cookie_id=cid
         )
         if not success:
-            raise HTTPException(status_code=500, detail="更新好评模板失败")
+            raise HTTPException(status_code=404, detail="好评模板不存在")
 
         return {
             "msg": "success",
@@ -7810,9 +7811,9 @@ def delete_comment_template(cid: str, template_id: int, current_user: Dict[str, 
         if cid not in user_cookies:
             raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
-        success = db_manager.delete_comment_template(template_id)
+        success = db_manager.delete_comment_template(template_id, cookie_id=cid)
         if not success:
-            raise HTTPException(status_code=500, detail="删除好评模板失败")
+            raise HTTPException(status_code=404, detail="好评模板不存在")
 
         return {
             "msg": "success",
@@ -7840,7 +7841,7 @@ def activate_comment_template(cid: str, template_id: int, current_user: Dict[str
 
         success = db_manager.set_active_comment_template(cid, template_id)
         if not success:
-            raise HTTPException(status_code=500, detail="激活好评模板失败")
+            raise HTTPException(status_code=404, detail="好评模板不存在")
 
         return {
             "msg": "success",

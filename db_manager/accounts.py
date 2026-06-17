@@ -549,7 +549,7 @@ class DBAccountsMixin:
                 logger.error(f"添加好评模板失败: {e}")
                 self.conn.rollback()
                 return None
-    def update_comment_template(self, template_id: int, name: str = None, content: str = None, is_active: bool = None) -> bool:
+    def update_comment_template(self, template_id: int, name: str = None, content: str = None, is_active: bool = None, cookie_id: str = None) -> bool:
         """更新好评模板"""
         with self.lock:
             try:
@@ -561,11 +561,14 @@ class DBAccountsMixin:
                 if not result:
                     logger.warning(f"好评模板不存在: id={template_id}")
                     return False
-                cookie_id = result[0]
+                template_cookie_id = result[0]
+                if cookie_id is not None and template_cookie_id != cookie_id:
+                    logger.warning(f"好评模板不属于指定Cookie: id={template_id}, cookie_id={cookie_id}")
+                    return False
                 
                 # 如果设置为激活状态，先将其他模板设为非激活
                 if is_active:
-                    self._execute_sql(cursor, "UPDATE comment_templates SET is_active = 0 WHERE cookie_id = ?", (cookie_id,))
+                    self._execute_sql(cursor, "UPDATE comment_templates SET is_active = 0 WHERE cookie_id = ?", (template_cookie_id,))
                 
                 # 构建动态更新语句
                 update_fields = []
@@ -598,12 +601,19 @@ class DBAccountsMixin:
                 logger.error(f"更新好评模板失败: {e}")
                 self.conn.rollback()
                 return False
-    def delete_comment_template(self, template_id: int) -> bool:
+    def delete_comment_template(self, template_id: int, cookie_id: str = None) -> bool:
         """删除好评模板"""
         with self.lock:
             try:
                 cursor = self.conn.cursor()
-                self._execute_sql(cursor, "DELETE FROM comment_templates WHERE id = ?", (template_id,))
+                if cookie_id is None:
+                    self._execute_sql(cursor, "DELETE FROM comment_templates WHERE id = ?", (template_id,))
+                else:
+                    self._execute_sql(cursor, "DELETE FROM comment_templates WHERE id = ? AND cookie_id = ?", (template_id, cookie_id))
+                    if cursor.rowcount == 0:
+                        logger.warning(f"好评模板不属于指定Cookie或不存在: id={template_id}, cookie_id={cookie_id}")
+                        self.conn.rollback()
+                        return False
                 self.conn.commit()
                 logger.info(f"删除好评模板成功: id={template_id}")
                 return True
@@ -616,6 +626,10 @@ class DBAccountsMixin:
         with self.lock:
             try:
                 cursor = self.conn.cursor()
+                self._execute_sql(cursor, "SELECT 1 FROM comment_templates WHERE id = ? AND cookie_id = ?", (template_id, cookie_id))
+                if not cursor.fetchone():
+                    logger.warning(f"好评模板不属于指定Cookie或不存在: id={template_id}, cookie_id={cookie_id}")
+                    return False
                 # 先将所有模板设为非激活
                 self._execute_sql(cursor, "UPDATE comment_templates SET is_active = 0 WHERE cookie_id = ?", (cookie_id,))
                 # 设置指定模板为激活
