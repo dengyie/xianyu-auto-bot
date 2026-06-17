@@ -89,10 +89,20 @@ def test_system_message_without_order_id_is_bound_after_order_id_extraction(mock
     handler = order_status_handler.OrderStatusHandler()
 
     mocker.patch("db_manager.db_manager", fake_db)
+    mocker.patch.object(
+        handler,
+        "_resolve_system_message_status",
+        return_value=(
+            "shipped",
+            {"is_system_message": True},
+            [{"source": "send_message", "status": "shipped", "text": "shipped"}],
+        ),
+    )
+    mocker.patch.object(handler, "extract_order_id", return_value=None)
 
     queued = handler.handle_system_message(
         message=_make_message(1_000, system=True),
-        send_message="你已发货",
+        send_message="浣犲凡鍙戣揣",
         cookie_id="cookie-1",
         msg_time="10:00:00",
         match_context={
@@ -159,7 +169,7 @@ def test_pending_system_message_is_discarded_when_another_order_already_resolved
     handler._pending_system_messages["cookie-2"] = [
         {
             "message": _make_message(2_000, system=True),
-            "send_message": "你已发货",
+            "send_message": "浣犲凡鍙戣揣",
             "cookie_id": "cookie-2",
             "msg_time": "11:00:00",
             "new_status": "shipped",
@@ -207,6 +217,7 @@ def test_cancelled_red_reminder_without_order_id_directly_resolves_single_matchi
     handler = order_status_handler.OrderStatusHandler()
 
     mocker.patch("db_manager.db_manager", fake_db)
+    mocker.patch.object(handler, "extract_order_id", return_value=None)
 
     handled = handler.handle_red_reminder_message(
         message=_make_message(3_000),
@@ -227,3 +238,166 @@ def test_cancelled_red_reminder_without_order_id_directly_resolves_single_matchi
     assert fake_db.orders["resolved-directly"]["order_status"] == "cancelled"
     assert handler.get_pending_updates_count() == 0
     assert "cookie-3" not in handler._pending_red_reminder_messages
+
+
+def test_ambiguous_message_hash_keeps_pending_system_queue_unchanged(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["candidate-order"] = {
+        "order_id": "candidate-order",
+        "order_status": "processing",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-4",
+        "sid": "chat-4@goofish",
+        "buyer_id": "buyer-4",
+        "item_id": "item-4",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+    handler._pending_system_messages["cookie-4"] = [
+        {
+            "message": _make_message(4_000, system=True),
+            "send_message": "浣犲凡鍙戣揣",
+            "cookie_id": "cookie-4",
+            "msg_time": "13:00:00",
+            "new_status": "shipped",
+            "temp_order_id": "temp_hash_1",
+            "message_hash": 404,
+            "sid": "chat-a@goofish",
+            "buyer_id": "buyer-a",
+            "item_id": "item-a",
+            "message_timestamp_ms": 4_000,
+            "timestamp": 10.0,
+        },
+        {
+            "message": _make_message(4_100, system=True),
+            "send_message": "浣犲凡鍙戣揣",
+            "cookie_id": "cookie-4",
+            "msg_time": "13:00:01",
+            "new_status": "shipped",
+            "temp_order_id": "temp_hash_2",
+            "message_hash": 404,
+            "sid": "chat-b@goofish",
+            "buyer_id": "buyer-b",
+            "item_id": "item-b",
+            "message_timestamp_ms": 4_100,
+            "timestamp": 11.0,
+        },
+    ]
+
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    handler.on_order_id_extracted(
+        order_id="candidate-order",
+        cookie_id="cookie-4",
+        message=_make_message(4_200),
+        match_context={
+            "message_hash": 404,
+            "sid": "chat-4@goofish",
+            "buyer_id": "buyer-4",
+            "item_id": "item-4",
+            "message_timestamp_ms": 4_200,
+        },
+    )
+
+    assert fake_db.orders["candidate-order"]["order_status"] == "processing"
+    assert len(handler._pending_system_messages["cookie-4"]) == 2
+
+
+def test_ambiguous_strong_key_keeps_pending_system_queue_unchanged(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["candidate-order"] = {
+        "order_id": "candidate-order",
+        "order_status": "processing",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-5",
+        "sid": "chat-5@goofish",
+        "buyer_id": "buyer-5",
+        "item_id": "item-5",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+    handler._pending_system_messages["cookie-5"] = [
+        {
+            "message": _make_message(5_000, system=True),
+            "send_message": "浣犲凡鍙戣揣",
+            "cookie_id": "cookie-5",
+            "msg_time": "14:00:00",
+            "new_status": "shipped",
+            "temp_order_id": "temp_strong_1",
+            "message_hash": 501,
+            "sid": "chat-5@goofish",
+            "buyer_id": "buyer-5",
+            "item_id": "item-5",
+            "message_timestamp_ms": 5_000,
+            "timestamp": 20.0,
+        },
+        {
+            "message": _make_message(5_100, system=True),
+            "send_message": "浣犲凡鍙戣揣",
+            "cookie_id": "cookie-5",
+            "msg_time": "14:00:01",
+            "new_status": "shipped",
+            "temp_order_id": "temp_strong_2",
+            "message_hash": 502,
+            "sid": "chat-5@goofish",
+            "buyer_id": "buyer-5",
+            "item_id": "item-5",
+            "message_timestamp_ms": 5_100,
+            "timestamp": 21.0,
+        },
+    ]
+
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    handler.on_order_id_extracted(
+        order_id="candidate-order",
+        cookie_id="cookie-5",
+        message=_make_message(5_200),
+        match_context={
+            "message_hash": 999,
+            "sid": "chat-5@goofish",
+            "buyer_id": "buyer-5",
+            "item_id": "item-5",
+            "message_timestamp_ms": 5_200,
+        },
+    )
+
+    assert fake_db.orders["candidate-order"]["order_status"] == "processing"
+    assert len(handler._pending_system_messages["cookie-5"]) == 2
+
+
+def test_cleanup_expired_pending_updates_removes_only_stale_entries(mocker):
+    handler = order_status_handler.OrderStatusHandler()
+    handler.pending_updates = {
+        "expired-order": [
+            {"new_status": "pending_ship", "cookie_id": "cookie-a", "context": "expired", "timestamp": 100.0}
+        ],
+        "fresh-order": [
+            {"new_status": "pending_ship", "cookie_id": "cookie-b", "context": "fresh", "timestamp": 198.0}
+        ],
+    }
+    handler._pending_system_messages = {
+        "expired-cookie": [
+            {"send_message": "expired", "new_status": "shipped", "timestamp": 100.0}
+        ],
+        "fresh-cookie": [
+            {"send_message": "fresh", "new_status": "shipped", "timestamp": 198.0}
+        ],
+    }
+    handler._pending_red_reminder_messages = {
+        "expired-red": [
+            {"red_reminder": "交易关闭", "new_status": "cancelled", "timestamp": 100.0}
+        ],
+        "fresh-red": [
+            {"red_reminder": "交易关闭", "new_status": "cancelled", "timestamp": 198.0}
+        ],
+    }
+    handler.config["max_pending_age_hours"] = 0.001
+
+    mocker.patch("time.time", return_value=200.0)
+    handler.clear_old_pending_updates()
+
+    assert "expired-order" not in handler.pending_updates
+    assert "fresh-order" in handler.pending_updates
+    assert "expired-cookie" not in handler._pending_system_messages
+    assert "fresh-cookie" in handler._pending_system_messages
+    assert "expired-red" not in handler._pending_red_reminder_messages
+    assert "fresh-red" in handler._pending_red_reminder_messages
