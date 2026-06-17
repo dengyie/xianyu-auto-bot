@@ -510,3 +510,23 @@
   - Stage only the intentional phase-37 files, commit, and push the branch to update the draft PR.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-17 23:37
+- Task: Finish phase 38 smoke coverage for data-card reservation success/failure in `_auto_delivery(...)`.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase38-design.md` before implementation.
+  - Extended `tests/smoke/test_xianyu_order_status_runtime_seam.py` with data-card reservation success and reservation-failure coverage.
+  - Verified reservation success returns the reserved line and metadata needed by later send/consume handling.
+  - Verified reservation failure returns a failed delivery-preparation result without fabricated pending-consume metadata.
+  - Re-ran targeted phase-38 smoke tests, full smoke suite, compileall, diff hygiene, and production review context collection.
+- Results:
+  - Targeted phase-38 tests: 12 passed.
+  - Full smoke suite: 153 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Production review: no new P1/P2 findings; score 92/100; status passed.
+- Next:
+  - Stage only the intentional phase-38 files, commit, and push the branch.
+  - Continue with the data-card mark-sent/release seam if todo remains open.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

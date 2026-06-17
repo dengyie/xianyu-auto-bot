@@ -159,3 +159,8 @@
 - Decision: Add a focused `_auto_delivery(...)` seam test proving existing orders skip basic-order-info prewrite and `handle_order_basic_info_status(...)`, while still returning prepared delivery content.
 - Rationale: After covering new-order write success, handler failure, and write failure, the remaining adjacent branch is the already-persisted order bypass. This branch prevents duplicate writes and duplicate status-helper side effects, so it should be directly guarded before moving to data-card-specific behavior.
 - Impact: The suite now explicitly proves `_auto_delivery(...)` leaves existing order shells untouched during delivery-content preparation.
+
+## 2026-06-17 - Phase 38 should lock down data-card reservation metadata
+- Decision: Add focused `_auto_delivery(...)` seam tests for data-card reservation success and reservation failure instead of broadening into live message sending.
+- Rationale: The reservation branch is the contract that prevents duplicate batch-data delivery and produces metadata needed by later mark-sent/release hooks. A deterministic seam test can prove the reservation call, returned content, and metadata without involving websocket delivery or live platform state.
+- Impact: The suite now explicitly proves data-card preparation returns reserved content only after a successful reservation and leaves pending-consume metadata empty when no reservation is available.

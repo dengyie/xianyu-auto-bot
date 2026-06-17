@@ -654,3 +654,145 @@ async def test_auto_delivery_skips_basic_info_prewrite_when_order_exists(mocker)
     assert result["card_type"] == "text"
     fake_db.insert_or_update_order.assert_not_called()
     order_status_handler.handle_order_basic_info_status.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_auto_delivery_returns_reserved_data_card_metadata(mocker):
+    order_status_handler = mock.Mock()
+    live = _make_auto_delivery_live(order_status_handler)
+
+    fake_db = mock.Mock()
+    fake_db.get_item_info.return_value = {
+        "item_title": "Demo data item",
+        "item_detail": "detail body",
+        "is_multi_spec": False,
+    }
+    fake_db.get_item_multi_spec_status.return_value = False
+    fake_db.get_delivery_rules_by_keyword.return_value = [
+        {
+            "id": 304,
+            "keyword": "Demo data item",
+            "card_name": "Data Card",
+            "card_type": "data",
+            "text_content": "",
+            "card_description": "",
+            "card_id": 9104,
+            "card_delay_seconds": 0,
+            "spec_name": "",
+            "spec_value": "",
+            "spec_name_2": "",
+            "spec_value_2": "",
+        }
+    ]
+    fake_db.get_cookie_by_id.return_value = {"id": "runtime-auto-delivery-cookie", "value": "cookie"}
+    fake_db.get_order_by_id.return_value = None
+    fake_db.insert_or_update_order.return_value = True
+    fake_db.reserve_batch_data.return_value = {
+        "id": 7004,
+        "status": "reserved",
+        "reserved_content": "DATA-CARD-LINE-1",
+    }
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    result = await live._auto_delivery(
+        item_id="item-auto-data",
+        item_title="Demo data item",
+        order_id="order-auto-data",
+        send_user_id="buyer-auto-data",
+        send_user_name="buyer data",
+        include_meta=True,
+        delivery_unit_index=3,
+    )
+
+    assert result["success"] is True
+    assert result["content"] == "DATA-CARD-LINE-1"
+    assert result["rule_id"] == 304
+    assert result["card_type"] == "data"
+    assert result["card_id"] == 9104
+    assert result["data_card_pending_consume"] is True
+    assert result["data_line"] == "DATA-CARD-LINE-1"
+    assert result["data_reservation_id"] == 7004
+    assert result["data_reservation_status"] == "reserved"
+    assert result["delivery_unit_index"] == 3
+    fake_db.reserve_batch_data.assert_called_once_with(
+        card_id=9104,
+        order_id="order-auto-data",
+        unit_index=3,
+        cookie_id="runtime-auto-delivery-cookie",
+        buyer_id="buyer-auto-data",
+    )
+    fake_db.insert_or_update_order.assert_called_once_with(
+        order_id="order-auto-data",
+        item_id="item-auto-data",
+        buyer_id="buyer-auto-data",
+        buyer_nick="buyer data",
+        cookie_id="runtime-auto-delivery-cookie",
+    )
+    order_status_handler.handle_order_basic_info_status.assert_called_once_with(
+        order_id="order-auto-data",
+        cookie_id="runtime-auto-delivery-cookie",
+        context="自动发货-基本信息",
+    )
+
+
+@pytest.mark.asyncio
+async def test_auto_delivery_fails_without_data_card_reservation(mocker):
+    order_status_handler = mock.Mock()
+    live = _make_auto_delivery_live(order_status_handler)
+
+    fake_db = mock.Mock()
+    fake_db.get_item_info.return_value = {
+        "item_title": "Demo empty data item",
+        "item_detail": "detail body",
+        "is_multi_spec": False,
+    }
+    fake_db.get_item_multi_spec_status.return_value = False
+    fake_db.get_delivery_rules_by_keyword.return_value = [
+        {
+            "id": 305,
+            "keyword": "Demo empty data item",
+            "card_name": "Empty Data Card",
+            "card_type": "data",
+            "text_content": "",
+            "card_description": "",
+            "card_id": 9105,
+            "card_delay_seconds": 0,
+            "spec_name": "",
+            "spec_value": "",
+            "spec_name_2": "",
+            "spec_value_2": "",
+        }
+    ]
+    fake_db.get_cookie_by_id.return_value = {"id": "runtime-auto-delivery-cookie", "value": "cookie"}
+    fake_db.get_order_by_id.return_value = None
+    fake_db.insert_or_update_order.return_value = True
+    fake_db.reserve_batch_data.return_value = None
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    result = await live._auto_delivery(
+        item_id="item-auto-empty-data",
+        item_title="Demo empty data item",
+        order_id="order-auto-empty-data",
+        send_user_id="buyer-auto-empty-data",
+        send_user_name="buyer empty data",
+        include_meta=True,
+        delivery_unit_index=2,
+    )
+
+    assert result["success"] is False
+    assert result["content"] is None
+    assert result["rule_id"] == 305
+    assert result["card_type"] == "data"
+    assert result["card_id"] == 9105
+    assert result["data_card_pending_consume"] is False
+    assert result["data_line"] is None
+    assert result["data_reservation_id"] is None
+    assert result["data_reservation_status"] is None
+    assert result["delivery_unit_index"] == 2
+    fake_db.reserve_batch_data.assert_called_once_with(
+        card_id=9105,
+        order_id="order-auto-empty-data",
+        unit_index=2,
+        cookie_id="runtime-auto-delivery-cookie",
+        buyer_id="buyer-auto-empty-data",
+    )

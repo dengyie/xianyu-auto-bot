@@ -1,13 +1,14 @@
 # TODO
 
 ## In Progress
-- [ ] Stage, commit, and push phase 37 existing-order basic-info bypass seam coverage to the draft GitHub PR
+- [ ] Stage, commit, and push phase 38 data-card reservation seam coverage to the draft GitHub PR
 
 ## Next
+- [ ] Evaluate data-card reservation mark-sent and release behavior around `_mark_data_reservation_sent_if_needed(...)` and `_release_data_reservation_if_needed(...)`
 - [ ] Evaluate whether any broader route or service entrypoint still needs coverage beyond the now-covered runtime detail-refresh and message-handoff seams
-- [ ] Evaluate whether the next highest-value uncovered contract is the data-card reservation success/failure path in `_auto_delivery(...)`
 
 ## Done
+- [x] Stage, commit, and push phase 37 existing-order basic-info bypass seam coverage to the draft GitHub PR
 - [x] Add authz/cookie isolation/file token/system settings smoke coverage
 - [x] Add notification channel/template API regression tests
 - [x] Add keyword/default reply matching regression tests
@@ -47,3 +48,4 @@
 - [x] Add basic-order-info handler-failure seam coverage so `XianyuLive._auto_delivery(...)` still returns prepared delivery content when the post-write status helper raises
 - [x] Add basic-order-info write-failure seam coverage so `XianyuLive._auto_delivery(...)` still returns prepared delivery content when the initial write returns `False`
 - [x] Add existing-order basic-info bypass seam coverage so `XianyuLive._auto_delivery(...)` skips duplicate prewrite and handler side effects for persisted orders
+- [x] Add data-card reservation success/failure seam coverage so `XianyuLive._auto_delivery(...)` returns reserved content and metadata only when a reservation is available

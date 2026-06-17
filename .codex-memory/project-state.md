@@ -1,19 +1,21 @@
 # Current State Snapshot - 2026-06-17
 
 - Security hardening phase is implemented and smoke-tested.
-- Test coverage phases 1-37 are implemented for authz, lifecycle, delayed binding, ambiguity rejection, queue cleanup, terminal recent-fallback branches, selector disambiguation, enqueue-entry stale cleanup, bind-gap rejection, terminal discard behavior, refund-related terminal resolution paths, multi-update pending consumption, batch queue draining, mixed-success batch draining, mixed-result detail-fetched queue consumption, direct status-priority rollback protection, completed-terminal discard handling, shipped-terminal discard handling, failed direct-backfill fallback queueing, failed direct system backfill fallback queueing, direct cancelled system-message backfill success handling, ambiguous direct system backfill fallback queueing, ambiguous direct red-reminder backfill fallback queueing, missing-strong-key system-message fallthrough handling, missing-strong-key red-reminder fallthrough handling, runtime order-status seam propagation from `XianyuAutoAsync`, direct runtime handoff coverage for system-message and red-reminder status handlers, the dedicated terminal red-reminder runtime shortcut, the successful detail-refresh handler seam in `fetch_order_detail_info(...)`, the detail-refresh handler-failure isolation seam, the detail-refresh write-failure seam, the basic-order-info handler-failure isolation seam inside `_auto_delivery(...)`, the basic-order-info write-failure seam inside `_auto_delivery(...)`, and the existing-order basic-info bypass seam inside `_auto_delivery(...)`.
-- Test coverage phase 37 is implemented:
-  - `XianyuLive._auto_delivery(...)` now has direct smoke coverage proving existing orders skip basic-order-info prewrite and `handle_order_basic_info_status(...)`, while still returning prepared delivery content
+- Test coverage phases 1-38 are implemented for authz, lifecycle, delayed binding, ambiguity rejection, queue cleanup, terminal recent-fallback branches, selector disambiguation, enqueue-entry stale cleanup, bind-gap rejection, terminal discard behavior, refund-related terminal resolution paths, multi-update pending consumption, batch queue draining, mixed-success batch draining, mixed-result detail-fetched queue consumption, direct status-priority rollback protection, completed-terminal discard handling, shipped-terminal discard handling, failed direct-backfill fallback queueing, failed direct system backfill fallback queueing, direct cancelled system-message backfill success handling, ambiguous direct system backfill fallback queueing, ambiguous direct red-reminder fallback queueing, missing-strong-key fallthrough handling, runtime order-status seam propagation from `XianyuAutoAsync`, direct runtime handoff coverage, detail-refresh seams, basic-order-info seams inside `_auto_delivery(...)`, existing-order bypass, and data-card reservation success/failure handling.
+- Test coverage phase 38 is implemented:
+  - `XianyuLive._auto_delivery(...)` now has direct smoke coverage proving data-card reservation success returns the reserved line and reservation metadata
+  - the empty/reservation-failure branch returns a failed prepared-delivery result without fabricating pending-consume metadata
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_xianyu_order_status_runtime_seam.py -q` => 10 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 151 passed
-  - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager tests order_status_handler.py` => passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_xianyu_order_status_runtime_seam.py -q` => 12 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 153 passed
+  - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py tests order_status_handler.py` => passed
+  - `git diff --check` => passed
 - Production review status:
-  - phase-37 scope reviewed with `production-code-quality-review`
-  - no new P1/P2 findings identified in the phase-37 diff
+  - phase-38 scope reviewed with `production-code-quality-review`
+  - no new P1/P2 findings identified in the phase-38 diff
   - helper script still emits a pre-existing Windows GBK `UnicodeDecodeError` from its reader thread after returning usable JSON context
 - Environment note:
   - project `venv` currently lacks `pytest`, so validation fell back to the available host Python interpreter
 - Next testing priorities:
+  - evaluate data-card reservation mark-sent/release behavior around `_mark_data_reservation_sent_if_needed(...)` and `_release_data_reservation_if_needed(...)`
   - evaluate whether any broader route or service entrypoint still needs coverage beyond the now-covered runtime detail-refresh and message-handoff seams
-  - evaluate whether the next highest-value uncovered contract is the data-card reservation success/failure path in `_auto_delivery(...)`
