@@ -5811,7 +5811,7 @@ async def generate_qr_code(current_user: Dict[str, Any] = Depends(get_current_us
     try:
         log_with_user('info', "请求生成扫码登录二维码", current_user)
 
-        result = await qr_login_manager.generate_qr_code()
+        result = await qr_login_manager.generate_qr_code(user_id=current_user['user_id'])
 
         if result['success']:
             log_with_user('info', f"扫码登录二维码生成成功: {result['session_id']}", current_user)
@@ -5882,6 +5882,10 @@ async def check_qr_code_status(session_id: str, current_user: Dict[str, Any] = D
             qr_login_manager.cleanup_expired_sessions()
 
             # 获取会话状态
+            session = qr_login_manager.sessions.get(session_id)
+            if session and session.user_id is not None and session.user_id != current_user['user_id']:
+                return {'status': 'forbidden', 'message': '无权限访问该会话'}
+
             status_info = qr_login_manager.get_session_status(session_id)
             log_with_user('info', f"获取会话状态1111111: {status_info}", current_user)
             if status_info['status'] == 'success':

@@ -112,3 +112,36 @@ class TestAccounts:
         owner_check = client.get(f"/manual-cookie-import/check/{session_id}", headers=user_auth)
         assert owner_check.status_code == 200
         assert owner_check.json()["status"] == "processing"
+
+    def test_qr_login_session_is_forbidden_for_other_user(self, client, auth, user_auth, monkeypatch):
+        class FakeQrSession:
+            def __init__(self, session_id, user_id):
+                self.session_id = session_id
+                self.user_id = user_id
+                self.status = "waiting"
+                self.verification_url = None
+                self.screenshot_path = None
+                self.cookies = {}
+                self.unb = None
+
+            def is_expired(self):
+                return False
+
+        async def fake_generate_qr_code(*, user_id=None):
+            session_id = "qr_login_owner_only_session"
+            reply_server.qr_login_manager.sessions[session_id] = FakeQrSession(session_id, user_id)
+            return {"success": True, "session_id": session_id, "qr_code_url": "data:image/png;base64,stub"}
+
+        monkeypatch.setattr(reply_server.qr_login_manager, "generate_qr_code", fake_generate_qr_code)
+
+        generated = client.post("/qr-login/generate", headers=user_auth)
+        assert generated.status_code == 200
+        session_id = generated.json()["session_id"]
+
+        foreign_check = client.get(f"/qr-login/check/{session_id}", headers=auth)
+        assert foreign_check.status_code == 200
+        assert foreign_check.json()["status"] == "forbidden"
+
+        owner_check = client.get(f"/qr-login/check/{session_id}", headers=user_auth)
+        assert owner_check.status_code == 200
+        assert owner_check.json()["status"] == "waiting"

@@ -684,3 +684,22 @@
   - Reevaluate remaining high-level route/service coverage gaps outside delivery, refresh, history-sync, password-login, and manual-cookie-import.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-18 13:10
+- Task: Finish phase 47 smoke coverage for qr-login session ownership boundaries.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase47-design.md` before implementation.
+  - Extended `utils/qr_login.py` and `reply_server.py` so generated qr-login sessions retain an owner and the status route rejects foreign users.
+  - Extended `tests/smoke/test_accounts.py` with route-level coverage proving the qr-login owner boundary is enforced.
+  - Re-ran targeted account smoke tests, full smoke suite, compileall, diff hygiene, and production review for the phase-47 diff.
+- Results:
+  - Targeted account smoke tests: 9 passed.
+  - Full smoke suite: 164 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Production review: no new P1/P2 findings; status passed.
+- Next:
+  - Stage only the intentional phase-47 files, commit, and push the branch.
+  - Reevaluate remaining route/service coverage gaps outside delivery, refresh, history-sync, password-login, manual-cookie-import, and qr-login.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

@@ -52,8 +52,9 @@ class NotLoginError(Exception):
 class QRLoginSession:
     """二维码登录会话"""
 
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, user_id: Optional[int] = None):
         self.session_id = session_id
+        self.user_id = user_id
         self.status = 'waiting'  # waiting, scanned, success, expired, cancelled, verification_required
         self.qr_code_url = None
         self.qr_content = None
@@ -479,12 +480,12 @@ class QRLoginManager:
                 logger.error("获取登录参数时连接错误")
                 raise
     
-    async def generate_qr_code(self) -> Dict[str, Any]:
+    async def generate_qr_code(self, user_id: Optional[int] = None) -> Dict[str, Any]:
         """生成二维码"""
         try:
             # 创建新的会话
             session_id = str(uuid.uuid4())
-            session = QRLoginSession(session_id)
+            session = QRLoginSession(session_id, user_id=user_id)
 
             # 1. 获取m_h5_tk
             await self._get_mh5tk(session)

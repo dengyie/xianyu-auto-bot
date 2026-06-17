@@ -204,3 +204,8 @@
 - Decision: Add route-level smoke coverage for foreign-user access to `GET /manual-cookie-import/check/{session_id}`.
 - Rationale: The manual cookie import flow uses the same session-scoped status pattern as password-login, but current smoke coverage only checked request validation. A focused ownership test is the cheapest way to prevent regressions that would expose another user's import-session verification state.
 - Impact: The suite now explicitly proves manual-cookie-import session status stays scoped to the creating user.
+
+## 2026-06-18 - Phase 47 should lock down qr-login session ownership boundaries
+- Decision: Persist the creating user on generated qr-login sessions and reject foreign users from `GET /qr-login/check/{session_id}`.
+- Rationale: The standard QR login flow already had a session status endpoint, but it lacked an ownership boundary even though the flow is user-scoped like password-login and qr-login-lite. Adding the owner field and gate keeps the live session status from leaking across accounts.
+- Impact: The suite now explicitly proves qr-login session status stays scoped to the creating user.
