@@ -124,3 +124,8 @@
 - Decision: Use a non-terminal red-reminder fixture for the runtime fallback seam test instead of `交易关闭`.
 - Rationale: `交易关闭` is consumed by an earlier dedicated red-reminder order-status branch inside `handle_message(...)`, so it cannot meaningfully validate the later `handle_red_reminder_message(...)` fallback seam. The adjusted fixture keeps the test aligned with the actual branch under review.
 - Impact: Phase-30 runtime seam coverage now exercises the intended fallback path directly instead of asserting on a branch that production control flow never reaches.
+
+## 2026-06-17 - Phase 31 should explicitly cover the terminal red-reminder runtime shortcut
+- Decision: Add smoke coverage for the early `交易关闭` red-reminder branch in `XianyuLive.handle_message(...)` that calls `handle_red_reminder_order_status(...)`.
+- Rationale: After phase 30 proved the later direct status-handler seams, the dedicated terminal shortcut became the remaining high-value runtime path in the same area without explicit smoke coverage. Covering it closes the last obvious runtime handoff gap before moving to broader route-level questions.
+- Impact: The suite now proves the live message path handles terminal red reminders through the intended shortcut branch and does not accidentally route them through the later fallback seams.

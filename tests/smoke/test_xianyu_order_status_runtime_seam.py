@@ -219,3 +219,37 @@ async def test_handle_message_passes_match_context_into_red_reminder_runtime_fal
         "item_id": "item-runtime-red",
     }
     assert websocket.sent_payloads
+
+
+@pytest.mark.asyncio
+async def test_handle_message_uses_terminal_red_reminder_runtime_shortcut():
+    order_status_handler = mock.Mock()
+    live = _make_runtime_live(order_status_handler)
+
+    decoded_message = _make_runtime_status_message(
+        reminder_content="交易关闭提醒",
+        sender_user_id="self-user",
+        sid="chat-runtime-terminal-red@goofish",
+        item_id="item-runtime-terminal-red",
+        red_reminder="交易关闭",
+    )
+    message_data = _make_sync_message_data(decoded_message)
+    websocket = _FakeWebSocket()
+
+    with mock.patch.object(live, "is_sync_package", return_value=True):
+        await live.handle_message(message_data, websocket, msg_id="phase31-terminal-red")
+
+    order_status_handler.handle_red_reminder_order_status.assert_called_once()
+    _, kwargs = order_status_handler.handle_red_reminder_order_status.call_args
+    assert kwargs["red_reminder"] == "交易关闭"
+    assert kwargs["message"] == decoded_message
+    assert kwargs["user_id"] == "self-user"
+    assert kwargs["cookie_id"] == "runtime-seam-cookie"
+    assert kwargs["match_context"] == {
+        "sid": None,
+        "buyer_id": "self-user",
+        "item_id": "item-runtime-terminal-red",
+    }
+    order_status_handler.handle_system_message.assert_not_called()
+    order_status_handler.handle_red_reminder_message.assert_not_called()
+    assert websocket.sent_payloads

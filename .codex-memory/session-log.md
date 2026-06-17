@@ -391,3 +391,20 @@
   - Stage only the intentional phase-30 files, commit, and push the branch to update the draft PR.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-17 23:25
+- Task: Finish phase 31 runtime seam coverage for the dedicated terminal red-reminder shortcut.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase31-design.md` before implementation.
+  - Extended `tests/smoke/test_xianyu_order_status_runtime_seam.py`.
+  - Covered the early `交易关闭` red-reminder branch in `XianyuLive.handle_message(...)`, proving it calls `handle_red_reminder_order_status(...)` with the expected runtime context and does not fall through to the later status-handler seams.
+  - Re-ran targeted phase-31 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-31 tests: 4 passed.
+  - Full smoke suite: 145 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-31 diff review.
+- Next:
+  - Stage only the intentional phase-31 files, commit, and push the branch to update the draft PR.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.
