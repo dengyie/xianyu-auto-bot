@@ -912,3 +912,122 @@ def test_red_reminder_enqueue_cleans_stale_pending_entries_before_appending(mock
         "fresh-red-order",
         "temp_200000_12345678",
     ]
+
+
+def test_terminal_system_message_remains_queued_when_bind_gap_is_too_large(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["gap-system-order"] = {
+        "order_id": "gap-system-order",
+        "order_status": "processing",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-gap-system",
+        "sid": "chat-gap-system@goofish",
+        "buyer_id": "buyer-gap-system",
+        "item_id": "item-gap-system",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+    handler._pending_system_messages["cookie-gap-system"] = [
+        {
+            "message": _make_message(10_000, system=True),
+            "send_message": "娴ｇ姴鍑￠崣鎴ｆ彛",
+            "cookie_id": "cookie-gap-system",
+            "msg_time": "19:00:00",
+            "new_status": "shipped",
+            "temp_order_id": "temp_gap_system",
+            "message_hash": 1001,
+            "sid": "chat-gap-system@goofish",
+            "buyer_id": "buyer-gap-system",
+            "item_id": "item-gap-system",
+            "message_timestamp_ms": 10_000,
+            "timestamp": 70.0,
+        }
+    ]
+    handler.pending_updates["temp_gap_system"] = [
+        {
+            "new_status": "shipped",
+            "cookie_id": "cookie-gap-system",
+            "context": "queued shipped system message",
+            "timestamp": 70.0,
+        }
+    ]
+
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    handler.on_order_id_extracted(
+        order_id="gap-system-order",
+        cookie_id="cookie-gap-system",
+        message=_make_message(200_000),
+        match_context={
+            "message_hash": 1001,
+            "sid": "chat-gap-system@goofish",
+            "buyer_id": "buyer-gap-system",
+            "item_id": "item-gap-system",
+            "message_timestamp_ms": 200_000,
+        },
+    )
+
+    assert fake_db.orders["gap-system-order"]["order_status"] == "processing"
+    assert "cookie-gap-system" in handler._pending_system_messages
+    assert len(handler._pending_system_messages["cookie-gap-system"]) == 1
+    assert handler._pending_system_messages["cookie-gap-system"][0]["temp_order_id"] == "temp_gap_system"
+    assert "temp_gap_system" in handler.pending_updates
+
+
+def test_terminal_red_reminder_remains_queued_when_bind_gap_is_too_large(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["gap-red-order"] = {
+        "order_id": "gap-red-order",
+        "order_status": "processing",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-gap-red",
+        "sid": "chat-gap-red@goofish",
+        "buyer_id": "buyer-gap-red",
+        "item_id": "item-gap-red",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+    handler._pending_red_reminder_messages["cookie-gap-red"] = [
+        {
+            "message": _make_message(11_000),
+            "red_reminder": "浜ゆ槗鍏抽棴",
+            "user_id": "user-gap-red",
+            "cookie_id": "cookie-gap-red",
+            "msg_time": "19:10:00",
+            "new_status": "cancelled",
+            "temp_order_id": "temp_gap_red",
+            "message_hash": 1101,
+            "sid": "chat-gap-red@goofish",
+            "buyer_id": "buyer-gap-red",
+            "item_id": "item-gap-red",
+            "message_timestamp_ms": 11_000,
+            "timestamp": 71.0,
+        }
+    ]
+    handler.pending_updates["temp_gap_red"] = [
+        {
+            "new_status": "cancelled",
+            "cookie_id": "cookie-gap-red",
+            "context": "queued cancelled red reminder",
+            "timestamp": 71.0,
+        }
+    ]
+
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    handler.on_order_id_extracted(
+        order_id="gap-red-order",
+        cookie_id="cookie-gap-red",
+        message=_make_message(250_000),
+        match_context={
+            "message_hash": 1101,
+            "sid": "chat-gap-red@goofish",
+            "buyer_id": "buyer-gap-red",
+            "item_id": "item-gap-red",
+            "message_timestamp_ms": 250_000,
+        },
+    )
+
+    assert fake_db.orders["gap-red-order"]["order_status"] == "processing"
+    assert "cookie-gap-red" in handler._pending_red_reminder_messages
+    assert len(handler._pending_red_reminder_messages["cookie-gap-red"]) == 1
+    assert handler._pending_red_reminder_messages["cookie-gap-red"][0]["temp_order_id"] == "temp_gap_red"
+    assert "temp_gap_red" in handler.pending_updates

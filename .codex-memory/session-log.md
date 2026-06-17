@@ -99,3 +99,19 @@
   - Stage only the intentional phase-12 files, commit, and push the branch to update the draft PR.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-17 14:35
+- Task: Finish phase 13 bind-gap protection coverage for delayed terminal message binding.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase13-design.md` before implementation.
+  - Extended `tests/smoke/test_order_status_message_binding.py` with system-message and red-reminder coverage for the oversized bind-gap rejection path.
+  - Re-ran targeted phase-13 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-13 tests: 16 passed.
+  - Full smoke suite: 125 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-13 diff review.
+- Next:
+  - Stage only the intentional phase-13 files, commit, and push the branch to update the draft PR.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

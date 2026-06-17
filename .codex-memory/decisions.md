@@ -29,3 +29,8 @@
 - Decision: Invoke `clear_old_pending_updates()` inside the unresolved enqueue paths for `handle_system_message(...)` and `handle_red_reminder_message(...)` before appending a new pending queue item.
 - Rationale: The project already had stale cleanup logic and a direct helper test, but the real enqueue entrypoints were still able to accumulate expired in-memory state until some external caller remembered to clean it. Pulling cleanup into the entrypoints matches the actual runtime flow and closes that gap.
 - Impact: Stale pending updates, system messages, and red reminders are now trimmed opportunistically during new unresolved message intake, and phase-12 smoke tests lock that behavior in.
+
+## 2026-06-17 - Phase 13 should lock down bind-gap rejection explicitly
+- Decision: Add direct smoke coverage for the branch where a uniquely matched terminal pending message is refused because its timestamp gap from the newly extracted order exceeds `pending_terminal_bind_max_gap_seconds`.
+- Rationale: This guard prevents stale terminal updates from being rebound onto later orders that happen to share match keys, but it was only indirectly protected before. A focused regression test is the cheapest way to preserve that safety behavior.
+- Impact: System-message and red-reminder terminal queues now both guarantee that oversized bind gaps keep the pending message queued instead of silently rebinding it.
