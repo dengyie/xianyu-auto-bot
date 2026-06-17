@@ -262,3 +262,8 @@
 - Decision: Add smoke coverage for `GET /keywords-with-item-id/{cid}` and `POST /keywords-with-item-id/{cid}` so foreign users cannot read or overwrite another user's item-scoped keyword rules.
 - Rationale: The plain `/keywords/{cid}` ownership surface was already covered, but the item-scoped keyword variant uses a separate request model and response shape. A focused regression is the cheapest way to keep both read and mutation semantics aligned without changing runtime behavior.
 - Impact: Item-scoped keyword reads and writes are now explicitly guarded by ownership, and the smoke suite covers both foreign-user denial and owner success.
+
+## 2026-06-18 - Phase 61 should lock cookie remark ownership
+- Decision: Add smoke coverage for `GET /cookies/{cid}/remark` and `PUT /cookies/{cid}/remark` so foreign users cannot read or overwrite another user's account remark.
+- Rationale: The remark surface is a small but distinct account-scoped endpoint pair, and it had no direct regression coverage even though the route already enforces ownership. A single focused test keeps the access model consistent without broadening behavior.
+- Impact: Cookie remarks are now explicitly guarded by ownership, and the smoke suite covers both foreign-user denial and owner success.

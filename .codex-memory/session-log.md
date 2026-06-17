@@ -895,3 +895,20 @@
   - Stage and commit the phase-60 change set.
 - Blockers:
   - `gh auth status` still reports an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` is completed interactively.
+
+## 2026-06-18 21:35
+- Task: Add the next focused regression for cookie remark ownership.
+- Actions:
+  - Reloaded memory and reviewed the cookie remark route cluster.
+  - Confirmed `GET /cookies/{cid}/remark` and `PUT /cookies/{cid}/remark` both enforce cookie ownership in `reply_server.py`.
+  - Added `.codex-memory/test-coverage-phase61-design.md` and a smoke regression in `tests/smoke/test_cookie_access_control.py` covering foreign-user denial and owner success for remark read/write.
+  - Re-ran targeted cookie-access smoke tests, full smoke suite, compileall, diff hygiene, and production review context collection.
+- Results:
+  - Targeted cookie-access smoke tests: 6 passed.
+  - Full smoke suite: 179 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+- Next:
+  - Stage and commit the phase-61 change set.
+- Blockers:
+  - `gh auth status` still reports an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` is completed interactively.

@@ -75,3 +75,31 @@ def test_duplicate_cookie_id_owned_by_other_user_is_rejected(client, auth, user_
     )
 
     assert resp.status_code == 400
+
+
+def test_cookie_remark_is_scoped_to_owner(client, auth, user_auth):
+    client.post(
+        "/cookies",
+        headers=auth,
+        json={"id": "admin_remark_cookie", "value": "unb=admin"},
+    )
+
+    foreign_read = client.get("/cookies/admin_remark_cookie/remark", headers=user_auth)
+    foreign_write = client.put(
+        "/cookies/admin_remark_cookie/remark",
+        headers=user_auth,
+        json={"remark": "stolen remark"},
+    )
+    owner_write = client.put(
+        "/cookies/admin_remark_cookie/remark",
+        headers=auth,
+        json={"remark": "admin remark"},
+    )
+    owner_read = client.get("/cookies/admin_remark_cookie/remark", headers=auth)
+
+    assert foreign_read.status_code == 403
+    assert foreign_write.status_code == 403
+    assert owner_write.status_code == 200
+    assert owner_write.json()["remark"] == "admin remark"
+    assert owner_read.status_code == 200
+    assert owner_read.json()["remark"] == "admin remark"
