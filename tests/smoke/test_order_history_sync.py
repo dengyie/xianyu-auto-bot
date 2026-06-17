@@ -72,6 +72,12 @@ class _SlowHistoryFetcher(_FakeHistoryFetcher):
         return await _FakeHistoryFetcher.fetch_recent_orders(self)
 
 
+class _FailingDetailHistoryFetcher(_FakeHistoryFetcher):
+    async def fetch_order_detail(self, order_id, force_refresh=True):
+        del order_id, force_refresh
+        raise RuntimeError("detail fetch boom")
+
+
 def _wait_for_job_state(job_id, expected_status, timeout=5.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -136,3 +142,31 @@ def test_history_sync_success_persists_orders_and_completes(client, user_auth, m
     order = reply_server.db_manager.get_order_by_id("hist-order-1")
     assert order["cookie_id"] == "history_cookie"
     assert order["order_status"] == "pending_ship"
+
+
+def test_history_sync_falls_back_to_candidate_when_detail_refresh_fails(client, user_auth, mocker):
+    _add_cookie(client, user_auth, "history_cookie")
+    mocker.patch("utils.order_history_sync.OrderHistoryPageFetcher", _FailingDetailHistoryFetcher)
+
+    create = client.post(
+        "/api/orders/history-sync",
+        headers=user_auth,
+        json={
+            "cookie_id": "history_cookie",
+            "start_date": "2026-06-16",
+            "end_date": "2026-06-18",
+            "max_orders": 5,
+            "fetch_details": True,
+        },
+    )
+    assert create.status_code == 200
+    job_id = create.json()["data"]["job_id"]
+
+    job = _wait_for_job_state(job_id, "completed")
+    assert job["orders_saved"] == 1
+    assert any("详情刷新失败" in warning for warning in job["warnings"])
+
+    order = reply_server.db_manager.get_order_by_id("hist-order-1")
+    assert order["cookie_id"] == "history_cookie"
+    assert order["order_status"] == "pending_ship"
+    assert order["buyer_id"] == "hist-buyer-1"
