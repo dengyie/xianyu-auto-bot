@@ -646,3 +646,22 @@
   - Reevaluate remaining high-level route/service coverage gaps outside delivery, refresh, and history-sync.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-18 11:20
+- Task: Finish phase 45 smoke coverage for password-login session ownership boundaries.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase45-design.md` before implementation.
+  - Extended `tests/smoke/test_accounts.py` with route-level coverage for foreign-user access to password-login status and cancel endpoints.
+  - Verified that another user receives forbidden responses on both endpoints while the session owner can still query the session successfully.
+  - Re-ran targeted phase-45 tests, full smoke suite, compileall, diff hygiene, and production review for the phase-45 diff.
+- Results:
+  - Targeted phase-45 tests: 7 passed.
+  - Full smoke suite: 162 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Production review: no new P1/P2 findings; score 97/100; status passed.
+- Next:
+  - Stage only the intentional phase-45 files, commit, and push the branch.
+  - Reevaluate remaining high-level route/service coverage gaps outside delivery, refresh, history-sync, and password-login.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

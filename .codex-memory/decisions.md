@@ -194,3 +194,8 @@
 - Decision: Add route-level smoke coverage for foreign-user access to `GET /api/orders/history-sync/{job_id}` and `POST /api/orders/history-sync/{job_id}/cancel`.
 - Rationale: The history-sync route cluster already had lifecycle and business-result coverage, but the background job object itself carries account scope, progress, and warning details. A focused ownership test is the cheapest way to prevent regressions that would expose or cancel another user's sync task.
 - Impact: The suite now explicitly proves history-sync job status and cancellation stay scoped to the creating user.
+
+## 2026-06-18 - Phase 45 should lock down password-login session ownership boundaries
+- Decision: Add route-level smoke coverage for foreign-user access to `GET /password-login/check/{session_id}` and `POST /password-login/cancel/{session_id}`.
+- Rationale: The password-login flow already has session lifecycle code, but the route surfaces live verification and error details and can mutate shared session state on cancel. A focused ownership test is the cheapest way to prevent regressions that would expose or cancel another user's login session.
+- Impact: The suite now explicitly proves password-login session status and cancellation stay scoped to the creating user.

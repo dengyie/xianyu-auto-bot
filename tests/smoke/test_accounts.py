@@ -1,6 +1,8 @@
 """Smoke tests for 闲鱼 account management (Cookie CRUD)."""
 import pytest
 
+import reply_server
+
 
 class TestAccounts:
     """Cookie / account management smoke tests."""
@@ -67,3 +69,27 @@ class TestAccounts:
         resp = client.post("/manual-cookie-import", json={}, headers=auth)
         # FastAPI validation error
         assert resp.status_code == 422
+
+    def test_password_login_session_is_forbidden_for_other_user(self, client, auth, user_auth):
+        session_id = "password_login_owner_only_session"
+        reply_server.password_login_sessions[session_id] = {
+            "session_id": session_id,
+            "user_id": 2,
+            "account_id": "owner-cookie",
+            "status": "processing",
+            "timestamp": 9999999999,
+            "error": None,
+        }
+
+        check = client.get(f"/password-login/check/{session_id}", headers=auth)
+        assert check.status_code == 200
+        assert check.json()["status"] == "forbidden"
+
+        cancel = client.post(f"/password-login/cancel/{session_id}", headers=auth)
+        assert cancel.status_code == 200
+        assert cancel.json()["success"] is False
+        assert cancel.json()["status"] == "forbidden"
+
+        owner_check = client.get(f"/password-login/check/{session_id}", headers=user_auth)
+        assert owner_check.status_code == 200
+        assert owner_check.json()["status"] == "processing"
