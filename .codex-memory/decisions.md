@@ -290,3 +290,7 @@
 - Decision: Add smoke coverage for `GET /cookies/{cid}/comment-templates` and `POST /cookies/{cid}/comment-templates` so foreign users cannot list or create templates under another user's cookie.
 - Rationale: Phase 65 closed template-id mutation risks, but the list/create route pair also needs direct regression coverage for the route-level cookie owner gate.
 - Impact: Comment-template list/create ownership is now explicitly covered for foreign-user denial and owner success.
+## 2026-06-18 - Phase 67 should lock typed keyword reads
+- Decision: Add smoke coverage for `GET /keywords-with-type/{cid}` so foreign users cannot read another user's typed keyword rules.
+- Rationale: Plain keyword and item-scoped keyword routes already had owner-boundary coverage, but the typed keyword read endpoint has a distinct response path and owner check.
+- Impact: Typed keyword reads are now explicitly covered for foreign-user denial and owner success.

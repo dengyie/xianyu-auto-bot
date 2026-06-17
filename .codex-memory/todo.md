@@ -4,6 +4,7 @@
 ## Next
 - [ ] Evaluate whether the remaining uncovered risk now sits outside the current file/download, notification, account, keyword, and cookie-setting ownership clusters
 ## Done
+- [x] Stage and commit phase 67 typed keyword read ownership coverage
 - [x] Stage and commit phase 66 comment-template list/create ownership coverage
 - [x] Stage and commit phase 65 comment-template id ownership fix
 - [x] Stage and commit phase 64 cookie auto-comment ownership coverage
@@ -82,3 +83,4 @@
 - [x] Add cookie auto-comment ownership coverage so foreign users cannot read or overwrite another user's auto-comment setting
 - [x] Add comment-template id ownership coverage so own-cid plus foreign-template-id cannot mutate another cookie's template
 - [x] Add comment-template list/create ownership coverage so foreign users cannot list or create templates under another user's cookie
+- [x] Add typed keyword read ownership coverage so foreign users cannot read another user's typed keyword rules

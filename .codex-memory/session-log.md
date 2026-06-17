@@ -1000,3 +1000,20 @@
   - Continue evaluating remaining owner/scoped routes for focused smoke gaps.
 - Blockers:
   - `gh auth status` still reports an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` can complete.
+## 2026-06-18 23:58
+- Task: Add phase 67 smoke coverage for typed keyword ownership.
+- Actions:
+  - Reviewed `GET /keywords-with-type/{cid}` and confirmed the route already checks cookie ownership.
+  - Added `.codex-memory/test-coverage-phase67-design.md` and a smoke regression in `tests/smoke/test_keywords_default_replies.py` covering foreign-user denial and owner success.
+  - Re-ran targeted keyword/default-reply smoke tests, full smoke suite, compileall, diff hygiene, and production review context collection.
+- Results:
+  - Targeted keyword/default-reply smoke tests: 7 passed.
+  - Full smoke suite: 185 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 95/100, no severe findings.
+- Next:
+  - Stage and commit the phase-67 change set.
+  - Continue evaluating remaining owner/scoped routes for focused smoke gaps.
+- Blockers:
+  - `gh auth status` still reports an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` can complete.

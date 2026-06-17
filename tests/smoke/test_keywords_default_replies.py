@@ -148,3 +148,26 @@ def test_keywords_with_item_id_rejects_foreign_cookie_access(client, auth, user_
     assert owner_read.json()[0]["reply"] == "Hi there"
     assert owner_read.json()[0]["item_id"] == "item-1"
     assert owner_read.json()[0]["type"] == "text"
+
+
+def test_keywords_with_type_rejects_foreign_cookie_access(client, auth, user_auth):
+    _add_cookie(client, auth, "admin_keywords_type_cookie")
+
+    owner_update = client.post(
+        "/keywords-with-item-id/admin_keywords_type_cookie",
+        headers=auth,
+        json={
+            "keywords": [
+                {"keyword": "typed", "reply": "Typed reply", "item_id": ""},
+            ]
+        },
+    )
+    foreign_read = client.get("/keywords-with-type/admin_keywords_type_cookie", headers=user_auth)
+    owner_read = client.get("/keywords-with-type/admin_keywords_type_cookie", headers=auth)
+
+    assert owner_update.status_code == 200
+    assert foreign_read.status_code == 404
+    assert owner_read.status_code == 200
+    assert owner_read.json()[0]["keyword"] == "typed"
+    assert owner_read.json()[0]["reply"] == "Typed reply"
+    assert owner_read.json()[0]["type"] == "text"
