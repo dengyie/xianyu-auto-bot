@@ -474,6 +474,119 @@ def test_terminal_recent_fallback_ambiguity_keeps_pending_system_queue(mocker):
     assert len(handler._pending_system_messages["cookie-7"]) == 2
 
 
+def test_terminal_recent_fallback_binds_single_matching_red_reminder(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["recent-red-order"] = {
+        "order_id": "recent-red-order",
+        "order_status": "processing",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-8",
+        "sid": "chat-8@goofish",
+        "buyer_id": "buyer-8",
+        "item_id": "item-8",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+    handler._pending_red_reminder_messages["cookie-8"] = [
+        {
+            "message": _make_message(8_000),
+            "red_reminder": "交易关闭",
+            "user_id": "user-8",
+            "cookie_id": "cookie-8",
+            "msg_time": "17:00:00",
+            "new_status": "cancelled",
+            "temp_order_id": "temp_red_recent_single",
+            "message_hash": 801,
+            "sid": "chat-8@goofish",
+            "buyer_id": None,
+            "item_id": None,
+            "message_timestamp_ms": 8_000,
+            "timestamp": 50.0,
+        }
+    ]
+
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    handler.on_order_id_extracted(
+        order_id="recent-red-order",
+        cookie_id="cookie-8",
+        message=_make_message(8_400),
+        match_context={
+            "message_hash": 899,
+            "sid": "chat-8@goofish",
+            "buyer_id": "buyer-8",
+            "item_id": "item-8",
+            "message_timestamp_ms": 8_400,
+        },
+    )
+
+    assert fake_db.orders["recent-red-order"]["order_status"] == "cancelled"
+    assert "cookie-8" not in handler._pending_red_reminder_messages
+
+
+def test_terminal_recent_fallback_ambiguity_keeps_pending_red_reminder_queue(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["recent-red-order"] = {
+        "order_id": "recent-red-order",
+        "order_status": "processing",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-9",
+        "sid": "chat-9@goofish",
+        "buyer_id": "buyer-9",
+        "item_id": "item-9",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+    handler._pending_red_reminder_messages["cookie-9"] = [
+        {
+            "message": _make_message(9_000),
+            "red_reminder": "交易关闭",
+            "user_id": "user-9",
+            "cookie_id": "cookie-9",
+            "msg_time": "18:00:00",
+            "new_status": "cancelled",
+            "temp_order_id": "temp_red_recent_1",
+            "message_hash": 901,
+            "sid": "chat-9@goofish",
+            "buyer_id": None,
+            "item_id": None,
+            "message_timestamp_ms": 9_000,
+            "timestamp": 60.0,
+        },
+        {
+            "message": _make_message(9_100),
+            "red_reminder": "交易关闭",
+            "user_id": "user-9",
+            "cookie_id": "cookie-9",
+            "msg_time": "18:00:01",
+            "new_status": "cancelled",
+            "temp_order_id": "temp_red_recent_2",
+            "message_hash": 902,
+            "sid": "chat-9@goofish",
+            "buyer_id": None,
+            "item_id": None,
+            "message_timestamp_ms": 9_100,
+            "timestamp": 61.0,
+        },
+    ]
+
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    handler.on_order_id_extracted(
+        order_id="recent-red-order",
+        cookie_id="cookie-9",
+        message=_make_message(9_400),
+        match_context={
+            "message_hash": 999,
+            "sid": "chat-9@goofish",
+            "buyer_id": "buyer-9",
+            "item_id": "item-9",
+            "message_timestamp_ms": 9_400,
+        },
+    )
+
+    assert fake_db.orders["recent-red-order"]["order_status"] == "processing"
+    assert len(handler._pending_red_reminder_messages["cookie-9"]) == 2
+
+
 def test_cleanup_expired_pending_updates_removes_only_stale_entries(mocker):
     handler = order_status_handler.OrderStatusHandler()
     handler.pending_updates = {
