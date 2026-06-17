@@ -23,6 +23,18 @@ from .security import generate_initial_admin_password, hash_user_password
 class DBBase:
     """base"""
 
+    _INVALID_BUYER_IDS = {
+        "",
+        "unknown",
+        "unknown_buyer",
+        "anonymous",
+        "system",
+        "n/a",
+        "na",
+        "null",
+        "none",
+    }
+
     def __init__(self, db_path: str = None):
         """初始化数据库连接和表结构"""
         # 支持环境变量配置数据库路径
@@ -1999,6 +2011,7 @@ Cookie数量: {cookie_count}
             except Exception as e:
                 logger.error(f"获取表数据失败: {table_name} - {e}")
                 return [], []
+    @staticmethod
     def _is_valid_buyer_id(buyer_id) -> bool:
         """检查 buyer_id 是否为有效值（非占位符）"""
         if not buyer_id:
@@ -2006,7 +2019,7 @@ Cookie数量: {cookie_count}
         normalized_buyer_id = str(buyer_id).strip()
         if normalized_buyer_id.endswith('@goofish'):
             normalized_buyer_id = normalized_buyer_id.split('@')[0].strip()
-        if normalized_buyer_id in DBManager._INVALID_BUYER_IDS:
+        if normalized_buyer_id in DBBase._INVALID_BUYER_IDS:
             return False
         if normalized_buyer_id.isdigit() and len(normalized_buyer_id) <= 2:
             return False

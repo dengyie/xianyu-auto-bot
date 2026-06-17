@@ -54,6 +54,12 @@ def _fake_cookie_manager():
         def has_live_instance(self, cid):
             return False
 
+        def get_xianyu_instance(self, cid):
+            return None
+
+        def get_ws_client(self, cid):
+            return None
+
     cm.manager = _FakeManager()
     reply_server.cookie_manager.manager = cm.manager
     yield cm.manager

@@ -1135,7 +1135,7 @@ class DBOrdersMixin:
                         update_fields.append("item_id = ?")
                         update_values.append(item_id)
                     if buyer_id is not None:
-                        if self._is_valid_buyer_id(buyer_id):
+                        if DBBase._is_valid_buyer_id(buyer_id):
                             update_fields.append("buyer_id = ?")
                             update_values.append(buyer_id)
                         else:
@@ -1203,7 +1203,7 @@ class DBOrdersMixin:
                         logger.info(f"更新订单信息: {order_id}")
                 else:
                     # 插入新订单时，净化无效 buyer_id
-                    sanitized_buyer_id = buyer_id if self._is_valid_buyer_id(buyer_id) else None
+                    sanitized_buyer_id = buyer_id if DBBase._is_valid_buyer_id(buyer_id) else None
                     insert_fields = [
                         'order_id', 'item_id', 'buyer_id', 'buyer_nick', 'sid', 'spec_name', 'spec_value',
                         'spec_name_2', 'spec_value_2', 'quantity', 'amount', 'order_status', 'cookie_id'
