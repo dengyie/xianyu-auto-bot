@@ -1,6 +1,7 @@
 """Smoke tests for Xianyu runtime order-status wiring."""
 
 import base64
+import collections
 import json
 from unittest import mock
 
@@ -77,6 +78,31 @@ def _make_runtime_live(order_status_handler):
 
     live.fetch_order_detail_info = fake_fetch_order_detail_info
     live._maybe_force_refresh_order_detail_for_signal = fake_maybe_force_refresh_order_detail_for_signal
+    return live
+
+
+def _make_detail_refresh_live(order_status_handler):
+    live = XianyuLive.__new__(XianyuLive)
+    live.cookie_id = "runtime-detail-cookie"
+    live.cookies_str = "unb=runtime-detail-cookie; cookie2=test"
+    live.order_status_handler = order_status_handler
+    live.order_detail_retry_tasks = {}
+    live._order_detail_locks = collections.defaultdict(mock.AsyncMock)
+    live._order_detail_lock_times = {}
+    live._safe_str = lambda exc: str(exc)
+    live._apply_bargain_amount_override = (
+        lambda order_id, item_id, amount, amount_source, existing_order=None, item_config=None: (amount, amount_source)
+    )
+    live._should_reject_order_detail_status_update = lambda **_kwargs: False
+    live._should_accept_order_detail_status_correction = lambda *_args, **_kwargs: False
+    live._resolve_external_order_status = lambda current_status, incoming_status, source: incoming_status
+    live._select_buyer_identity_for_order_write = (
+        lambda order_id, **kwargs: (
+            kwargs.get("incoming_buyer_id"),
+            kwargs.get("incoming_buyer_nick"),
+            False,
+        )
+    )
     return live
 
 
@@ -253,3 +279,85 @@ async def test_handle_message_uses_terminal_red_reminder_runtime_shortcut():
     order_status_handler.handle_system_message.assert_not_called()
     order_status_handler.handle_red_reminder_message.assert_not_called()
     assert websocket.sent_payloads
+
+
+@pytest.mark.asyncio
+async def test_fetch_order_detail_info_bridges_successful_refresh_into_handler_followups(mocker):
+    order_status_handler = mock.Mock()
+    order_status_handler.handle_order_detail_fetched_status.return_value = True
+    live = _make_detail_refresh_live(order_status_handler)
+
+    fetched_detail = {
+        "title": "detail title",
+        "order_status": "shipped",
+        "order_status_source": "structured",
+        "spec_parse_mode": "no_spec",
+        "quantity": "2",
+        "amount": "18.50",
+        "amount_source": "structured",
+        "platform_created_at": "2026-06-17 08:00:00",
+        "platform_paid_at": "2026-06-17 08:05:00",
+        "platform_completed_at": None,
+    }
+
+    fetch_order_detail_simple = mock.AsyncMock(return_value=fetched_detail)
+    mocker.patch("utils.order_detail_fetcher.fetch_order_detail_simple", fetch_order_detail_simple)
+
+    fake_db = mock.Mock()
+    fake_db.get_item_info.return_value = None
+    fake_db.get_order_by_id.return_value = {
+        "order_id": "detail-order-1",
+        "buyer_id": "buyer-detail-1",
+        "buyer_nick": "detail buyer",
+        "order_status": "pending_ship",
+        "amount": "18.50",
+    }
+    fake_db._normalize_order_status.side_effect = lambda value: value
+    fake_db.get_cookie_by_id.return_value = {"id": "runtime-detail-cookie", "value": "cookie"}
+    fake_db.insert_or_update_order.return_value = True
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    result = await live.fetch_order_detail_info(
+        order_id="detail-order-1",
+        item_id="detail-item-1",
+        buyer_id="buyer-detail-1",
+        sid="detail-chat-1@goofish",
+        buyer_nick="detail buyer",
+        buyer_id_source="message",
+    )
+
+    assert result == fetched_detail
+    fetch_order_detail_simple.assert_awaited_once_with(
+        "detail-order-1",
+        "unb=runtime-detail-cookie; cookie2=test",
+        headless=True,
+        force_refresh=False,
+        cookie_id_for_log="runtime-detail-cookie",
+    )
+
+    fake_db.insert_or_update_order.assert_called_once()
+    _, kwargs = fake_db.insert_or_update_order.call_args
+    assert kwargs["order_id"] == "detail-order-1"
+    assert kwargs["item_id"] == "detail-item-1"
+    assert kwargs["buyer_id"] == "buyer-detail-1"
+    assert kwargs["buyer_nick"] == "detail buyer"
+    assert kwargs["sid"] == "detail-chat-1@goofish"
+    assert kwargs["cookie_id"] == "runtime-detail-cookie"
+    assert kwargs["order_status"] == "shipped"
+    assert kwargs["quantity"] == "2"
+    assert kwargs["amount"] == "18.50"
+
+    order_status_handler.handle_order_detail_fetched_status.assert_called_once_with(
+        order_id="detail-order-1",
+        cookie_id="runtime-detail-cookie",
+        context="订单详情已拉取",
+    )
+    order_status_handler.on_order_details_fetched.assert_called_once_with("detail-order-1")
+    assert order_status_handler.method_calls == [
+        mock.call.handle_order_detail_fetched_status(
+            order_id="detail-order-1",
+            cookie_id="runtime-detail-cookie",
+            context="订单详情已拉取",
+        ),
+        mock.call.on_order_details_fetched("detail-order-1"),
+    ]

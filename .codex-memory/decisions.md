@@ -129,3 +129,8 @@
 - Decision: Add smoke coverage for the early `交易关闭` red-reminder branch in `XianyuLive.handle_message(...)` that calls `handle_red_reminder_order_status(...)`.
 - Rationale: After phase 30 proved the later direct status-handler seams, the dedicated terminal shortcut became the remaining high-value runtime path in the same area without explicit smoke coverage. Covering it closes the last obvious runtime handoff gap before moving to broader route-level questions.
 - Impact: The suite now proves the live message path handles terminal red reminders through the intended shortcut branch and does not accidentally route them through the later fallback seams.
+
+## 2026-06-17 - Phase 32 should target the detail-refresh service seam directly
+- Decision: Add a focused smoke test around the real `XianyuLive.fetch_order_detail_info(...)` method body, with external detail fetching and DB dependencies stubbed, to verify the successful write path triggers `handle_order_detail_fetched_status(...)` and then `on_order_details_fetched(...)`.
+- Rationale: Route-level refresh and history-sync tests already prove higher-level success outcomes, but they do not directly guarantee that the runtime detail-refresh entrypoint bridges successful persistence into the order-status handler queue-consumption hooks. A seam test at this layer closes that gap without dragging in browser or live-platform dependencies.
+- Impact: The suite now explicitly proves the successful detail-refresh service entrypoint advances into the handler follow-up hooks that unblock pending order-status updates.

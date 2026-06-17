@@ -1,19 +1,19 @@
 # Current State Snapshot - 2026-06-17
 
 - Security hardening phase is implemented and smoke-tested.
-- Test coverage phases 1-31 are implemented for authz, lifecycle, delayed binding, ambiguity rejection, queue cleanup, terminal recent-fallback branches, selector disambiguation, enqueue-entry stale cleanup, bind-gap rejection, terminal discard behavior, refund-related terminal resolution paths, multi-update pending consumption, batch queue draining, mixed-success batch draining, mixed-result detail-fetched queue consumption, direct status-priority rollback protection, completed-terminal discard handling, shipped-terminal discard handling, failed direct-backfill fallback queueing, failed direct system backfill fallback queueing, direct cancelled system-message backfill success handling, ambiguous direct system backfill fallback queueing, ambiguous direct red-reminder backfill fallback queueing, missing-strong-key system-message fallthrough handling, missing-strong-key red-reminder fallthrough handling, runtime order-status seam propagation from `XianyuAutoAsync`, direct runtime handoff coverage for system-message and red-reminder status handlers, and the dedicated terminal red-reminder runtime shortcut.
-- Test coverage phase 31 is implemented:
-  - `XianyuLive.handle_message(...)` now has direct smoke coverage proving the early terminal red-reminder shortcut calls `order_status_handler.handle_red_reminder_order_status(...)` with the expected runtime context instead of falling through to the later status-handler seams
+- Test coverage phases 1-32 are implemented for authz, lifecycle, delayed binding, ambiguity rejection, queue cleanup, terminal recent-fallback branches, selector disambiguation, enqueue-entry stale cleanup, bind-gap rejection, terminal discard behavior, refund-related terminal resolution paths, multi-update pending consumption, batch queue draining, mixed-success batch draining, mixed-result detail-fetched queue consumption, direct status-priority rollback protection, completed-terminal discard handling, shipped-terminal discard handling, failed direct-backfill fallback queueing, failed direct system backfill fallback queueing, direct cancelled system-message backfill success handling, ambiguous direct system backfill fallback queueing, ambiguous direct red-reminder backfill fallback queueing, missing-strong-key system-message fallthrough handling, missing-strong-key red-reminder fallthrough handling, runtime order-status seam propagation from `XianyuAutoAsync`, direct runtime handoff coverage for system-message and red-reminder status handlers, the dedicated terminal red-reminder runtime shortcut, and the successful detail-refresh handler seam in `fetch_order_detail_info(...)`.
+- Test coverage phase 32 is implemented:
+  - `XianyuLive.fetch_order_detail_info(...)` now has direct smoke coverage proving a successful detail refresh writes the order, then calls `order_status_handler.handle_order_detail_fetched_status(...)` followed by `order_status_handler.on_order_details_fetched(...)`
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_xianyu_order_status_runtime_seam.py -q` => 4 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 145 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_xianyu_order_status_runtime_seam.py -q` => 5 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 146 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager tests order_status_handler.py` => passed
 - Production review status:
-  - phase-31 scope reviewed with `production-code-quality-review`
-  - no new P1/P2 findings identified in the phase-31 diff
+  - phase-32 scope reviewed with `production-code-quality-review`
+  - no new P1/P2 findings identified in the phase-32 diff
   - helper script still emits a pre-existing Windows GBK `UnicodeDecodeError` from its reader thread after returning usable JSON context
 - Environment note:
   - project `venv` currently lacks `pytest`, so validation fell back to the available host Python interpreter
 - Next testing priorities:
-  - evaluate whether any pending-queue behavior still needs a broader service or route integration entrypoint test beyond the current handler and runtime seam smoke coverage
-  - evaluate whether any broader route or service entrypoint still needs coverage now that the major `XianyuAutoAsync` order-status handoffs are covered
+  - evaluate whether any broader route or service entrypoint still needs coverage beyond the now-covered runtime detail-refresh and message-handoff seams
+  - evaluate whether the remaining uncovered risk is a failure-path seam rather than another success-path entrypoint
