@@ -1,6 +1,6 @@
 ﻿# TODO
 ## In Progress
-- [ ] Stage and commit phase 58 notification test-send success coverage
+- [ ] Stage and commit phase 59 default-reply clear-records ownership coverage
 ## Next
 - [ ] Evaluate whether any remaining owner/scoped route still lacks a focused smoke regression
 - [ ] Evaluate whether the remaining uncovered risk now sits outside the current file/download, notification, and account ownership clusters
@@ -67,3 +67,4 @@
 - [x] Add message-notification account-delete ownership coverage so foreign users cannot clear another user's account notification config
 - [x] Add single message-notification delete ownership coverage so foreign users cannot delete another user's individual notification row
 - [x] Add notification test-send success coverage so the owner can send a test notification through their own enabled channel
+- [x] Add default-reply clear-records ownership coverage so foreign users cannot clear another user's reply records

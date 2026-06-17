@@ -252,3 +252,8 @@
 - Decision: Add smoke coverage for `POST /notification-templates/test` using a local webhook recorder to prove the owner can send a test notification through their own enabled channel.
 - Rationale: The route already had failure coverage for missing channels, but its success path still lacked direct proof and depended on real outbound delivery if exercised naively. A local recorder keeps the test deterministic while verifying the real send flow and current-user channel scoping.
 - Impact: Notification test-send success is now explicitly covered without external network dependence, and the suite proves the current user's enabled channel is used.
+
+## 2026-06-18 - Phase 59 should lock default-reply clear-records ownership
+- Decision: Add smoke coverage for `POST /default-replies/{cid}/clear-records` so foreign users cannot clear another user's default-reply records.
+- Rationale: The route already enforced cookie ownership, but the clear-records mutation remained unpinned by a regression test despite being part of the same default-reply ownership surface as read/update/delete.
+- Impact: Default-reply record cleanup is now explicitly scoped to the owning user, and the smoke suite covers both foreign-user denial and owner cleanup success.

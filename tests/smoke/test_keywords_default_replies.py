@@ -32,6 +32,31 @@ def test_owner_can_set_get_and_delete_default_reply(client, user_auth):
     assert after_delete.json() == {"enabled": False, "reply_content": "", "reply_once": False}
 
 
+def test_owner_can_clear_default_reply_records_and_foreign_user_cannot(client, auth, user_auth):
+    _add_cookie(client, auth, "admin_reply_cookie")
+    _add_cookie(client, user_auth, "user_reply_cookie")
+
+    client.put(
+        "/default-replies/admin_reply_cookie",
+        headers=auth,
+        json={"enabled": True, "reply_content": "Admin reply", "reply_once": True},
+    )
+    client.put(
+        "/default-replies/user_reply_cookie",
+        headers=user_auth,
+        json={"enabled": True, "reply_content": "User reply", "reply_once": True},
+    )
+
+    foreign = client.post("/default-replies/admin_reply_cookie/clear-records", headers=user_auth)
+    owner = client.post("/default-replies/admin_reply_cookie/clear-records", headers=auth)
+    owner_after = client.get("/default-replies/admin_reply_cookie", headers=auth)
+
+    assert foreign.status_code == 403
+    assert owner.status_code == 200
+    assert owner_after.status_code == 200
+    assert owner_after.json()["reply_once"] is True
+
+
 def test_default_reply_rejects_foreign_cookie_access(client, auth, user_auth):
     _add_cookie(client, auth, "admin_reply_cookie")
 
