@@ -7234,7 +7234,7 @@ class NotificationTemplateIn(BaseModel):
 
 
 @app.put('/notification-templates/{template_type}')
-def update_notification_template(template_type: str, data: NotificationTemplateIn, current_user: Dict[str, Any] = Depends(get_current_user)):
+def update_notification_template(template_type: str, data: NotificationTemplateIn, current_user: Dict[str, Any] = Depends(require_admin)):
     """更新通知模板"""
     from db_manager import db_manager
     try:
@@ -7264,7 +7264,7 @@ def update_notification_template(template_type: str, data: NotificationTemplateI
 
 
 @app.post('/notification-templates/{template_type}/reset')
-def reset_notification_template(template_type: str, current_user: Dict[str, Any] = Depends(get_current_user)):
+def reset_notification_template(template_type: str, current_user: Dict[str, Any] = Depends(require_admin)):
     """重置通知模板为默认值"""
     from db_manager import db_manager
     try:
@@ -13094,6 +13094,10 @@ async def create_scheduled_task(request: dict, current_user: Dict[str, Any] = De
 
         if not account_id:
             return {"success": False, "message": "账号ID不能为空"}
+
+        cookie_details = db_manager.get_cookie_details(account_id)
+        if not cookie_details or cookie_details['user_id'] != current_user['user_id']:
+            return {"success": False, "message": "账号不存在或无权创建此任务"}
 
         name = f"每日擦亮-{account_id}"
         next_run_at = db_manager.calculate_next_daily_run(run_hour, random_delay_max, include_today=True)

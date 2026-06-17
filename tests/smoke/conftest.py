@@ -41,6 +41,13 @@ def _fake_cookie_manager():
         def update_cookie(self, cid, value, save_to_db=False):
             self.cookies[cid] = value
 
+        def update_keywords(self, cid, keywords):
+            self.keywords[cid] = list(keywords)
+            reply_server.db_manager.save_keywords(cid, list(keywords))
+
+        def get_keywords(self, cid):
+            return self.keywords.get(cid, [])
+
         def get_all_cookie_status(self):
             return dict(self.cookie_status)
 
