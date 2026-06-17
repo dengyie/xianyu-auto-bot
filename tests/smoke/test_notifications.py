@@ -188,6 +188,19 @@ def test_message_notification_delete_is_scoped_to_owner_channel(client, auth, us
     assert owner_after.json() == []
 
 
+def test_notification_template_test_send_uses_only_current_users_channels(client, auth, user_auth):
+    _create_channel(client, auth, name="admin channel")
+
+    resp = client.post(
+        "/notification-templates/test",
+        headers=user_auth,
+        json={"template_type": "message", "template": "test message: {message}"},
+    )
+
+    assert resp.status_code == 400
+    assert "没有已启用的通知渠道" in resp.json()["detail"]
+
+
 def test_notification_template_mutation_is_admin_only(client, auth, user_auth):
     regular_update = client.put(
         "/notification-templates/message",
