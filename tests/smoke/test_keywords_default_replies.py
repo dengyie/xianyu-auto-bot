@@ -111,3 +111,40 @@ def test_keywords_reject_foreign_cookie_access(client, auth, user_auth):
     assert read.status_code == 403
     assert update.status_code == 403
     assert delete.status_code == 404
+
+
+def test_keywords_with_item_id_rejects_foreign_cookie_access(client, auth, user_auth):
+    _add_cookie(client, auth, "admin_keywords_item_cookie")
+    _add_cookie(client, user_auth, "user_keywords_item_cookie")
+
+    owner_update = client.post(
+        "/keywords-with-item-id/admin_keywords_item_cookie",
+        headers=auth,
+        json={
+            "keywords": [
+                {"keyword": "hello", "reply": "Hi there", "item_id": "item-1"},
+            ]
+        },
+    )
+
+    foreign_read = client.get("/keywords-with-item-id/admin_keywords_item_cookie", headers=user_auth)
+    foreign_update = client.post(
+        "/keywords-with-item-id/admin_keywords_item_cookie",
+        headers=user_auth,
+        json={
+            "keywords": [
+                {"keyword": "hello", "reply": "stolen", "item_id": "item-2"},
+            ]
+        },
+    )
+    owner_read = client.get("/keywords-with-item-id/admin_keywords_item_cookie", headers=auth)
+
+    assert owner_update.status_code == 200
+    assert owner_update.json()["count"] == 1
+    assert foreign_read.status_code == 403
+    assert foreign_update.status_code == 403
+    assert owner_read.status_code == 200
+    assert owner_read.json()[0]["keyword"] == "hello"
+    assert owner_read.json()[0]["reply"] == "Hi there"
+    assert owner_read.json()[0]["item_id"] == "item-1"
+    assert owner_read.json()[0]["type"] == "text"

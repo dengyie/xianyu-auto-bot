@@ -257,3 +257,8 @@
 - Decision: Add smoke coverage for `POST /default-replies/{cid}/clear-records` so foreign users cannot clear another user's default-reply records.
 - Rationale: The route already enforced cookie ownership, but the clear-records mutation remained unpinned by a regression test despite being part of the same default-reply ownership surface as read/update/delete.
 - Impact: Default-reply record cleanup is now explicitly scoped to the owning user, and the smoke suite covers both foreign-user denial and owner cleanup success.
+
+## 2026-06-18 - Phase 60 should lock item-scoped keyword ownership
+- Decision: Add smoke coverage for `GET /keywords-with-item-id/{cid}` and `POST /keywords-with-item-id/{cid}` so foreign users cannot read or overwrite another user's item-scoped keyword rules.
+- Rationale: The plain `/keywords/{cid}` ownership surface was already covered, but the item-scoped keyword variant uses a separate request model and response shape. A focused regression is the cheapest way to keep both read and mutation semantics aligned without changing runtime behavior.
+- Impact: Item-scoped keyword reads and writes are now explicitly guarded by ownership, and the smoke suite covers both foreign-user denial and owner success.

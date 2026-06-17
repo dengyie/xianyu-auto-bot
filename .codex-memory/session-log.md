@@ -878,3 +878,20 @@
   - Stage and commit the phase-59 change set.
 - Blockers:
   - `gh auth status` still reports an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` is completed interactively.
+
+## 2026-06-18 21:10
+- Task: Add the next focused regression for `keywords-with-item-id` ownership.
+- Actions:
+  - Reloaded memory and reviewed the remaining keyword route cluster.
+  - Confirmed `GET /keywords-with-item-id/{cid}` and `POST /keywords-with-item-id/{cid}` both enforce cookie ownership in `reply_server.py`.
+  - Added `.codex-memory/test-coverage-phase60-design.md` and a smoke regression in `tests/smoke/test_keywords_default_replies.py` covering foreign-user denial and owner success for item-scoped keywords.
+  - Re-ran targeted keyword smoke tests, full smoke suite, compileall, diff hygiene, and production review context collection.
+- Results:
+  - Targeted keyword smoke tests: 6 passed.
+  - Full smoke suite: 178 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+- Next:
+  - Stage and commit the phase-60 change set.
+- Blockers:
+  - `gh auth status` still reports an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` is completed interactively.
