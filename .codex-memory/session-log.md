@@ -340,3 +340,19 @@
   - Stage, commit, and push the phase-27 files, then continue evaluating the red-reminder symmetry gap.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-17 21:35
+- Task: Finish phase 28 missing-strong-key red-reminder fallthrough coverage for no-order-id red-reminder handling.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase28-design.md` before implementation.
+  - Extended `tests/smoke/test_order_status_message_binding.py` with direct coverage for falling back into the pending red-reminder queue when the strong key is incomplete.
+  - Re-ran targeted phase-28 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-28 tests: 28 passed.
+  - Full smoke suite: 141 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-28 diff review.
+- Next:
+  - Stage, commit, and push the phase-28 files, then continue evaluating whether broader route/runtime seam coverage is still needed.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

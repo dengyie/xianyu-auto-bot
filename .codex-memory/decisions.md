@@ -104,3 +104,8 @@
 - Decision: Add direct smoke coverage for `handle_system_message()` when no order id can be extracted but the strong key is incomplete.
 - Rationale: `_try_resolve_cancelled_message_without_order_id()` requires `has_strong_match_key`; without a focused regression test, a later refactor could accidentally try to backfill from partial match data instead of falling back to the pending queue.
 - Impact: No-order-id system-message handling now explicitly proves incomplete match context preserves the event by queueing it for later binding instead of attempting direct backfill.
+
+## 2026-06-17 - Phase 28 should mirror missing-strong-key fallthrough coverage for red reminders
+- Decision: Add direct smoke coverage for `handle_red_reminder_message()` when no order id can be extracted but the strong key is incomplete.
+- Rationale: The red-reminder entrypoint shares the same strong-key gate as system messages, so asymmetrical coverage would still leave one no-order-id cancellation path open to accidental direct backfill from partial match data.
+- Impact: No-order-id red-reminder handling now explicitly proves incomplete match context preserves the event by queueing it for later binding instead of attempting direct backfill.

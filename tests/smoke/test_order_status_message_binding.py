@@ -292,6 +292,48 @@ def test_cancelled_red_reminder_queues_when_direct_backfill_is_ambiguous(mocker)
     ]
 
 
+def test_cancelled_red_reminder_queues_when_direct_backfill_has_no_strong_key(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["resolved-no-strong-key-red"] = {
+        "order_id": "resolved-no-strong-key-red",
+        "order_status": "pending_ship",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-no-strong-key-red",
+        "sid": "chat-no-strong-key-red@goofish",
+        "buyer_id": "buyer-no-strong-key-red",
+        "item_id": "item-no-strong-key-red",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+
+    mocker.patch("db_manager.db_manager", fake_db)
+    mocker.patch.object(handler, "extract_order_id", return_value=None)
+    mocker.patch("time.time", return_value=260.0)
+    mocker.patch("uuid.uuid4", return_value=type("FakeUuid", (), {"hex": "a1b2c3d4e5f60708"})())
+
+    handled = handler.handle_red_reminder_message(
+        message=_make_message(22_000),
+        red_reminder="交易关闭",
+        user_id="user-no-strong-key-red",
+        cookie_id="cookie-no-strong-key-red",
+        msg_time="21:40:00",
+        match_context={
+            "message_hash": 2201,
+            "sid": "chat-no-strong-key-red@goofish",
+            "buyer_id": "buyer-no-strong-key-red",
+            "item_id": None,
+            "message_timestamp_ms": 22_000,
+        },
+    )
+
+    assert handled is True
+    assert fake_db.orders["resolved-no-strong-key-red"]["order_status"] == "pending_ship"
+    assert "temp_260000_a1b2c3d4" in handler.pending_updates
+    assert handler.pending_updates["temp_260000_a1b2c3d4"][0]["new_status"] == "cancelled"
+    assert [msg["temp_order_id"] for msg in handler._pending_red_reminder_messages["cookie-no-strong-key-red"]] == [
+        "temp_260000_a1b2c3d4"
+    ]
+
+
 def test_direct_system_message_ignores_lower_priority_status_rollback(mocker):
     fake_db = _MessageBindingDB()
     fake_db.orders["stable-order"] = {

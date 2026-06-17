@@ -1,11 +1,11 @@
 # TODO
 
 ## In Progress
-- [ ] Stage, commit, and push phase 27 missing-strong-key system-message fallthrough coverage to the draft GitHub PR
+- [ ] Stage, commit, and push phase 28 missing-strong-key red-reminder fallthrough coverage to the draft GitHub PR
 
 ## Next
 - [ ] Evaluate whether any pending-queue behavior still needs a broader service/route integration entrypoint test beyond the current handler-focused smoke coverage
-- [ ] Evaluate whether the red-reminder no-order-id path also needs an explicit missing-strong-key fallthrough test for symmetry
+- [ ] Evaluate whether delayed-binding queue entrypoints still need a higher-level route or runtime seam test beyond handler-focused smoke coverage
 
 ## Done
 - [x] Add authz/cookie isolation/file token/system settings smoke coverage
@@ -37,3 +37,4 @@
 - [x] Add ambiguous direct system-backfill fallback coverage so no-order-id system messages queue instead of mutating one of multiple matching old orders
 - [x] Add ambiguous direct red-reminder backfill fallback coverage so no-order-id red reminders queue instead of mutating one of multiple matching old orders
 - [x] Add missing-strong-key system-message fallthrough coverage so incomplete match context queues instead of attempting direct backfill
+- [x] Add missing-strong-key red-reminder fallthrough coverage so incomplete match context queues instead of attempting direct backfill
