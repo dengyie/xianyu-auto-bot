@@ -1383,3 +1383,54 @@ def test_cancelled_red_reminder_queues_when_direct_backfill_update_fails(mocker)
     assert [msg["temp_order_id"] for msg in handler._pending_red_reminder_messages["cookie-fallback-red"]] == [
         "temp_210000_abcdef12"
     ]
+
+
+def test_cancelled_system_message_queues_when_direct_backfill_update_fails(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["resolved-fallback-system"] = {
+        "order_id": "resolved-fallback-system",
+        "order_status": "pending_ship",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-fallback-system",
+        "sid": "chat-fallback-system@goofish",
+        "buyer_id": "buyer-fallback-system",
+        "item_id": "item-fallback-system",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+
+    mocker.patch("db_manager.db_manager", fake_db)
+    mocker.patch.object(
+        handler,
+        "_resolve_system_message_status",
+        return_value=(
+            "cancelled",
+            {"is_system_message": True},
+            [{"source": "send_message", "status": "cancelled", "text": "cancelled"}],
+        ),
+    )
+    mocker.patch.object(handler, "extract_order_id", return_value=None)
+    mocker.patch.object(handler, "update_order_status", return_value=False)
+    mocker.patch("time.time", return_value=220.0)
+    mocker.patch("uuid.uuid4", return_value=type("FakeUuid", (), {"hex": "fedcba9876543210"})())
+
+    handled = handler.handle_system_message(
+        message=_make_message(17_000, system=True),
+        send_message="交易关闭系统消息",
+        cookie_id="cookie-fallback-system",
+        msg_time="20:50:00",
+        match_context={
+            "message_hash": 1701,
+            "sid": "chat-fallback-system@goofish",
+            "buyer_id": "buyer-fallback-system",
+            "item_id": "item-fallback-system",
+            "message_timestamp_ms": 17_000,
+        },
+    )
+
+    assert handled is True
+    assert fake_db.orders["resolved-fallback-system"]["order_status"] == "pending_ship"
+    assert "temp_220000_fedcba98" in handler.pending_updates
+    assert handler.pending_updates["temp_220000_fedcba98"][0]["new_status"] == "cancelled"
+    assert [msg["temp_order_id"] for msg in handler._pending_system_messages["cookie-fallback-system"]] == [
+        "temp_220000_fedcba98"
+    ]
