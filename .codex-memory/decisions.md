@@ -69,3 +69,8 @@
 - Decision: Add direct smoke coverage for `on_order_id_extracted()` when a queued terminal system message with `new_status == "completed"` should be discarded because another recent order with the same strong key is already completed.
 - Rationale: The delayed-binding discard logic already had focused coverage for `refund_cancelled` and red-reminder `cancelled`, but the `completed` branch in `_get_terminal_resolution_statuses()` was still unproven. Locking it down reduces the chance of silently rebinding already-consumed completion outcomes onto later orders.
 - Impact: Delayed terminal system-message handling now explicitly proves completed outcomes are discarded and cleaned up once a matching recent order has already consumed them.
+
+## 2026-06-17 - Phase 21 should prove shipped terminal messages are discarded after prior consumption
+- Decision: Add direct smoke coverage for `on_order_id_extracted()` when a queued terminal system message with `new_status == "shipped"` should be discarded because another recent order with the same strong key is already in a shipment-compatible resolved state.
+- Rationale: The shipped terminal branch in `_get_terminal_resolution_statuses()` is symmetric with the completed branch but had not yet been directly locked down. This keeps the discard behavior consistent across terminal outcomes and prevents rebinding already-consumed shipment events to later orders.
+- Impact: Delayed terminal system-message handling now explicitly proves shipped outcomes are discarded and cleaned up once a matching recent order has already consumed them.

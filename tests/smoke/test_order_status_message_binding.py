@@ -1274,3 +1274,69 @@ def test_completed_system_message_is_discarded_when_another_order_already_resolv
     assert fake_db.orders["new-completed-order"]["order_status"] == "processing"
     assert "cookie-completed-resolved" not in handler._pending_system_messages
     assert "temp_completed_system" not in handler.pending_updates
+
+
+def test_shipped_system_message_is_discarded_when_another_order_already_resolved(mocker):
+    fake_db = _MessageBindingDB()
+    fake_db.orders["new-shipped-order"] = {
+        "order_id": "new-shipped-order",
+        "order_status": "processing",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-shipped-resolved",
+        "sid": "chat-shipped-resolved@goofish",
+        "buyer_id": "buyer-shipped-resolved",
+        "item_id": "item-shipped-resolved",
+    }
+    fake_db.orders["resolved-shipped-order"] = {
+        "order_id": "resolved-shipped-order",
+        "order_status": "completed",
+        "pre_refund_status": None,
+        "cookie_id": "cookie-shipped-resolved",
+        "sid": "chat-shipped-resolved@goofish",
+        "buyer_id": "buyer-shipped-resolved",
+        "item_id": "item-shipped-resolved",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+    handler._pending_system_messages["cookie-shipped-resolved"] = [
+        {
+            "message": _make_message(15_000, system=True),
+            "send_message": "shipped-system-message",
+            "cookie_id": "cookie-shipped-resolved",
+            "msg_time": "20:30:00",
+            "new_status": "shipped",
+            "temp_order_id": "temp_shipped_system",
+            "message_hash": 1501,
+            "sid": "chat-shipped-resolved@goofish",
+            "buyer_id": "buyer-shipped-resolved",
+            "item_id": "item-shipped-resolved",
+            "message_timestamp_ms": 15_000,
+            "timestamp": 83.0,
+        }
+    ]
+    handler.pending_updates["temp_shipped_system"] = [
+        {
+            "new_status": "shipped",
+            "cookie_id": "cookie-shipped-resolved",
+            "context": "queued shipped system message",
+            "timestamp": 83.0,
+        }
+    ]
+
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    handler.on_order_id_extracted(
+        order_id="new-shipped-order",
+        cookie_id="cookie-shipped-resolved",
+        message=_make_message(330_000),
+        match_context={
+            "message_hash": 1501,
+            "sid": "chat-shipped-resolved@goofish",
+            "buyer_id": "buyer-shipped-resolved",
+            "item_id": "item-shipped-resolved",
+            "message_timestamp_ms": 330_000,
+        },
+    )
+
+    assert fake_db.orders["new-shipped-order"]["order_status"] == "processing"
+    assert "cookie-shipped-resolved" not in handler._pending_system_messages
+    assert "temp_shipped_system" not in handler.pending_updates
