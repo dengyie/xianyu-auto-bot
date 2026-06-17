@@ -121,12 +121,12 @@
 - Impact: The suite now proves the live message path preserves `sid`, `buyer_id`, and `item_id` across all major order-status handoffs currently used in `XianyuAutoAsync`.
 
 ## 2026-06-17 - Runtime seam tests should avoid earlier dedicated shortcut branches
-- Decision: Use a non-terminal red-reminder fixture for the runtime fallback seam test instead of `交易关闭`.
-- Rationale: `交易关闭` is consumed by an earlier dedicated red-reminder order-status branch inside `handle_message(...)`, so it cannot meaningfully validate the later `handle_red_reminder_message(...)` fallback seam. The adjusted fixture keeps the test aligned with the actual branch under review.
+- Decision: Use a non-terminal red-reminder fixture for the runtime fallback seam test instead of `浜ゆ槗鍏抽棴`.
+- Rationale: `浜ゆ槗鍏抽棴` is consumed by an earlier dedicated red-reminder order-status branch inside `handle_message(...)`, so it cannot meaningfully validate the later `handle_red_reminder_message(...)` fallback seam. The adjusted fixture keeps the test aligned with the actual branch under review.
 - Impact: Phase-30 runtime seam coverage now exercises the intended fallback path directly instead of asserting on a branch that production control flow never reaches.
 
 ## 2026-06-17 - Phase 31 should explicitly cover the terminal red-reminder runtime shortcut
-- Decision: Add smoke coverage for the early `交易关闭` red-reminder branch in `XianyuLive.handle_message(...)` that calls `handle_red_reminder_order_status(...)`.
+- Decision: Add smoke coverage for the early `浜ゆ槗鍏抽棴` red-reminder branch in `XianyuLive.handle_message(...)` that calls `handle_red_reminder_order_status(...)`.
 - Rationale: After phase 30 proved the later direct status-handler seams, the dedicated terminal shortcut became the remaining high-value runtime path in the same area without explicit smoke coverage. Covering it closes the last obvious runtime handoff gap before moving to broader route-level questions.
 - Impact: The suite now proves the live message path handles terminal red reminders through the intended shortcut branch and does not accidentally route them through the later fallback seams.
 
@@ -224,3 +224,7 @@
 - Decision: Require cookie ownership on `POST /qr-login/reset-cooldown/{cookie_id}` and `GET /qr-login/cooldown-status/{cookie_id}`, then cover both routes with smoke tests.
 - Rationale: These qr-login cooldown endpoints expose or mutate account-scoped runtime state keyed only by `cookie_id`, and they sat adjacent to the already-hardened refresh route. Without matching route guards, another authenticated user could inspect or reset another account's cooldown state.
 - Impact: Cooldown status and reset behavior are now scoped to the owning user, and the accounts smoke suite protects both foreign-user denial and owner success.
+## 2026-06-18 - Phase 52 should lock the existing download-token contract
+- Decision: Keep the current `/api/files/{file_id}/download-token` behavior unchanged and add a focused smoke regression around the existing forbidden outcome for a missing file id.
+- Rationale: During phase-52 exploration, the suspected production bug turned out to be a false alarm after reconciling the live worktree against git history. The useful remaining work was to preserve the current route contract with a direct regression test instead of changing access semantics.
+- Impact: The file-download token flow now has explicit smoke coverage for the missing-file branch without expanding the production change surface.

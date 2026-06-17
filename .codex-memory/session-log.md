@@ -313,7 +313,7 @@
 - Actions:
   - Added `.codex-memory/test-coverage-phase26-design.md` before implementation.
   - Extended `tests/smoke/test_order_status_message_binding.py` with direct coverage for falling back into the pending red-reminder queue when multiple old orders match a cancelled no-order-id red reminder.
-  - Fixed the new test fixture to use the production `交易关闭` literal so it exercises the real cancelled-reminder branch instead of a malformed text path.
+  - Fixed the new test fixture to use the production `浜ゆ槗鍏抽棴` literal so it exercises the real cancelled-reminder branch instead of a malformed text path.
   - Re-ran targeted phase-26 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
 - Results:
   - Targeted phase-26 tests: 26 passed.
@@ -380,7 +380,7 @@
   - Added `.codex-memory/test-coverage-phase30-design.md` before implementation.
   - Extended `tests/smoke/test_xianyu_order_status_runtime_seam.py`.
   - Covered the live `XianyuLive.handle_message(...)` path proving parsed `sid`, `buyer_id`, and `item_id` reach both `handle_system_message(...)` and the later `handle_red_reminder_message(...)` fallback seam.
-  - Adjusted the red-reminder runtime fixture to avoid the earlier dedicated `交易关闭` shortcut branch so the targeted fallback seam is exercised directly.
+  - Adjusted the red-reminder runtime fixture to avoid the earlier dedicated `浜ゆ槗鍏抽棴` shortcut branch so the targeted fallback seam is exercised directly.
   - Re-ran targeted phase-30 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
 - Results:
   - Targeted phase-30 tests: 3 passed.
@@ -397,7 +397,7 @@
 - Actions:
   - Added `.codex-memory/test-coverage-phase31-design.md` before implementation.
   - Extended `tests/smoke/test_xianyu_order_status_runtime_seam.py`.
-  - Covered the early `交易关闭` red-reminder branch in `XianyuLive.handle_message(...)`, proving it calls `handle_red_reminder_order_status(...)` with the expected runtime context and does not fall through to the later status-handler seams.
+  - Covered the early `浜ゆ槗鍏抽棴` red-reminder branch in `XianyuLive.handle_message(...)`, proving it calls `handle_red_reminder_order_status(...)` with the expected runtime context and does not fall through to the later status-handler seams.
   - Re-ran targeted phase-31 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
 - Results:
   - Targeted phase-31 tests: 4 passed.
@@ -759,3 +759,20 @@
   - Continue reevaluating whether any remaining high-risk coverage gaps now sit outside the qr-login/account/runtime ownership cluster.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+## 2026-06-18 02:18
+- Task: Reevaluate remaining test gaps and add the next focused regression.
+- Actions:
+  - Reloaded project memory and current repository context.
+  - Scanned route clusters and existing smoke coverage to find a real gap.
+  - Determined the file-download token flow already had broad coverage, and reconciled a suspected `HTTPException` handling issue against the current git baseline.
+  - Confirmed the useful bounded phase-52 change was a direct smoke regression in `tests/smoke/test_file_download_tokens.py` for the existing forbidden outcome on a missing file id.
+  - Re-ran targeted smoke tests, full smoke suite, compileall, and diff hygiene.
+- Results:
+  - Targeted file-download-token tests: 5 passed.
+  - Full smoke suite: 170 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+- Next:
+  - Stage and commit the phase-52 change set when ready.
+- Blockers:
+  - Project virtual environment still does not provide `pytest`.

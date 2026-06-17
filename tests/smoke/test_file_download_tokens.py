@@ -59,6 +59,12 @@ def test_download_token_expires(client, auth):
     assert token not in reply_server.DOWNLOAD_TOKENS
 
 
+def test_download_token_not_found_stays_forbidden(client, auth):
+    resp = client.get("/api/files/999/download-token", headers=auth)
+
+    assert resp.status_code == 403
+
+
 def test_direct_download_consumes_user_quota(client, auth):
     file_id = _upload_file(client, auth, body=b"quota", max_downloads="1")
     token = _issue_token(client, auth, file_id)

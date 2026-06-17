@@ -1,21 +1,18 @@
 # Current State Snapshot - 2026-06-18
 
-- Security hardening phase is implemented and smoke-tested.
-- Test coverage phases 1-51 are implemented for authz, lifecycle, delayed binding, ambiguity rejection, queue cleanup, terminal recent-fallback branches, selector disambiguation, enqueue-entry stale cleanup, bind-gap rejection, terminal discard behavior, refund-related terminal resolution paths, multi-update pending consumption, batch queue draining, mixed-success batch draining, mixed-result detail-fetched queue consumption, direct status-priority rollback protection, completed-terminal discard handling, shipped-terminal discard handling, failed direct-backfill fallback queueing, failed direct system backfill fallback queueing, direct cancelled system-message backfill success handling, ambiguous direct system backfill fallback queueing, ambiguous direct red-reminder fallback queueing, missing-strong-key fallthrough handling, zero-candidate unmatched cancellation fallback handling, runtime order-status seam propagation from `XianyuAutoAsync`, direct runtime handoff coverage, detail-refresh seams, basic-order-info seams inside `_auto_delivery(...)`, existing-order bypass, data-card reservation preparation, manual-delivery reservation closure, finalize-after-send pending-finalize handling, pending-finalize replay recovery, replay-only pending-finalize completion return handling, refresh-route soft-failure handling, history-sync job ownership boundaries, password-login session ownership boundaries, manual-cookie-import session ownership boundaries, qr-login session ownership boundaries, qr-login cooldown ownership boundaries, and face-verification screenshot ownership boundaries.
-- Test coverage phase 51 is implemented:
-  - qr-login cooldown status now has direct smoke coverage proving foreign users cannot inspect another account's cooldown state
-  - qr-login cooldown reset now has direct smoke coverage proving foreign users cannot reset another account's cooldown state while the owner still can
+- Security hardening and smoke coverage are still moving in small bounded phases.
+- Phase 52 is now implemented for file download token contract regression coverage.
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_accounts.py -q` => 12 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 169 passed
-  - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py tests order_status_handler.py` => passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_file_download_tokens.py -q` => 5 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 170 passed
+  - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py tests` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-48 scope reviewed with `production-code-quality-review`
-  - no new P1/P2 findings identified in the phase-48 diff
+  - phase-52 scope reviewed with `production-code-quality-review`
+  - no new P1/P2 findings identified in the phase-52 diff
   - helper script still emits a pre-existing Windows GBK `UnicodeDecodeError` from its reader thread after returning usable JSON context
 - Environment note:
-  - project `venv` currently lacks `pytest`, so validation fell back to the available host Python interpreter
+  - project `venv` still lacks `pytest`, so validation used host Python
 - Next testing priorities:
-  - evaluate whether any broader route or service entrypoint still needs coverage beyond the now-covered runtime detail-refresh, delayed terminal binding, delivery-recovery, refresh, history-sync, password-login, manual-cookie-import, qr-login, qr-login cooldown, and face-verification seams
-  - evaluate whether the remaining uncovered risk now sits outside the order delivery/refresh/history-sync/login/manual-import/qr-login/face-verification paths and belongs to a different module cluster
+  - evaluate whether any remaining owner/scoped route still lacks a focused smoke regression
+  - keep ignoring unrelated untracked workspace files

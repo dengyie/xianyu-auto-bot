@@ -1,13 +1,11 @@
 # TODO
-
 ## In Progress
-- [ ] Stage, commit, and push phase 51 qr-login cooldown ownership coverage to the draft GitHub PR
-
+- [ ] Stage, commit, and push phase 52 download-token exception handling coverage to the draft GitHub PR
 ## Next
-- [ ] Evaluate whether any broader route or service entrypoint still needs coverage beyond the now-covered runtime detail-refresh, message-handoff, delivery, refresh, history-sync, password-login, manual-cookie-import, qr-login, and face-verification seams
-- [ ] Evaluate whether the remaining uncovered risk is now outside the delivery/retry, refresh, history-sync, password-login, manual-cookie-import, qr-login, and face-verification chains and belongs to a different module cluster
-
+- [ ] Evaluate whether any remaining owner/scoped route still lacks a focused smoke regression
+- [ ] Evaluate whether the remaining uncovered risk now sits outside the current file/download and account ownership clusters
 ## Done
+- [x] Stage, commit, and push phase 51 qr-login cooldown ownership coverage to the draft GitHub PR
 - [x] Stage, commit, and push phase 50 unmatched cancellation fallback coverage to the draft GitHub PR
 - [x] Stage, commit, and push phase 48 face-verification ownership coverage to the draft GitHub PR
 - [x] Stage, commit, and push phase 47 qr-login ownership coverage to the draft GitHub PR
