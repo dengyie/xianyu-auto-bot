@@ -30,6 +30,8 @@ class _FakeRuntime:
         self.sent_once = []
         self.mark_sent_calls = []
         self.release_calls = []
+        self.pending_finalize_meta = {}
+        self.finalize_calls = []
         self._auto_delivery_result = auto_delivery_result
         self._mark_sent_result = mark_sent_result
         self._finalize_result = finalize_result or {"success": True}
@@ -38,7 +40,7 @@ class _FakeRuntime:
         return reply_server.db_manager.get_delivery_progress_summary(order_id, expected_quantity)
 
     def _get_pending_delivery_finalization_meta(self, order_id, unit_index):
-        return None
+        return self.pending_finalize_meta.get((order_id, unit_index))
 
     async def _auto_delivery(self, item_id, item_title=None, order_id=None, send_user_id=None, delivery_unit_index=1, **_kwargs):
         if self._auto_delivery_result is not None:
@@ -97,6 +99,13 @@ class _FakeRuntime:
         )
 
     async def _finalize_delivery_after_send(self, delivery_meta=None, order_id=None, item_id=None):
+        self.finalize_calls.append(
+            {
+                "delivery_meta": dict(delivery_meta or {}),
+                "order_id": order_id,
+                "item_id": item_id,
+            }
+        )
         return dict(self._finalize_result)
 
     def _sync_order_delivery_progress(self, order_id, cookie_id, expected_quantity, context=""):
@@ -332,6 +341,134 @@ def test_manual_deliver_keeps_data_reservation_unit_pending_finalize_when_finali
     assert logs[0]["status"] == "failed"
     assert "finalize hook failed" in (logs[0]["reason"] or "")
     progress = reply_server.db_manager.get_delivery_progress_summary("deliver-data-finalize-fail", expected_quantity=1)
+    assert progress["aggregate_status"] == "partial_pending_finalize"
+    assert progress["pending_finalize_count"] == 1
+    assert progress["finalized_count"] == 0
+
+
+def test_manual_deliver_retry_replays_pending_finalize_unit_without_resending(client, user_auth, mocker):
+    _add_cookie(client, user_auth, "data_delivery_replay_cookie")
+    _insert_order(
+        reply_server.db_manager,
+        order_id="deliver-data-replay",
+        cookie_id="data_delivery_replay_cookie",
+        item_id="item-data-replay",
+        buyer_id="buyer-data-replay",
+        quantity=1,
+    )
+    reply_server.db_manager.upsert_delivery_finalization_state(
+        order_id="deliver-data-replay",
+        unit_index=1,
+        cookie_id="data_delivery_replay_cookie",
+        item_id="item-data-replay",
+        buyer_id="buyer-data-replay",
+        channel="manual",
+        status="sent",
+        delivery_meta={
+            "rule_id": 205,
+            "rule_keyword": "replay keyword",
+            "card_id": 9205,
+            "card_type": "data",
+            "match_mode": "keyword",
+            "data_card_pending_consume": True,
+            "data_line": "DATA-CARD-LINE-REPLAY",
+            "data_reservation_id": 8205,
+            "data_reservation_status": "sent",
+            "delivery_unit_index": 1,
+        },
+        last_error="finalize hook failed earlier",
+    )
+    runtime = _FakeRuntime()
+    runtime.pending_finalize_meta[("deliver-data-replay", 1)] = {
+        "rule_id": 205,
+        "rule_keyword": "replay keyword",
+        "card_id": 9205,
+        "card_type": "data",
+        "match_mode": "keyword",
+        "data_card_pending_consume": True,
+        "data_line": "DATA-CARD-LINE-REPLAY",
+        "data_reservation_id": 8205,
+        "data_reservation_status": "sent",
+        "delivery_unit_index": 1,
+        "cookie_id": "data_delivery_replay_cookie",
+    }
+    mocker.patch.object(reply_server.cookie_manager, "manager", _FakeCookieManager(runtime=runtime))
+    mocker.patch.object(reply_server, "publish_order_update_event")
+
+    resp = client.post("/api/orders/deliver-data-replay/deliver", headers=user_auth)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert body["delivered"] is True
+    assert runtime.sent_once == []
+    assert len(runtime.finalize_calls) == 1
+    assert runtime.finalize_calls[0]["order_id"] == "deliver-data-replay"
+    progress = reply_server.db_manager.get_delivery_progress_summary("deliver-data-replay", expected_quantity=1)
+    assert progress["aggregate_status"] == "shipped"
+    assert progress["pending_finalize_count"] == 0
+    assert progress["finalized_count"] == 1
+
+
+def test_manual_deliver_retry_returns_failure_when_pending_finalize_replay_fails(client, user_auth, mocker):
+    _add_cookie(client, user_auth, "data_delivery_replay_fail_cookie")
+    _insert_order(
+        reply_server.db_manager,
+        order_id="deliver-data-replay-fail",
+        cookie_id="data_delivery_replay_fail_cookie",
+        item_id="item-data-replay-fail",
+        buyer_id="buyer-data-replay-fail",
+        quantity=1,
+    )
+    reply_server.db_manager.upsert_delivery_finalization_state(
+        order_id="deliver-data-replay-fail",
+        unit_index=1,
+        cookie_id="data_delivery_replay_fail_cookie",
+        item_id="item-data-replay-fail",
+        buyer_id="buyer-data-replay-fail",
+        channel="manual",
+        status="sent",
+        delivery_meta={
+            "rule_id": 206,
+            "rule_keyword": "replay fail keyword",
+            "card_id": 9206,
+            "card_type": "data",
+            "match_mode": "keyword",
+            "data_card_pending_consume": True,
+            "data_line": "DATA-CARD-LINE-REPLAY-FAIL",
+            "data_reservation_id": 8206,
+            "data_reservation_status": "sent",
+            "delivery_unit_index": 1,
+        },
+        last_error="still pending finalize",
+    )
+    runtime = _FakeRuntime(finalize_result={"success": False, "error": "replay finalize failed"})
+    runtime.pending_finalize_meta[("deliver-data-replay-fail", 1)] = {
+        "rule_id": 206,
+        "rule_keyword": "replay fail keyword",
+        "card_id": 9206,
+        "card_type": "data",
+        "match_mode": "keyword",
+        "data_card_pending_consume": True,
+        "data_line": "DATA-CARD-LINE-REPLAY-FAIL",
+        "data_reservation_id": 8206,
+        "data_reservation_status": "sent",
+        "delivery_unit_index": 1,
+        "cookie_id": "data_delivery_replay_fail_cookie",
+    }
+    mocker.patch.object(reply_server.cookie_manager, "manager", _FakeCookieManager(runtime=runtime))
+    mocker.patch.object(reply_server, "publish_order_update_event")
+
+    resp = client.post("/api/orders/deliver-data-replay-fail/deliver", headers=user_auth)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is False
+    assert body["delivered"] is False
+    assert "replay finalize failed" in body["message"]
+    assert runtime.sent_once == []
+    assert len(runtime.finalize_calls) == 1
+    progress = reply_server.db_manager.get_delivery_progress_summary("deliver-data-replay-fail", expected_quantity=1)
     assert progress["aggregate_status"] == "partial_pending_finalize"
     assert progress["pending_finalize_count"] == 1
     assert progress["finalized_count"] == 0

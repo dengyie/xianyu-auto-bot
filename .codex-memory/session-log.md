@@ -569,3 +569,23 @@
   - Continue evaluating the pending-finalize replay path for manual-delivery retry coverage.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-18 00:25
+- Task: Finish phase 41 smoke coverage for pending-finalize replay during manual delivery retry.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase41-design.md` before implementation.
+  - Extended `tests/smoke/test_order_delivery_transitions.py` so the fake runtime can return persisted pending-finalize metadata and record finalize replay calls.
+  - Added one route-level smoke test proving a retry completes a pending-finalize unit without re-sending content.
+  - Added one route-level smoke test proving a replay finalize failure keeps the unit in `partial_pending_finalize` and returns a visible failure response.
+  - Re-ran targeted phase-41 tests, full smoke suite, compileall, diff hygiene, and production review for the phase-41 diff.
+- Results:
+  - Targeted phase-41 tests: 11 passed.
+  - Full smoke suite: 158 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Production review: no new P1/P2 findings; score 95/100; status passed.
+- Next:
+  - Stage only the intentional phase-41 files, commit, and push the branch.
+  - Continue evaluating whether any broader route/service entrypoint still needs direct coverage.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

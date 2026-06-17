@@ -174,3 +174,8 @@
 - Decision: Add route-level smoke coverage for the branch where manual delivery sends successfully, reservation mark-sent succeeds, but `finalize_delivery_after_send(...)` returns a failure payload.
 - Rationale: This branch carries a subtle but important contract: once the buyer has already received the content, the system must preserve a recoverable pending-finalize state instead of reverting to pending ship or falsely claiming delivery is complete. The route owns that state transition, so the test should live there.
 - Impact: The suite now explicitly proves finalize-after-send failures keep reservation-backed units recoverable in `partial_pending_finalize` with a visible failure log.
+
+## 2026-06-18 - Phase 41 should prove pending-finalize replay recovers without duplicate sends
+- Decision: Add route-level smoke coverage for manual delivery retry when a unit already has persisted `sent` finalization state and must replay only the finalize hook.
+- Rationale: After phase 40 established the recoverable state, the adjacent contract is recovery itself. The riskiest regression here is duplicate delivery to the buyer or silent failure to consume the saved pending-finalize record. A route smoke test can prove both the absence of re-send behavior and the correctness of the replay result.
+- Impact: The suite now explicitly proves pending-finalize recovery uses persisted metadata to complete side effects without re-sending content, and that replay failures remain visible and recoverable.
