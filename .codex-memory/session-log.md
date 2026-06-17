@@ -163,3 +163,19 @@
   - Stage, commit, and push the phase-16 files, then continue evaluating the next test gap.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-17 16:20
+- Task: Finish phase 17 mixed-success batch pending-update coverage for the queue processor entrypoint.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase17-design.md` before implementation.
+  - Extended `tests/smoke/test_order_status_pending_updates.py` with direct coverage for `process_all_pending_updates()` continuing after one order bucket requeues.
+  - Re-ran targeted phase-17 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-17 tests: 5 passed.
+  - Full smoke suite: 130 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-17 diff review.
+- Next:
+  - Stage, commit, and push the phase-17 files, then continue evaluating the next test gap.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

@@ -49,3 +49,8 @@
 - Decision: Add direct smoke coverage for `process_all_pending_updates()` draining more than one order bucket in the same pass.
 - Rationale: The per-order pending consumer was already covered, but the batch wrapper is the higher-level queue drain path and needs proof that it iterates through all queued order IDs rather than stopping after the first processed bucket.
 - Impact: The pending-update batch processor now explicitly proves it can clear multiple queued orders and leave the in-memory queue empty afterward.
+
+## 2026-06-17 - Phase 17 should prove batch draining survives mixed success
+- Decision: Add direct smoke coverage for `process_all_pending_updates()` when one queued order still requeues while a later order bucket can be processed successfully.
+- Rationale: The all-success path is useful, but the batch wrapper's real production value is that it keeps making progress even when one bucket cannot be applied yet. Without direct coverage, a future refactor could accidentally stop iteration after the first failed bucket.
+- Impact: The batch queue processor now explicitly proves it continues through mixed-success pending work and preserves the failed bucket for later retry.

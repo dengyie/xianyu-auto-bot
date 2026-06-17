@@ -1,7 +1,7 @@
 # TODO
 
 ## In Progress
-- [ ] Stage, commit, and push phase 16 batch pending-drain coverage to the draft GitHub PR
+- [ ] Stage, commit, and push phase 17 mixed-success batch pending-drain coverage to the draft GitHub PR
 
 ## Next
 - [ ] Evaluate whether any pending-queue behavior still needs a broader service/route integration entrypoint test beyond the current handler-focused smoke coverage
@@ -26,3 +26,4 @@
 - [x] Add terminal discard coverage for refund-cancelled system messages and cancelled red reminders already consumed by a different recent order
 - [x] Add multi-update pending-consumption coverage for `on_order_details_fetched(...)`
 - [x] Add batch pending-drain coverage for `process_all_pending_updates()`
+- [x] Add mixed-success batch pending-drain coverage so one requeued bucket does not block later queued orders
