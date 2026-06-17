@@ -179,6 +179,42 @@ class TestAccounts:
         assert owner_resp.status_code == 200
         assert owner_resp.json()["success"] is True
 
+    def test_qr_login_cooldown_routes_are_owner_only(self, client, other_user_auth, user_auth, monkeypatch):
+        class FakeCooldownInstance:
+            qr_cookie_refresh_cooldown = 600
+            last_qr_cookie_refresh_time = 123
+
+            def get_qr_cookie_refresh_remaining_time(self):
+                return 45
+
+            def reset_qr_cookie_refresh_flag(self):
+                return None
+
+        cookie_id = "qr_cooldown_owner_only_cookie"
+        reply_server.db_manager.save_cookie(cookie_id, "unb=owner; token=value", user_id=2)
+
+        fake_instance = FakeCooldownInstance()
+        manager = reply_server.cookie_manager.manager
+        monkeypatch.setattr(manager, "get_xianyu_instance", lambda cid: fake_instance if cid == cookie_id else None)
+
+        foreign_status = client.get(f"/qr-login/cooldown-status/{cookie_id}", headers=other_user_auth)
+        assert foreign_status.status_code == 200
+        assert foreign_status.json()["success"] is False
+
+        owner_status = client.get(f"/qr-login/cooldown-status/{cookie_id}", headers=user_auth)
+        assert owner_status.status_code == 200
+        assert owner_status.json()["success"] is True
+        assert owner_status.json()["remaining_time"] == 45
+
+        foreign_reset = client.post(f"/qr-login/reset-cooldown/{cookie_id}", headers=other_user_auth)
+        assert foreign_reset.status_code == 200
+        assert foreign_reset.json()["success"] is False
+
+        owner_reset = client.post(f"/qr-login/reset-cooldown/{cookie_id}", headers=user_auth)
+        assert owner_reset.status_code == 200
+        assert owner_reset.json()["success"] is True
+        assert owner_reset.json()["previous_remaining_time"] == 45
+
     def test_face_verification_screenshot_is_owner_only(self, client, other_user_auth, user_auth):
         account_id = "face_verify_owner_only_account"
         reply_server.db_manager.save_cookie(account_id, "unb=owner; token=value", user_id=2)

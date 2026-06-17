@@ -219,3 +219,8 @@
 - Decision: Add smoke coverage for cancelled red reminders and cancelled system messages when strong match keys exist but no historical order candidates can be found.
 - Rationale: The existing message-binding suite already covered ambiguous, missing-strong-key, and failed-direct-update fallback behavior, but the zero-candidate unmatched-cancellation branch was still only implied. This is the cleanest remaining fallback path in the delayed terminal-resolution flow.
 - Impact: The suite now explicitly proves unmatched cancellation messages stay in the strict pending queues instead of mutating unrelated orders when no direct backfill target exists.
+
+## 2026-06-18 - Phase 51 should lock down qr-login cooldown ownership boundaries
+- Decision: Require cookie ownership on `POST /qr-login/reset-cooldown/{cookie_id}` and `GET /qr-login/cooldown-status/{cookie_id}`, then cover both routes with smoke tests.
+- Rationale: These qr-login cooldown endpoints expose or mutate account-scoped runtime state keyed only by `cookie_id`, and they sat adjacent to the already-hardened refresh route. Without matching route guards, another authenticated user could inspect or reset another account's cooldown state.
+- Impact: Cooldown status and reset behavior are now scoped to the owning user, and the accounts smoke suite protects both foreign-user denial and owner success.

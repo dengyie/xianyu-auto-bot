@@ -6544,6 +6544,10 @@ async def reset_qr_cookie_refresh_cooldown(
         if not cookie_info:
             return {'success': False, 'message': '账号不存在'}
 
+        user_cookies = db_manager.get_all_cookies(current_user['user_id'])
+        if cookie_id not in user_cookies:
+            return {'success': False, 'message': 'forbidden'}
+
         # 如果cookie_manager中有对应的实例，直接重置
         instance = cookie_manager.manager.get_xianyu_instance(cookie_id) if cookie_manager.manager else None
         if instance:
@@ -6583,6 +6587,10 @@ async def get_qr_cookie_refresh_cooldown_status(
         cookie_info = db_manager.get_cookie_by_id(cookie_id)
         if not cookie_info:
             return {'success': False, 'message': '账号不存在'}
+
+        user_cookies = db_manager.get_all_cookies(current_user['user_id'])
+        if cookie_id not in user_cookies:
+            return {'success': False, 'message': 'forbidden'}
 
         # 如果cookie_manager中有对应的实例，获取冷却状态
         instance = cookie_manager.manager.get_xianyu_instance(cookie_id) if cookie_manager.manager else None

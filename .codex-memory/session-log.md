@@ -740,3 +740,22 @@
   - Reevaluate whether any remaining high-risk coverage gaps now sit outside the delayed order-lifecycle binding flow.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-18 17:05
+- Task: Finish phase 51 qr-login cooldown ownership hardening and regression coverage.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase51-design.md` before implementation.
+  - Tightened `POST /qr-login/reset-cooldown/{cookie_id}` and `GET /qr-login/cooldown-status/{cookie_id}` so they reject foreign-user cookie access.
+  - Extended `tests/smoke/test_accounts.py` with owner-vs-foreign coverage for both qr-login cooldown routes using a fake cooldown instance.
+  - Re-ran targeted account smoke tests, full smoke suite, compileall, diff hygiene, and production review context collection for the phase-51 diff.
+- Results:
+  - Targeted account smoke tests: 12 passed.
+  - Full smoke suite: 169 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Production review: no new P1/P2 findings in the phase-51 diff; status passed.
+- Next:
+  - Stage and commit the phase-51 change set.
+  - Continue reevaluating whether any remaining high-risk coverage gaps now sit outside the qr-login/account/runtime ownership cluster.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.
