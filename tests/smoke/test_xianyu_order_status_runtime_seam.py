@@ -361,3 +361,61 @@ async def test_fetch_order_detail_info_bridges_successful_refresh_into_handler_f
         ),
         mock.call.on_order_details_fetched("detail-order-1"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_order_detail_info_returns_detail_when_handler_followup_raises(mocker):
+    order_status_handler = mock.Mock()
+    order_status_handler.handle_order_detail_fetched_status.return_value = True
+    order_status_handler.on_order_details_fetched.side_effect = RuntimeError("pending queue boom")
+    live = _make_detail_refresh_live(order_status_handler)
+
+    fetched_detail = {
+        "title": "detail title",
+        "order_status": "shipped",
+        "order_status_source": "structured",
+        "spec_parse_mode": "no_spec",
+        "quantity": "1",
+        "amount": "8.80",
+        "amount_source": "structured",
+        "platform_created_at": "2026-06-17 09:00:00",
+        "platform_paid_at": "2026-06-17 09:01:00",
+        "platform_completed_at": None,
+    }
+
+    mocker.patch(
+        "utils.order_detail_fetcher.fetch_order_detail_simple",
+        mock.AsyncMock(return_value=fetched_detail),
+    )
+
+    fake_db = mock.Mock()
+    fake_db.get_item_info.return_value = None
+    fake_db.get_order_by_id.return_value = {
+        "order_id": "detail-order-2",
+        "buyer_id": "buyer-detail-2",
+        "buyer_nick": "detail buyer 2",
+        "order_status": "pending_ship",
+        "amount": "8.80",
+    }
+    fake_db._normalize_order_status.side_effect = lambda value: value
+    fake_db.get_cookie_by_id.return_value = {"id": "runtime-detail-cookie", "value": "cookie"}
+    fake_db.insert_or_update_order.return_value = True
+    mocker.patch("db_manager.db_manager", fake_db)
+
+    result = await live.fetch_order_detail_info(
+        order_id="detail-order-2",
+        item_id="detail-item-2",
+        buyer_id="buyer-detail-2",
+        sid="detail-chat-2@goofish",
+        buyer_nick="detail buyer 2",
+        buyer_id_source="message",
+    )
+
+    assert result == fetched_detail
+    fake_db.insert_or_update_order.assert_called_once()
+    order_status_handler.handle_order_detail_fetched_status.assert_called_once_with(
+        order_id="detail-order-2",
+        cookie_id="runtime-detail-cookie",
+        context="订单详情已拉取",
+    )
+    order_status_handler.on_order_details_fetched.assert_called_once_with("detail-order-2")

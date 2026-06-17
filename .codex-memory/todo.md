@@ -1,11 +1,11 @@
 # TODO
 
 ## In Progress
-- [ ] Stage, commit, and push phase 32 detail-refresh handler seam coverage to the draft GitHub PR
+- [ ] Stage, commit, and push phase 33 detail-refresh handler failure-isolation seam coverage to the draft GitHub PR
 
 ## Next
 - [ ] Evaluate whether any broader route or service entrypoint still needs coverage beyond the now-covered runtime detail-refresh and message-handoff seams
-- [ ] Evaluate whether the next most valuable gap is a failure-path seam instead of another success-path entrypoint
+- [ ] Evaluate whether the next highest-value uncovered contract is a write-failure or basic-order-info failure path near the same runtime seams
 
 ## Done
 - [x] Add authz/cookie isolation/file token/system settings smoke coverage
@@ -42,3 +42,4 @@
 - [x] Add direct runtime seam coverage so `XianyuLive.handle_message(...)` forwards parsed match context into the system-message and red-reminder status handler entrypoints
 - [x] Add terminal red-reminder runtime shortcut coverage so `XianyuLive.handle_message(...)` exercises `handle_red_reminder_order_status(...)` with the expected live context
 - [x] Add successful detail-refresh seam coverage so `XianyuLive.fetch_order_detail_info(...)` persists the order and triggers the handler follow-up hooks
+- [x] Add detail-refresh failure-isolation seam coverage so `XianyuLive.fetch_order_detail_info(...)` still returns fetched detail when handler follow-up raises after persistence

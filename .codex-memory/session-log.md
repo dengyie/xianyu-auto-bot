@@ -425,3 +425,20 @@
   - Stage only the intentional phase-32 files, commit, and push the branch to update the draft PR.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-18 00:20
+- Task: Finish phase 33 smoke coverage for detail-refresh handler failure isolation.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase33-design.md` before implementation.
+  - Extended `tests/smoke/test_xianyu_order_status_runtime_seam.py`.
+  - Added direct coverage for `XianyuLive.fetch_order_detail_info(...)` proving a successful detail refresh still returns its fetched payload when `on_order_details_fetched(...)` raises after persistence.
+  - Re-ran targeted phase-33 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-33 tests: 6 passed.
+  - Full smoke suite: 147 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-33 diff review.
+- Next:
+  - Stage only the intentional phase-33 files, commit, and push the branch to update the draft PR.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

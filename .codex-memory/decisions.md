@@ -134,3 +134,8 @@
 - Decision: Add a focused smoke test around the real `XianyuLive.fetch_order_detail_info(...)` method body, with external detail fetching and DB dependencies stubbed, to verify the successful write path triggers `handle_order_detail_fetched_status(...)` and then `on_order_details_fetched(...)`.
 - Rationale: Route-level refresh and history-sync tests already prove higher-level success outcomes, but they do not directly guarantee that the runtime detail-refresh entrypoint bridges successful persistence into the order-status handler queue-consumption hooks. A seam test at this layer closes that gap without dragging in browser or live-platform dependencies.
 - Impact: The suite now explicitly proves the successful detail-refresh service entrypoint advances into the handler follow-up hooks that unblock pending order-status updates.
+
+## 2026-06-17 - Phase 33 should lock down detail-refresh handler failure isolation
+- Decision: Add a failure-path smoke test proving `XianyuLive.fetch_order_detail_info(...)` still returns the fetched detail payload when `on_order_details_fetched(...)` raises after successful persistence.
+- Rationale: The success seam from phase 32 established that the follow-up hooks run, but the adjacent production risk is silent regression in robustness: delayed refresh callers, forced refresh callers, and route-level refresh paths should not lose an otherwise successful detail fetch merely because the post-persistence handler follow-up throws. A focused seam test locks down that contract without broadening the production surface.
+- Impact: The suite now explicitly proves the detail-refresh entrypoint isolates handler follow-up failures and preserves the successfully fetched detail result for its callers.
