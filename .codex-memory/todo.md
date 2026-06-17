@@ -1,11 +1,11 @@
 # TODO
 
 ## In Progress
-- [ ] Stage, commit, and push phase 29 runtime order-status seam coverage to the draft GitHub PR
+- [ ] Stage, commit, and push phase 30 runtime direct status-handler seam coverage to the draft GitHub PR
 
 ## Next
 - [ ] Evaluate whether any pending-queue behavior still needs a broader service or route integration entrypoint test beyond the current handler and runtime seam smoke coverage
-- [ ] Evaluate whether direct system-message and red-reminder runtime entrypoints still need explicit higher-level seam coverage beyond the current order-id extraction path
+- [ ] Evaluate whether any remaining direct runtime shortcuts, especially the dedicated terminal red-reminder order-status branch, still need explicit higher-level seam coverage
 
 ## Done
 - [x] Add authz/cookie isolation/file token/system settings smoke coverage
@@ -39,3 +39,4 @@
 - [x] Add missing-strong-key system-message fallthrough coverage so incomplete match context queues instead of attempting direct backfill
 - [x] Add missing-strong-key red-reminder fallthrough coverage so incomplete match context queues instead of attempting direct backfill
 - [x] Add runtime seam coverage so `XianyuLive.handle_message(...)` forwards parsed order match context into `OrderStatusHandler`
+- [x] Add direct runtime seam coverage so `XianyuLive.handle_message(...)` forwards parsed match context into the system-message and red-reminder status handler entrypoints

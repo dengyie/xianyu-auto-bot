@@ -373,3 +373,21 @@
   - Stage only the intentional phase-29 files, commit, and push the branch to update the draft PR.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-17 23:00
+- Task: Finish phase 30 runtime seam coverage for direct system-message and red-reminder status handler handoffs.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase30-design.md` before implementation.
+  - Extended `tests/smoke/test_xianyu_order_status_runtime_seam.py`.
+  - Covered the live `XianyuLive.handle_message(...)` path proving parsed `sid`, `buyer_id`, and `item_id` reach both `handle_system_message(...)` and the later `handle_red_reminder_message(...)` fallback seam.
+  - Adjusted the red-reminder runtime fixture to avoid the earlier dedicated `交易关闭` shortcut branch so the targeted fallback seam is exercised directly.
+  - Re-ran targeted phase-30 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-30 tests: 3 passed.
+  - Full smoke suite: 144 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-30 diff review.
+- Next:
+  - Stage only the intentional phase-30 files, commit, and push the branch to update the draft PR.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

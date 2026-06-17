@@ -114,3 +114,13 @@
 - Decision: Add smoke coverage for `XianyuLive.handle_message(...)` forwarding parsed `sid`, `buyer_id`, and `item_id` into `order_status_handler.on_order_id_extracted(...)`.
 - Rationale: Handler-level delayed-binding tests were already strong, but they could not detect a regression where the runtime entrypoint stopped passing `match_context` through. A focused seam test closes that gap with much less noise than a broader end-to-end automation harness.
 - Impact: The test suite now proves the production live-message path preserves delayed-binding context at the handoff between `XianyuAutoAsync` and `OrderStatusHandler`.
+
+## 2026-06-17 - Phase 30 should extend runtime seam coverage to direct status handler entrypoints
+- Decision: Add smoke coverage for `XianyuLive.handle_message(...)` forwarding parsed match context into both `handle_system_message(...)` and the later `handle_red_reminder_message(...)` fallback seam.
+- Rationale: After phase 29 proved the order-id extraction handoff, the next meaningful runtime gap was the pair of direct status-handler entrypoints living later in the same live method. Covering both keeps the runtime seam aligned with the existing handler-focused queueing guarantees.
+- Impact: The suite now proves the live message path preserves `sid`, `buyer_id`, and `item_id` across all major order-status handoffs currently used in `XianyuAutoAsync`.
+
+## 2026-06-17 - Runtime seam tests should avoid earlier dedicated shortcut branches
+- Decision: Use a non-terminal red-reminder fixture for the runtime fallback seam test instead of `交易关闭`.
+- Rationale: `交易关闭` is consumed by an earlier dedicated red-reminder order-status branch inside `handle_message(...)`, so it cannot meaningfully validate the later `handle_red_reminder_message(...)` fallback seam. The adjusted fixture keeps the test aligned with the actual branch under review.
+- Impact: Phase-30 runtime seam coverage now exercises the intended fallback path directly instead of asserting on a branch that production control flow never reaches.
