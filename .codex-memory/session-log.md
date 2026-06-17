@@ -82,3 +82,20 @@
   - Stage only the intentional phase-11 files, commit, and push the branch to update the draft PR.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-17 14:10
+- Task: Finish phase 12 queue-cleanup coverage for unresolved enqueue entrypoints.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase12-design.md` before implementation.
+  - Updated `order_status_handler.py` so unresolved system-message and red-reminder enqueue paths clear stale pending state before appending new queue entries.
+  - Extended `tests/smoke/test_order_status_message_binding.py` with entrypoint-level stale-cleanup coverage for both queue types.
+  - Re-ran targeted phase-12 smoke tests, full smoke suite, compileall, and production review context collection for the changed scope.
+- Results:
+  - Targeted phase-12 tests: 14 passed.
+  - Full smoke suite: 123 passed.
+  - compileall: passed.
+  - No new P1/P2 findings were identified in the phase-12 diff review.
+- Next:
+  - Stage only the intentional phase-12 files, commit, and push the branch to update the draft PR.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

@@ -1276,6 +1276,8 @@ class OrderStatusHandler:
                     return True
 
                 logger.info(f'[{msg_time}] 【{cookie_id}】{send_message}，暂时无法提取订单ID，添加到待处理队列')
+
+                self.clear_old_pending_updates()
                 
                 # 创建一个临时的订单ID占位符，用于标识这个待处理的状态更新
                 temp_order_id = f"temp_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
@@ -1388,6 +1390,8 @@ class OrderStatusHandler:
                     return True
 
                 logger.info(f'[{msg_time}] 【{cookie_id}】交易关闭，暂时无法提取订单ID，添加到待处理队列')
+
+                self.clear_old_pending_updates()
                 
                 # 创建一个临时的订单ID占位符，用于标识这个待处理的状态更新
                 temp_order_id = f"temp_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"

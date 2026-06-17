@@ -1,11 +1,11 @@
 # TODO
 
 ## In Progress
-- [ ] Stage, commit, and push phase 11 smoke coverage updates to the draft GitHub PR
+- [ ] Stage, commit, and push phase 12 queue-cleanup coverage updates to the draft GitHub PR
 
 ## Next
-- [ ] Evaluate whether queue cleanup needs direct route/service-level integration coverage
-- [ ] Evaluate whether `on_order_id_extracted` still needs an additional regression around duplicate message hashes after the new queue-level `message_hash+strong_key` coverage
+- [ ] Evaluate whether `on_order_id_extracted` still needs an additional regression around duplicate message hashes after the queue-level coverage is now complete
+- [ ] Evaluate whether any pending-queue behavior also needs a broader service/route integration entrypoint test beyond the current handler-focused smoke coverage
 
 ## Done
 - [x] Add authz/cookie isolation/file token/system settings smoke coverage
@@ -21,3 +21,4 @@
 - [x] Add terminal recent-fallback binding and ambiguity smoke tests
 - [x] Add red-reminder terminal recent-fallback binding and ambiguity smoke tests
 - [x] Add duplicate-`message_hash` plus unique-`strong_key` queue binding smoke tests for system messages and red reminders
+- [x] Add enqueue-entry cleanup coverage for stale system-message and red-reminder pending state

@@ -752,3 +752,163 @@ def test_cleanup_expired_pending_updates_removes_only_stale_entries(mocker):
     assert "fresh-cookie" in handler._pending_system_messages
     assert "expired-red" not in handler._pending_red_reminder_messages
     assert "fresh-red" in handler._pending_red_reminder_messages
+
+
+def test_system_message_enqueue_cleans_stale_pending_entries_before_appending(mocker):
+    fake_db = _MessageBindingDB()
+    handler = order_status_handler.OrderStatusHandler()
+    handler.config["max_pending_age_hours"] = 0.001
+    handler.pending_updates = {
+        "expired-order": [
+            {"new_status": "shipped", "cookie_id": "cookie-clean-system", "context": "expired", "timestamp": 100.0}
+        ],
+        "fresh-order": [
+            {"new_status": "shipped", "cookie_id": "cookie-clean-system", "context": "fresh", "timestamp": 198.0}
+        ],
+    }
+    handler._pending_system_messages = {
+        "cookie-clean-system": [
+            {
+                "message": _make_message(9_000, system=True),
+                "send_message": "expired",
+                "cookie_id": "cookie-clean-system",
+                "msg_time": "18:00:00",
+                "new_status": "shipped",
+                "temp_order_id": "expired-order",
+                "message_hash": 901,
+                "sid": "chat-expired@goofish",
+                "buyer_id": "buyer-expired",
+                "item_id": "item-expired",
+                "message_timestamp_ms": 9_000,
+                "timestamp": 100.0,
+            },
+            {
+                "message": _make_message(9_100, system=True),
+                "send_message": "fresh",
+                "cookie_id": "cookie-clean-system",
+                "msg_time": "18:00:01",
+                "new_status": "shipped",
+                "temp_order_id": "fresh-order",
+                "message_hash": 902,
+                "sid": "chat-fresh@goofish",
+                "buyer_id": "buyer-fresh",
+                "item_id": "item-fresh",
+                "message_timestamp_ms": 9_100,
+                "timestamp": 198.0,
+            },
+        ]
+    }
+
+    mocker.patch("db_manager.db_manager", fake_db)
+    mocker.patch.object(
+        handler,
+        "_resolve_system_message_status",
+        return_value=(
+            "shipped",
+            {"is_system_message": True},
+            [{"source": "send_message", "status": "shipped", "text": "shipped"}],
+        ),
+    )
+    mocker.patch.object(handler, "extract_order_id", return_value=None)
+    mocker.patch("time.time", return_value=200.0)
+    mocker.patch("uuid.uuid4", return_value=type("FakeUuid", (), {"hex": "abcdef1234567890"})())
+
+    queued = handler.handle_system_message(
+        message=_make_message(9_200, system=True),
+        send_message="娴ｇ姴鍑￠崣鎴ｆ彛",
+        cookie_id="cookie-clean-system",
+        msg_time="18:00:02",
+        match_context={
+            "message_hash": 903,
+            "sid": "chat-new@goofish",
+            "buyer_id": "buyer-new",
+            "item_id": "item-new",
+            "message_timestamp_ms": 9_200,
+        },
+    )
+
+    assert queued is True
+    assert "expired-order" not in handler.pending_updates
+    assert "fresh-order" in handler.pending_updates
+    assert "temp_200000_abcdef12" in handler.pending_updates
+    assert [msg["temp_order_id"] for msg in handler._pending_system_messages["cookie-clean-system"]] == [
+        "fresh-order",
+        "temp_200000_abcdef12",
+    ]
+
+
+def test_red_reminder_enqueue_cleans_stale_pending_entries_before_appending(mocker):
+    fake_db = _MessageBindingDB()
+    handler = order_status_handler.OrderStatusHandler()
+    handler.config["max_pending_age_hours"] = 0.001
+    handler.pending_updates = {
+        "expired-red-order": [
+            {"new_status": "cancelled", "cookie_id": "cookie-clean-red", "context": "expired", "timestamp": 100.0}
+        ],
+        "fresh-red-order": [
+            {"new_status": "cancelled", "cookie_id": "cookie-clean-red", "context": "fresh", "timestamp": 198.0}
+        ],
+    }
+    handler._pending_red_reminder_messages = {
+        "cookie-clean-red": [
+            {
+                "message": _make_message(9_300),
+                "red_reminder": "浜ゆ槗鍏抽棴",
+                "user_id": "user-expired",
+                "cookie_id": "cookie-clean-red",
+                "msg_time": "18:10:00",
+                "new_status": "cancelled",
+                "temp_order_id": "expired-red-order",
+                "message_hash": 911,
+                "sid": "chat-expired@goofish",
+                "buyer_id": "buyer-expired",
+                "item_id": "item-expired",
+                "message_timestamp_ms": 9_300,
+                "timestamp": 100.0,
+            },
+            {
+                "message": _make_message(9_400),
+                "red_reminder": "浜ゆ槗鍏抽棴",
+                "user_id": "user-fresh",
+                "cookie_id": "cookie-clean-red",
+                "msg_time": "18:10:01",
+                "new_status": "cancelled",
+                "temp_order_id": "fresh-red-order",
+                "message_hash": 912,
+                "sid": "chat-fresh@goofish",
+                "buyer_id": "buyer-fresh",
+                "item_id": "item-fresh",
+                "message_timestamp_ms": 9_400,
+                "timestamp": 198.0,
+            },
+        ]
+    }
+
+    mocker.patch("db_manager.db_manager", fake_db)
+    mocker.patch.object(handler, "extract_order_id", return_value=None)
+    mocker.patch("time.time", return_value=200.0)
+    mocker.patch("uuid.uuid4", return_value=type("FakeUuid", (), {"hex": "12345678abcdef90"})())
+
+    queued = handler.handle_red_reminder_message(
+        message=_make_message(9_500),
+        red_reminder="交易关闭",
+        user_id="user-new",
+        cookie_id="cookie-clean-red",
+        msg_time="18:10:02",
+        match_context={
+            "message_hash": 913,
+            "sid": "chat-new@goofish",
+            "buyer_id": "buyer-new",
+            "item_id": "item-new",
+            "message_timestamp_ms": 9_500,
+        },
+    )
+
+    assert queued is True
+    assert "expired-red-order" not in handler.pending_updates
+    assert "fresh-red-order" in handler.pending_updates
+    assert "temp_200000_12345678" in handler.pending_updates
+    assert [msg["temp_order_id"] for msg in handler._pending_red_reminder_messages["cookie-clean-red"]] == [
+        "fresh-red-order",
+        "temp_200000_12345678",
+    ]
