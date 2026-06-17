@@ -1,6 +1,57 @@
 """Cross-user cookie access control regressions."""
 
 
+def test_item_info_routes_are_scoped_to_cookie_owner(client, auth, user_auth):
+    client.post(
+        "/cookies",
+        headers=auth,
+        json={"id": "admin_item_cookie", "value": "unb=admin"},
+    )
+    from db_manager import db_manager
+
+    assert db_manager.save_item_info(
+        "admin_item_cookie",
+        "admin_item_001",
+        {
+            "title": "Owner item",
+            "description": "Owner only",
+            "category": "digital",
+            "price": "9.90",
+        },
+    )
+
+    foreign_list = client.get("/items/cookie/admin_item_cookie", headers=user_auth)
+    foreign_read = client.get("/items/admin_item_cookie/admin_item_001", headers=user_auth)
+    foreign_update = client.put(
+        "/items/admin_item_cookie/admin_item_001",
+        headers=user_auth,
+        json={"item_detail": "{\"title\":\"stolen\"}"},
+    )
+    foreign_delete = client.delete(
+        "/items/admin_item_cookie/admin_item_001",
+        headers=user_auth,
+    )
+    owner_list = client.get("/items/cookie/admin_item_cookie", headers=auth)
+    owner_read = client.get("/items/admin_item_cookie/admin_item_001", headers=auth)
+    owner_update = client.put(
+        "/items/admin_item_cookie/admin_item_001",
+        headers=auth,
+        json={"item_detail": "{\"title\":\"updated\"}"},
+    )
+    owner_delete = client.delete("/items/admin_item_cookie/admin_item_001", headers=auth)
+
+    assert foreign_list.status_code == 403
+    assert foreign_read.status_code == 403
+    assert foreign_update.status_code == 403
+    assert foreign_delete.status_code == 403
+    assert owner_list.status_code == 200
+    assert [item["item_id"] for item in owner_list.json()["items"]] == ["admin_item_001"]
+    assert owner_read.status_code == 200
+    assert owner_read.json()["item"]["item_title"] == "Owner item"
+    assert owner_update.status_code == 200
+    assert owner_delete.status_code == 200
+
+
 def test_regular_user_cannot_list_another_users_cookie(client, auth, user_auth):
     client.post(
         "/cookies",

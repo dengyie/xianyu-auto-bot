@@ -2,8 +2,13 @@
 ## In Progress
 - [ ] Evaluate whether any remaining owner/scoped route still lacks a focused smoke regression
 ## Next
-- [ ] Evaluate whether the remaining uncovered risk now sits outside the current file/download, notification, account, keyword, and cookie-setting ownership clusters
+- [ ] Evaluate item-reply route ownership coverage for `/itemReplays/cookie/{cookie_id}` and `/item-reply/{cookie_id}/{item_id}`
+- [ ] Evaluate item flag ownership coverage for `/items/{cookie_id}/{item_id}/multi-spec` and `/items/{cookie_id}/{item_id}/multi-quantity-delivery`
+- [ ] Evaluate chat keyword item ownership coverage for `/api/chat/keywords/{cid}/item/{item_id}`, `/api/chat/keywords/{cid}/copy`, and `/api/chat/items/{cid}`
+- [ ] Evaluate AI reply settings ownership coverage for `/ai-reply-settings/{cookie_id}` and `/ai-reply-test/{cookie_id}`
+- [ ] Evaluate whether the remaining uncovered risk now sits outside the current file/download, notification, account, keyword, cookie-setting, and item-info ownership clusters
 ## Done
+- [x] Stage and commit phase 68 item-info ownership coverage
 - [x] Stage and commit phase 67 typed keyword read ownership coverage
 - [x] Stage and commit phase 66 comment-template list/create ownership coverage
 - [x] Stage and commit phase 65 comment-template id ownership fix

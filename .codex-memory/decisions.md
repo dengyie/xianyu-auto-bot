@@ -294,3 +294,7 @@
 - Decision: Add smoke coverage for `GET /keywords-with-type/{cid}` so foreign users cannot read another user's typed keyword rules.
 - Rationale: Plain keyword and item-scoped keyword routes already had owner-boundary coverage, but the typed keyword read endpoint has a distinct response path and owner check.
 - Impact: Typed keyword reads are now explicitly covered for foreign-user denial and owner success.
+## 2026-06-18 - Phase 68 should lock item-info route ownership
+- Decision: Add smoke coverage for `GET /items/cookie/{cookie_id}`, `GET /items/{cookie_id}/{item_id}`, `PUT /items/{cookie_id}/{item_id}`, and `DELETE /items/{cookie_id}/{item_id}`.
+- Rationale: The item-info routes already enforce cookie ownership and use `cookie_id` in data-layer item operations, but the route cluster lacked focused cross-user regression coverage. A route-level smoke test is the smallest way to prove foreign users cannot list, read, update, or delete another user's item records while the owner path still works.
+- Impact: Item-info route ownership is now explicitly covered without changing production behavior.

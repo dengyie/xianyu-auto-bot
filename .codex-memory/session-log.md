@@ -1017,3 +1017,22 @@
   - Continue evaluating remaining owner/scoped routes for focused smoke gaps.
 - Blockers:
   - `gh auth status` still reports an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` can complete.
+## 2026-06-18 00:20
+- Task: Add phase 68 smoke coverage for item-info ownership.
+- Actions:
+  - Reloaded project memory and reviewed remaining owner/scoped route candidates.
+  - Chose `/items/cookie/{cookie_id}` and `/items/{cookie_id}/{item_id}` as the next bounded route cluster.
+  - Confirmed production routes already check cookie ownership and pass `cookie_id` into item data-layer operations.
+  - Added `.codex-memory/test-coverage-phase68-design.md` and a smoke regression in `tests/smoke/test_cookie_access_control.py` covering foreign-user denial and owner success for list, read, update, and delete.
+  - Re-ran targeted cookie-access smoke tests, full smoke suite, compileall, diff hygiene, and production review context collection.
+- Results:
+  - Targeted cookie-access smoke tests: 12 passed.
+  - Full smoke suite: 186 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 95/100, no severe findings.
+- Next:
+  - Stage and commit the phase-68 change set.
+  - Continue evaluating item-reply, multi-spec item flag, chat keyword item, and AI reply settings ownership coverage.
+- Blockers:
+  - `gh auth status` previously reported an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` can complete.
