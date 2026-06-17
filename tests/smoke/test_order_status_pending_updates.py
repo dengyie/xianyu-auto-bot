@@ -81,3 +81,35 @@ def test_on_order_details_fetched_consumes_pending_updates(mocker):
 
     assert handler.get_pending_updates_count() == 0
     assert fake_db.orders["queued-order"]["order_status"] == "pending_ship"
+
+
+def test_on_order_details_fetched_consumes_multiple_pending_updates_in_sequence(mocker):
+    fake_db = _PendingQueueDB()
+    fake_db.orders["queued-order-multi"] = {
+        "order_id": "queued-order-multi",
+        "order_status": "processing",
+        "pre_refund_status": None,
+        "cookie_id": "queued-cookie-multi",
+    }
+    handler = order_status_handler.OrderStatusHandler()
+    handler.pending_updates["queued-order-multi"] = [
+        {
+            "new_status": "pending_ship",
+            "cookie_id": "queued-cookie-multi",
+            "context": "queued pending ship",
+            "timestamp": 1.0,
+        },
+        {
+            "new_status": "shipped",
+            "cookie_id": "queued-cookie-multi",
+            "context": "queued shipped",
+            "timestamp": 2.0,
+        },
+    ]
+
+    mocker.patch("db_manager.db_manager", fake_db)
+    handler.on_order_details_fetched("queued-order-multi")
+
+    assert handler.get_pending_updates_count() == 0
+    assert "queued-order-multi" not in handler.pending_updates
+    assert fake_db.orders["queued-order-multi"]["order_status"] == "shipped"
