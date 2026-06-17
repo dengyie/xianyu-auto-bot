@@ -78,6 +78,44 @@ class _FailingDetailHistoryFetcher(_FakeHistoryFetcher):
         raise RuntimeError("detail fetch boom")
 
 
+class _FakeLiveRuntime:
+    async def fetch_order_detail_info(
+        self,
+        order_id=None,
+        item_id=None,
+        buyer_id=None,
+        sid=None,
+        force_refresh=False,
+        buyer_nick=None,
+        buyer_id_source=None,
+    ):
+        del force_refresh, buyer_nick, buyer_id_source
+        reply_server.db_manager.insert_or_update_order(
+            order_id=order_id,
+            item_id=item_id,
+            buyer_id=buyer_id,
+            sid=sid,
+            buyer_nick="runtime buyer",
+            cookie_id="history_cookie",
+            order_status="shipped",
+            quantity="2",
+        )
+        return {"success": True}
+
+
+class _FakeCookieManager:
+    def __init__(self, runtime):
+        self.runtime = runtime
+
+    def get_xianyu_instance(self, cid):
+        del cid
+        return self.runtime
+
+    def get_ws_client(self, cid):
+        del cid
+        return None
+
+
 def _wait_for_job_state(job_id, expected_status, timeout=5.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -170,3 +208,32 @@ def test_history_sync_falls_back_to_candidate_when_detail_refresh_fails(client, 
     assert order["cookie_id"] == "history_cookie"
     assert order["order_status"] == "pending_ship"
     assert order["buyer_id"] == "hist-buyer-1"
+
+
+def test_history_sync_uses_live_instance_detail_refresh_when_available(client, user_auth, mocker):
+    _add_cookie(client, user_auth, "history_cookie")
+    mocker.patch("utils.order_history_sync.OrderHistoryPageFetcher", _FakeHistoryFetcher)
+    mocker.patch.object(reply_server.cookie_manager, "manager", _FakeCookieManager(_FakeLiveRuntime()))
+
+    create = client.post(
+        "/api/orders/history-sync",
+        headers=user_auth,
+        json={
+            "cookie_id": "history_cookie",
+            "start_date": "2026-06-16",
+            "end_date": "2026-06-18",
+            "max_orders": 5,
+            "fetch_details": True,
+        },
+    )
+    assert create.status_code == 200
+    job_id = create.json()["data"]["job_id"]
+
+    job = _wait_for_job_state(job_id, "completed")
+    assert job["orders_saved"] == 1
+    assert job["warnings"] == []
+
+    order = reply_server.db_manager.get_order_by_id("hist-order-1")
+    assert order["order_status"] == "shipped"
+    assert order["buyer_nick"] == "runtime buyer"
+    assert str(order["quantity"]) == "2"
