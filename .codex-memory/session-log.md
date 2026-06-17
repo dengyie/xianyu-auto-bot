@@ -608,3 +608,22 @@
   - Reevaluate the remaining test-gap map outside the delivery recovery chain.
 - Blockers:
   - Project virtual environment does not currently provide `pytest`.
+
+## 2026-06-18 10:10
+- Task: Finish phase 43 smoke coverage for refresh-route soft failure when live detail refresh returns no result.
+- Actions:
+  - Added `.codex-memory/test-coverage-phase43-design.md` before implementation.
+  - Extended `tests/smoke/test_order_delivery_transitions.py` so the fake runtime can simulate falsey `fetch_order_detail_info(...)` results without mutating stored order state.
+  - Added a route-level smoke test proving `/api/orders/{order_id}/refresh` returns `success=False` and `updated=False` when the live detail refresh yields no result.
+  - Re-ran targeted phase-43 tests, full smoke suite, compileall, diff hygiene, and production review for the phase-43 diff.
+- Results:
+  - Targeted phase-43 tests: 13 passed.
+  - Full smoke suite: 160 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Production review: no new P1/P2 findings; score 96/100; status passed.
+- Next:
+  - Stage only the intentional phase-43 files, commit, and push the branch.
+  - Reevaluate remaining route/service coverage gaps outside the delivery and refresh chains.
+- Blockers:
+  - Project virtual environment does not currently provide `pytest`.

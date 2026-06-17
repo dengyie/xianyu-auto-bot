@@ -3,6 +3,9 @@
 import reply_server
 
 
+_UNSET = object()
+
+
 def _add_cookie(client, headers, cookie_id):
     resp = client.post(
         "/cookies",
@@ -26,7 +29,7 @@ def _insert_order(db, *, order_id, cookie_id=None, item_id="item-1", buyer_id="b
 
 
 class _FakeRuntime:
-    def __init__(self, *, auto_delivery_result=None, mark_sent_result=True, finalize_result=None):
+    def __init__(self, *, auto_delivery_result=None, mark_sent_result=True, finalize_result=None, refresh_result=_UNSET):
         self.sent_once = []
         self.auto_delivery_calls = []
         self.mark_sent_calls = []
@@ -36,6 +39,7 @@ class _FakeRuntime:
         self._auto_delivery_result = auto_delivery_result
         self._mark_sent_result = mark_sent_result
         self._finalize_result = finalize_result or {"success": True}
+        self._refresh_result = {"success": True} if refresh_result is _UNSET else refresh_result
 
     def _summarize_delivery_progress(self, order_id, expected_quantity):
         return reply_server.db_manager.get_delivery_progress_summary(order_id, expected_quantity)
@@ -121,6 +125,8 @@ class _FakeRuntime:
         return reply_server.db_manager.get_delivery_progress_summary(order_id, expected_quantity)
 
     async def fetch_order_detail_info(self, order_id=None, item_id=None, buyer_id=None, sid=None, force_refresh=False):
+        if not self._refresh_result:
+            return self._refresh_result
         reply_server.db_manager.insert_or_update_order(
             order_id=order_id,
             item_id=item_id,
@@ -129,7 +135,7 @@ class _FakeRuntime:
             cookie_id="refresh_cookie",
             order_status="shipped",
         )
-        return {"success": True}
+        return dict(self._refresh_result)
 
 
 class _FakeCookieManager:
@@ -582,3 +588,28 @@ def test_refresh_success_updates_order_status(client, user_auth, mocker):
     assert body["updated"] is True
     order = reply_server.db_manager.get_order_by_id("refresh-success")
     assert order["order_status"] == "shipped"
+
+
+def test_refresh_returns_failure_when_live_detail_refresh_returns_no_result(client, user_auth, mocker):
+    _add_cookie(client, user_auth, "refresh_fail_cookie")
+    _insert_order(
+        reply_server.db_manager,
+        order_id="refresh-no-result",
+        cookie_id="refresh_fail_cookie",
+        item_id="item-404",
+        buyer_id="buyer-404",
+        sid="chat-404@goofish",
+        status="pending_ship",
+    )
+    runtime = _FakeRuntime(refresh_result=None)
+    mocker.patch.object(reply_server.cookie_manager, "manager", _FakeCookieManager(runtime=runtime))
+
+    resp = client.post("/api/orders/refresh-no-result/refresh", headers=user_auth)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is False
+    assert body["updated"] is False
+    assert "失败" in body["message"]
+    order = reply_server.db_manager.get_order_by_id("refresh-no-result")
+    assert order["order_status"] == "pending_ship"

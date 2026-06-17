@@ -184,3 +184,8 @@
 - Decision: Add route-level smoke coverage for the manual delivery branch where pending-finalize replay succeeds and no unsent units remain, rather than adding a helper-only assertion around `remaining_unit_indexes`.
 - Rationale: The production contract lives at the delivery route boundary: after replaying saved finalization work, the route must stop before any new send or `_auto_delivery(...)` preparation if there is nothing left to ship. A route smoke test is the smallest place that can prove the absence of duplicate buyer-visible actions.
 - Impact: The suite now explicitly proves replay-only retries return success immediately after consuming the saved pending-finalize record, with no new delivery preparation or resend side effects.
+
+## 2026-06-18 - Phase 43 should lock down refresh-route soft failure semantics
+- Decision: Add route-level smoke coverage for `/api/orders/{order_id}/refresh` when `fetch_order_detail_info(...)` returns a falsey result instead of raising.
+- Rationale: The success path and ownership rejection path were already covered, but the adjacent production contract is the soft-failure branch where the live refresh cannot produce detail data. Without a focused test, the route could regress into silently reporting success or mutating stored state after a no-result refresh.
+- Impact: The suite now explicitly proves refresh failures with no returned detail leave order state unchanged and surface a user-visible `updated=False` response.
