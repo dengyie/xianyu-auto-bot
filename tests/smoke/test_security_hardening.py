@@ -1,4 +1,5 @@
 """Security hardening regressions."""
+import glob
 import hashlib
 
 
@@ -79,3 +80,32 @@ def test_admin_table_data_management_is_admin_only_and_protects_forbidden_tables
     assert denied_clear.status_code == 403
     assert disallowed_read.status_code == 400
     assert protected_clear.status_code == 400
+
+
+def test_admin_backup_management_is_admin_only_and_validates_inputs(
+    client, auth, user_auth, monkeypatch
+):
+    monkeypatch.setattr(glob, "glob", lambda pattern: [])
+
+    denied_download = client.get("/admin/backup/download", headers=user_auth)
+    denied_list = client.get("/admin/backup/list", headers=user_auth)
+    denied_upload = client.post(
+        "/admin/backup/upload",
+        headers=user_auth,
+        files={"backup_file": ("backup.txt", b"not-db", "text/plain")},
+    )
+    admin_download_missing_db = client.get("/admin/backup/download", headers=auth)
+    admin_list = client.get("/admin/backup/list", headers=auth)
+    admin_invalid_upload = client.post(
+        "/admin/backup/upload",
+        headers=auth,
+        files={"backup_file": ("backup.txt", b"not-db", "text/plain")},
+    )
+
+    assert denied_download.status_code == 403
+    assert denied_list.status_code == 403
+    assert denied_upload.status_code == 403
+    assert admin_download_missing_db.status_code == 404
+    assert admin_list.status_code == 200
+    assert admin_list.json() == {"backups": [], "total": 0}
+    assert admin_invalid_upload.status_code == 400

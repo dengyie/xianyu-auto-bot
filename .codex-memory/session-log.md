@@ -1530,3 +1530,24 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the now-covered admin data management cluster.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-18 19:23
+- Task: Finish phase 93 admin backup management boundary coverage.
+- Actions:
+  - Re-checked skills/plugins per project rules and restored project memory.
+  - Selected admin backup management endpoints because they can expose the database file surface and restore-adjacent upload behavior.
+  - Added `.codex-memory/test-coverage-phase93-design.md` before implementation.
+  - Added a smoke regression in `tests/smoke/test_security_hardening.py` covering regular-user denial for backup download/list/upload, admin missing-DB download `404`, stable empty backup listing, and invalid upload rejection.
+  - Kept production code unchanged because routes already use `require_admin` and safe early validation.
+  - Re-ran targeted security hardening tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted security hardening smoke tests: 6 passed.
+  - Full smoke suite: 215 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-93 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the now-covered admin backup management cluster.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.

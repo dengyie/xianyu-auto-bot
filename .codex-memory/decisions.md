@@ -411,3 +411,8 @@
 - Decision: Add smoke coverage for admin table read/export/clear management boundaries without changing production code.
 - Rationale: Admin data management can read, export, and destructively clear database tables. Existing routes already use `require_admin` and table allowlists, but needed focused regression coverage for regular-user denial, disallowed table names, and protected users-table clear attempts.
 - Impact: The smoke suite now proves regular users cannot access read/export/clear operations and admins still get `400` for forbidden table names or attempts to clear the `users` table.
+
+## 2026-06-18 - Phase 93 should pin admin backup management guards
+- Decision: Add smoke coverage for admin backup download/list/upload management boundaries without changing production code.
+- Rationale: Backup endpoints expose database files and restore-adjacent upload behavior, so the admin-only boundary and early invalid-upload rejection need focused regression coverage.
+- Impact: The smoke suite now proves regular users cannot access backup management, admin missing-DB downloads return `404`, empty backup lists stay stable, and non-`.db` uploads are rejected before restore logic.
