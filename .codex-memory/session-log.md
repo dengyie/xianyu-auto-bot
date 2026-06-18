@@ -1235,3 +1235,24 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the now-covered chat runtime cluster.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-18 13:18
+- Task: Finish phase 79 admin slider verification stats ownership coverage.
+- Actions:
+  - Reloaded project memory and audited remaining owner/scoped route clusters.
+  - Selected `/admin/slider-verification-stats` as a focused admin-scoped tenant isolation surface.
+  - Added `.codex-memory/test-coverage-phase79-design.md` before implementation.
+  - Confirmed production route already scopes target cookies through `db_manager.get_all_cookies(admin_user['user_id'])`, so no runtime code change was needed.
+  - Added a smoke regression in `tests/smoke/test_authz_matrix.py` covering regular-user denial, admin-owned aggregate stats, admin-owned explicit cookie stats, and empty result for another user's cookie.
+  - Re-ran targeted authz tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted authz matrix smoke tests: 8 passed.
+  - Full smoke suite: 201 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 95/100, no severe findings.
+- Next:
+  - Stage and commit the phase-79 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the now-covered slider-stat cluster.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.

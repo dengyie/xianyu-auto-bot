@@ -162,3 +162,54 @@ def test_update_management_accepts_is_admin_user_without_admin_username(client, 
     assert len(scheduled) == 1
     assert legacy_admin.status_code == 200
     scheduled[0].close()
+
+
+def test_slider_verification_stats_are_scoped_to_admin_owned_cookies(client, user_auth):
+    from db_manager import db_manager
+
+    db_manager.create_user("ops_admin", "ops-admin@test.local", "ops123")
+    assert db_manager.update_user_admin_status(3, True)
+    assert db_manager.save_cookie("ops_slider_cookie", "unb=ops", user_id=3)
+    assert db_manager.save_cookie("foreign_slider_cookie", "unb=foreign", user_id=2)
+    db_manager.add_risk_control_log(
+        "ops_slider_cookie",
+        event_type="slider_captcha",
+        processing_status="success",
+        session_id="ops-success",
+    )
+    db_manager.add_risk_control_log(
+        "foreign_slider_cookie",
+        event_type="slider_captcha",
+        processing_status="failed",
+        session_id="foreign-failure",
+    )
+
+    ops_auth = _make_auth_header(3, "ops_admin", True)
+
+    regular = client.get("/admin/slider-verification-stats", headers=user_auth)
+    aggregate = client.get("/admin/slider-verification-stats", headers=ops_auth)
+    own_cookie = client.get(
+        "/admin/slider-verification-stats?cookie_id=ops_slider_cookie",
+        headers=ops_auth,
+    )
+    foreign_cookie = client.get(
+        "/admin/slider-verification-stats?cookie_id=foreign_slider_cookie",
+        headers=ops_auth,
+    )
+
+    assert regular.status_code == 403
+    assert aggregate.status_code == 200
+    assert aggregate.json()["success"] is True
+    aggregate_data = aggregate.json()["data"]
+    assert aggregate_data["total_sessions"] == 1
+    assert aggregate_data["success_count"] == 1
+    assert aggregate_data["failure_count"] == 0
+    assert aggregate_data["accounts_with_sessions"] == 1
+    assert own_cookie.status_code == 200
+    assert own_cookie.json()["data"]["total_sessions"] == 1
+    assert foreign_cookie.status_code == 200
+    foreign_data = foreign_cookie.json()["data"]
+    assert foreign_data["total_sessions"] == 0
+    assert foreign_data["success_count"] == 0
+    assert foreign_data["failure_count"] == 0
+    assert foreign_data["selected_cookie_id"] == "foreign_slider_cookie"

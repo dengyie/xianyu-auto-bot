@@ -341,3 +341,8 @@
 - Decision: Add route-level smoke coverage for chat session list, chat message list, and chat send using local DB rows plus a fake connected live instance.
 - Rationale: The existing `_ensure_cookie_access(...)` gates were correct, but this high-value chat API cluster lacked focused cross-user regression coverage for both read and send paths.
 - Impact: Foreign users are now explicitly proven unable to read another account's chat state or send through another account, while owner read/send behavior remains covered.
+
+## 2026-06-18 - Phase 79 should pin slider stats to the authenticated admin's cookies
+- Decision: Add smoke coverage for `/admin/slider-verification-stats` proving regular users are rejected and admins only aggregate risk-control records for their own cookies.
+- Rationale: Slider verification stats expose account operational signals; even for an admin endpoint, the current contract is user-scoped aggregation through `get_all_cookies(admin_user['user_id'])`.
+- Impact: The smoke suite now proves explicit foreign-cookie queries return an empty scoped result and aggregate stats exclude another user's slider records.
