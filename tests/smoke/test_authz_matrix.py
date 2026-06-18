@@ -122,6 +122,17 @@ def test_system_reload_cache_is_admin_only(client, auth, user_auth):
     assert manager.calls == 1
 
 
+def test_keywords_table_debug_metadata_is_admin_only(client, auth, user_auth):
+    denied = client.get("/debug/keywords-table-info", headers=user_auth)
+    allowed = client.get("/debug/keywords-table-info", headers=auth)
+
+    assert denied.status_code == 403
+    assert allowed.status_code == 200
+    body = allowed.json()
+    assert "db_version" in body
+    assert any(column["name"] == "cookie_id" for column in body["table_columns"])
+
+
 class _FakeUpdateProgress:
     status = "idle"
     current_file = ""

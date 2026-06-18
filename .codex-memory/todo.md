@@ -2,8 +2,9 @@
 ## In Progress
 - [ ] Evaluate the next remaining owner/scoped route cluster for a focused smoke regression
 ## Next
-- [ ] Evaluate whether the remaining uncovered risk now sits outside the current file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, update-management, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, cookie availability, and system-cache clusters
+- [ ] Evaluate whether the remaining uncovered risk now sits outside the current file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, update-management, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, cookie availability, system-cache, and debug metadata clusters
 ## Done
+- [x] Stage and commit phase 85 keywords debug metadata admin-boundary hardening
 - [x] Stage and commit phase 84 system cache reload admin-boundary hardening
 - [x] Stage and commit phase 83 cookie availability check scoping
 - [x] Stage and commit phase 82 realtime log admin-boundary hardening

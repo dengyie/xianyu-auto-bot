@@ -371,3 +371,8 @@
 - Decision: Change `/system/reload-cache` from authenticated-user access to `require_admin`.
 - Rationale: Reloading `CookieManager` refreshes global runtime account/cache state and is presented as system cache management, so regular users should not be able to trigger it.
 - Impact: Regular users now receive `403`, admin reload behavior remains intact, and route-raised `HTTPException` status codes are preserved.
+
+## 2026-06-18 - Phase 85 should restrict keywords debug metadata to admins
+- Decision: Change `/debug/keywords-table-info` from authenticated-user access to `require_admin` and read metadata from the active DB connection.
+- Rationale: Schema/version metadata is operational debug information, and opening a separate SQLite connection can inspect the wrong database when the app uses `:memory:`.
+- Impact: Regular users now receive `403`, admins still get metadata, and the endpoint reflects the running application's DB state.

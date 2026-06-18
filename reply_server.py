@@ -8625,12 +8625,10 @@ def delete_keyword_by_index(cid: str, index: int, current_user: Dict[str, Any] =
 
 
 @app.get("/debug/keywords-table-info")
-def debug_keywords_table_info(current_user: Dict[str, Any] = Depends(get_current_user)):
+def debug_keywords_table_info(admin_user: Dict[str, Any] = Depends(require_admin)):
     """调试：检查keywords表结构"""
     try:
-        import sqlite3
-        conn = sqlite3.connect(db_manager.db_path)
-        cursor = conn.cursor()
+        cursor = db_manager.conn.cursor()
 
         # 获取表结构信息
         cursor.execute("PRAGMA table_info(keywords)")
@@ -8640,8 +8638,6 @@ def debug_keywords_table_info(current_user: Dict[str, Any] = Depends(get_current
         cursor.execute("SELECT value FROM system_settings WHERE key = 'db_version'")
         version_result = cursor.fetchone()
         db_version = version_result[0] if version_result else "未知"
-
-        conn.close()
 
         return {
             "db_version": db_version,
