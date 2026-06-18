@@ -1639,3 +1639,98 @@
   - Future milestone can continue remaining owner/scoped API coverage.
 - Blockers:
   - None for the phase-95 local delivery.
+
+## 2026-06-19 06:48
+- Task: Diagnose QR login scan succeeded but UI did not stay logged in during local testing.
+- Actions:
+  - Checked current running process, QR login logs, and service mode.
+  - Confirmed session `295d0e41-4451-4d7b-ad6f-0d23db394dd7` reached `success`, fetched real cookies for account `1926782908`, and wrote them to the database.
+  - Found the failure point: `真实Cookie已获取，但任务管理器未初始化，未启动账号任务`, followed by rollback.
+  - Confirmed port `8090` had been started with `run_web_only.py`, which only starts the admin FastAPI UI and skips CookieManager/task runtime.
+  - Stopped the web-only process and restarted full mode with `venv\Scripts\python.exe Start.py`.
+- Results:
+  - Full service is running on `http://127.0.0.1:8090/admin`.
+  - `CookieManager` initialized and loaded two account tasks.
+  - WebSocket connection loops started for accounts `1926782908` and `2638850042`.
+  - Current startup logs show both accounts hit `FAIL_SYS_USER_VALIDATE` and entered slider verification flow, which is now a live account risk-control step rather than the previous web-only rollback issue.
+- Next:
+  - Retest QR login from the admin UI while the full service is running.
+  - If login still fails, inspect the new QR session logs and any slider/risk-control outcome.
+- Blockers:
+  - None for the environment-mode fix; external Xianyu risk-control may still require successful slider verification.
+
+## 2026-06-19 07:06
+- Task: Phase 98 QR login runtime handoff hardening.
+- Actions:
+  - Restored project memory, read the QR login/session/runtime paths, and documented the data flow in `.codex-memory/phase98-qr-login-runtime-handoff-design.md`.
+  - Added tests proving standard QR and lite QR do not report success when cookies were obtained but the account task was not handed to CookieManager.
+  - Added a test proving QR processing waits for an awaitable CookieManager handoff and surfaces delayed task-switch failures.
+  - Updated `reply_server.py` to classify runtime handoff failures as QR errors, and to await CookieManager add/update return values when they are awaitable.
+- Results:
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_accounts.py -q -k "runtime_handoff_failure"` initially failed, proving the bug.
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_accounts.py -q -k "async_runtime_handoff"` initially failed, proving delayed handoff errors were missed.
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_accounts.py tests/smoke/test_authz_matrix.py -q --maxfail=1` => 35 passed.
+  - `python -m compileall -q reply_server.py tests\smoke\test_accounts.py` => passed.
+  - `git diff --check` => passed.
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 227 passed.
+- Review:
+  - Phase-gate production review: no severe or medium blockers found.
+  - Security risk: no new authorization surface; existing session owner checks remain intact.
+  - Stability risk: reduced by awaiting awaitable CookieManager handoffs and preventing false success states.
+  - Quality score: 96/100; pass status: passed.
+- Next:
+  - Retest real QR login in the running full-mode app; if Xianyu returns `FAIL_SYS_USER_VALIDATE`, inspect slider/risk-control logs separately.
+- Blockers:
+  - Manual external Xianyu scan/slider outcome remains outside automated verification.
+
+## 2026-06-19 07:23
+- Task: Phase 99 core data-flow audit and test supplementation.
+- Actions:
+  - Restored project memory and froze the milestone around core data-flow inventory, P0/P1 data-flow bugs, and focused regression coverage.
+  - Created local design/audit doc `.codex-memory/phase99-core-data-flow-audit-design.md` mapping auth/session, account handoff, order/delivery, cards/rules, notifications, audit/logging, files/backup/settings.
+  - Identified the highest-risk repeated data-flow class: account cookie data can be persisted successfully while the CookieManager runtime handoff fails or fails later through a returned Future.
+  - Added TDD regressions for `POST /cookie/{cid}/account-info` and `PUT /cookies/{cid}` when `CookieManager.update_cookie(...)` returns a failed `concurrent.futures.Future`.
+  - Added `_consume_cookie_manager_handoff(...)` and used it in synchronous account runtime handoff points so failed `Future.result()` values surface as route errors instead of false success.
+- Results:
+  - The new `PUT /cookies/{cid}` Future-handoff test failed before the fix, proving the false-success bug.
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_accounts.py tests/smoke/test_reply_server_manual_cookie_import_flow.py -q --maxfail=1` => 18 passed.
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_accounts.py -q -k "future_runtime_handoff_failure or runtime_handoff_failure or async_runtime_handoff"` => 5 passed.
+  - `python -m compileall -q reply_server.py tests\smoke\test_accounts.py` => passed.
+  - `git diff --check` => passed.
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 229 passed.
+- Review:
+  - Phase-gate production review: no severe or medium blockers found.
+  - Security risk: no new authorization surface; account owner checks remain unchanged.
+  - Stability risk: reduced by surfacing runtime handoff failures; synchronous wait is bounded to 30 seconds.
+  - Quality score: 96/100; pass status: passed.
+- Next:
+  - Future milestone can evaluate password-login/manual-cookie-import background thread flows for the same handoff result consistency.
+- Blockers:
+  - Real Xianyu scan/slider/account-risk outcomes remain Manual-required.
+
+## 2026-06-19 07:46
+- Task: Phase 100 background login/import/QR refresh runtime handoff closure and production review.
+- Actions:
+  - Re-checked skills/plugins per project rules and restored project memory.
+  - Continued from `.codex-memory/phase100-background-handoff-design.md`.
+  - Added TDD regressions proving password login, manual cookie import, and manual QR refresh do not report success when CookieManager returns a failed `concurrent.futures.Future`.
+  - Updated password-login and manual-cookie-import success paths to consume CookieManager handoff results before marking sessions successful.
+  - Updated QR fallback save and manual QR refresh to consume runtime handoff results; manual QR refresh now returns failure on delayed runtime handoff errors.
+  - Kept password-login post-success cookie refresh best-effort, but made its returned handoff errors flow into the existing refresh exception logging.
+- Results:
+  - The manual QR refresh runtime handoff test initially failed with `success: True`, proving the remaining false-success bug.
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_accounts.py -q -k qr_login_refresh_cookies_surfaces_runtime_handoff_failure` => 1 passed.
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_accounts.py tests/smoke/test_reply_server_manual_cookie_import_flow.py -q --maxfail=1` => 21 passed.
+  - `python -m compileall -q reply_server.py tests\smoke\test_accounts.py tests\smoke\test_reply_server_manual_cookie_import_flow.py` => passed.
+  - `git diff --check` => passed.
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 232 passed.
+- Review:
+  - Phase-gate production review: no severe or medium blockers found.
+  - Security risk: no new authorization surface; existing account owner gates remain unchanged.
+  - Stability risk: reduced by surfacing delayed CookieManager Future failures across reviewed cookie persistence-to-runtime paths.
+  - Quality score: 96/100; pass status: passed.
+- Next:
+  - Commit the Phase 100 change set.
+  - Future milestone can continue unrelated owner/scoped route coverage.
+- Blockers:
+  - Real Xianyu scan/slider/account-risk outcomes remain Manual-required.

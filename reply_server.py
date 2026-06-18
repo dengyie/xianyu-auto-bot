@@ -16,6 +16,7 @@ import os
 import re
 import uuid
 import base64
+import inspect
 from datetime import datetime, timedelta
 import uvicorn
 import pandas as pd
@@ -937,6 +938,39 @@ def cleanup_qr_check_records():
             del qr_check_processed[session_id]
         if session_id in qr_check_locks:
             del qr_check_locks[session_id]
+
+
+def _qr_runtime_handoff_error(account_info: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Return an error when QR cookies were not handed to the account runtime."""
+    if not isinstance(account_info, dict):
+        return None
+
+    if account_info.get('task_restarted') is False and not account_info.get('fallback_reason'):
+        return (
+            account_info.get('warning_message')
+            or account_info.get('error_message')
+            or '扫码登录已获取Cookie，但账号任务未启动'
+        )
+    return None
+
+
+async def _await_cookie_manager_handoff(result: Any) -> None:
+    """Wait for CookieManager handoff when it returns an awaitable task."""
+    if result is None:
+        return
+    if asyncio.isfuture(result) or inspect.isawaitable(result):
+        await result
+
+
+def _consume_cookie_manager_handoff(result: Any) -> None:
+    """Surface synchronous CookieManager handoff failures to sync route handlers."""
+    if result is None:
+        return
+    if hasattr(result, "result") and callable(result.result):
+        try:
+            result.result(timeout=30)
+        except TypeError:
+            result.result()
 
 
 def load_keywords() -> List[Tuple[str, str]]:
@@ -3915,7 +3949,8 @@ def add_cookie(item: CookieIn, current_user: Dict[str, Any] = Depends(get_curren
         db_manager.save_cookie(item.id, item.value, user_id)
 
         # 添加到CookieManager，同时指定用户ID
-        cookie_manager.manager.add_cookie(item.id, item.value, user_id=user_id)
+        handoff_result = cookie_manager.manager.add_cookie(item.id, item.value, user_id=user_id)
+        _consume_cookie_manager_handoff(handoff_result)
         log_with_user('info', f"Cookie添加成功: {item.id}", current_user)
         return {"msg": "success"}
     except HTTPException:
@@ -3951,7 +3986,8 @@ def update_cookie(cid: str, item: CookieIn, current_user: Dict[str, Any] = Depen
         # 只有当 cookie 值真的发生变化时才重启任务
         if item.value != old_cookie_value:
             logger.info(f"Cookie值已变化，重启任务: {cid}")
-            cookie_manager.manager.update_cookie(cid, item.value, save_to_db=False)
+            handoff_result = cookie_manager.manager.update_cookie(cid, item.value, save_to_db=False)
+            _consume_cookie_manager_handoff(handoff_result)
         else:
             logger.info(f"Cookie值未变化，无需重启任务: {cid}")
         
@@ -4004,7 +4040,8 @@ def update_cookie_account_info(cid: str, info: CookieAccountInfo, current_user: 
         # 只有当 cookie 值真的发生变化时才重启任务
         if info.value is not None and info.value != old_cookie_value:
             logger.info(f"Cookie值已变化，重启任务: {cid}")
-            cookie_manager.manager.update_cookie(cid, info.value, save_to_db=False)
+            handoff_result = cookie_manager.manager.update_cookie(cid, info.value, save_to_db=False)
+            _consume_cookie_manager_handoff(handoff_result)
         else:
             logger.info(f"Cookie值未变化，无需重启任务: {cid}")
         
@@ -4270,7 +4307,8 @@ def update_cookie_proxy_config(cid: str, config: ProxyConfig, current_user: Dict
         logger.info(f"代理配置已更新，重启账号任务: {cid}")
         cookie_value = user_cookies.get(cid)
         if cookie_value:
-            cookie_manager.manager.update_cookie(cid, cookie_value, save_to_db=False)
+            handoff_result = cookie_manager.manager.update_cookie(cid, cookie_value, save_to_db=False)
+            _consume_cookie_manager_handoff(handoff_result)
         
         return {
             'success': True,
@@ -4973,16 +5011,14 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                 
                 # 统一走 CookieManager，确保任务登记、实例切换和运行态一致
                 if cookie_manager.manager:
-                    try:
-                        if is_new_account:
-                            cookie_manager.manager.add_cookie(account_id, cookies_str, user_id=user_id)
-                            log_with_user('info', f"已将新账号加入cookie_manager并启动任务: {account_id}", current_user)
-                        else:
-                            cookie_manager.manager.update_cookie(account_id, cookies_str, save_to_db=False)
-                            log_with_user('info', f"已更新cookie_manager并重启任务: {account_id}", current_user)
-                    except Exception as manager_err:
-                        action_desc = '启动新账号任务' if is_new_account else '切换账号任务'
-                        log_with_user('warning', f"{action_desc}失败: {account_id}, 错误: {str(manager_err)}", current_user)
+                    if is_new_account:
+                        handoff_result = cookie_manager.manager.add_cookie(account_id, cookies_str, user_id=user_id)
+                        _consume_cookie_manager_handoff(handoff_result)
+                        log_with_user('info', f"已将新账号加入cookie_manager并启动任务: {account_id}", current_user)
+                    else:
+                        handoff_result = cookie_manager.manager.update_cookie(account_id, cookies_str, save_to_db=False)
+                        _consume_cookie_manager_handoff(handoff_result)
+                        log_with_user('info', f"已更新cookie_manager并重启任务: {account_id}", current_user)
                 
                 if is_refresh_mode:
                     log_with_user('info', f"刷新模式已完成Token预检，直接切换到通过预检的新Cookie: {account_id}", current_user)
@@ -5019,7 +5055,12 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                                         if refreshed_cookies:
                                             # 更新cookie_manager中的Cookie
                                             if cookie_manager.manager:
-                                                cookie_manager.manager.update_cookie(account_id, refreshed_cookies, save_to_db=False)
+                                                handoff_result = cookie_manager.manager.update_cookie(
+                                                    account_id,
+                                                    refreshed_cookies,
+                                                    save_to_db=False,
+                                                )
+                                                _consume_cookie_manager_handoff(handoff_result)
                                             log_with_user('info', f"已更新刷新后的Cookie到cookie_manager: {account_id}", current_user)
                                 else:
                                     log_with_user('warning', f"Cookie刷新失败或跳过: {account_id}", current_user)
@@ -5235,14 +5276,16 @@ async def _execute_manual_cookie_import(
             if is_new_account:
                 db_manager.save_cookie(account_id, cookies_str, user_id)
                 if cookie_manager.manager:
-                    cookie_manager.manager.add_cookie(account_id, cookies_str, user_id=user_id)
+                    handoff_result = cookie_manager.manager.add_cookie(account_id, cookies_str, user_id=user_id)
+                    _consume_cookie_manager_handoff(handoff_result)
             else:
                 db_manager.update_cookie_account_info(account_id, cookie_value=cookies_str)
                 if cookie_manager.manager:
                     if account_id in getattr(cookie_manager.manager, 'cookies', {}):
-                        cookie_manager.manager.update_cookie(account_id, cookies_str, save_to_db=False)
+                        handoff_result = cookie_manager.manager.update_cookie(account_id, cookies_str, save_to_db=False)
                     else:
-                        cookie_manager.manager.add_cookie(account_id, cookies_str, user_id=user_id)
+                        handoff_result = cookie_manager.manager.add_cookie(account_id, cookies_str, user_id=user_id)
+                    _consume_cookie_manager_handoff(handoff_result)
 
             _set_manual_cookie_import_session_status(
                 session_id,
@@ -5978,6 +6021,14 @@ async def check_qr_code_status(session_id: str, current_user: Dict[str, Any] = D
 
                 account_info = record.get('account_info')
                 if account_info:
+                    handoff_error = _qr_runtime_handoff_error(account_info)
+                    if handoff_error:
+                        return {
+                            'status': 'error',
+                            'message': handoff_error,
+                            'account_info': account_info,
+                            'already_processed': True,
+                        }
                     return {
                         'status': 'success',
                         'message': '扫码登录已完成',
@@ -6005,6 +6056,14 @@ async def check_qr_code_status(session_id: str, current_user: Dict[str, Any] = D
 
                 account_info = record.get('account_info')
                 if account_info:
+                    handoff_error = _qr_runtime_handoff_error(account_info)
+                    if handoff_error:
+                        return {
+                            'status': 'error',
+                            'message': handoff_error,
+                            'account_info': account_info,
+                            'already_processed': True,
+                        }
                     return {
                         'status': 'success',
                         'message': '扫码登录已完成',
@@ -6078,8 +6137,16 @@ async def check_qr_code_status(session_id: str, current_user: Dict[str, Any] = D
                 if record.get('processed') and not record.get('processing'):
                     if record.get('error'):
                         return {'status': 'error', 'message': record['error']}
+                    account_info = record.get('account_info', {})
+                    handoff_error = _qr_runtime_handoff_error(account_info)
+                    if handoff_error:
+                        return {
+                            'status': 'error',
+                            'message': handoff_error,
+                            'account_info': account_info,
+                        }
                     status_info['status'] = 'success'
-                    status_info['account_info'] = record.get('account_info', {})
+                    status_info['account_info'] = account_info
                     return status_info
                 elif record.get('processing'):
                     return {'status': 'confirmed', 'message': '已确认，正在获取Cookie...'}
@@ -6153,7 +6220,12 @@ async def _run_qr_login_lite(session_id: str, current_user: Dict[str, Any]):
         merged = {**acct, **(info or {})}
         # process_qr_login_cookies 通常会回填 account_id/cookie_length 等
         state['account_info'] = merged
-        state['state'] = 'success'
+        handoff_error = _qr_runtime_handoff_error(merged)
+        if handoff_error:
+            state['state'] = 'error'
+            state['error_message'] = handoff_error
+        else:
+            state['state'] = 'success'
     except TimeoutError as exc:
         state['state'] = 'expired'
         state['error_message'] = str(exc) or '二维码已过期或扫码超时'
@@ -6348,11 +6420,13 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                     try:
                         if cookie_manager.manager:
                             if is_new_account:
-                                cookie_manager.manager.add_cookie(account_id, final_cookies, user_id=user_id)
+                                handoff_result = cookie_manager.manager.add_cookie(account_id, final_cookies, user_id=user_id)
+                                await _await_cookie_manager_handoff(handoff_result)
                                 log_with_user('info', f"已将真实cookie添加到cookie_manager: {account_id}", current_user)
                             else:
                                 # refresh_cookies_from_qr_login 已经保存到数据库了，这里不需要再保存
-                                cookie_manager.manager.update_cookie(account_id, final_cookies, save_to_db=False)
+                                handoff_result = cookie_manager.manager.update_cookie(account_id, final_cookies, save_to_db=False)
+                                await _await_cookie_manager_handoff(handoff_result)
                                 log_with_user('info', f"已更新cookie_manager中的真实cookie: {account_id}", current_user)
                             task_restarted = True
                             db_manager.set_cookie_qr_login_grace_until(account_id, qr_login_grace_until)
@@ -6516,11 +6590,13 @@ async def _fallback_save_qr_cookie(account_id: str, cookies: str, user_id: int, 
         # 添加到或更新cookie_manager
         if cookie_manager.manager:
             if is_new_account:
-                cookie_manager.manager.add_cookie(account_id, cookies)
+                handoff_result = cookie_manager.manager.add_cookie(account_id, cookies, user_id=user_id)
+                _consume_cookie_manager_handoff(handoff_result)
                 log_with_user('info', f"降级处理 - 已将原始cookie添加到cookie_manager: {account_id}", current_user)
             else:
                 # update_cookie_account_info 已经保存到数据库了，这里不需要再保存
-                cookie_manager.manager.update_cookie(account_id, cookies, save_to_db=False)
+                handoff_result = cookie_manager.manager.update_cookie(account_id, cookies, save_to_db=False)
+                _consume_cookie_manager_handoff(handoff_result)
                 log_with_user('info', f"降级处理 - 已更新cookie_manager中的原始cookie: {account_id}", current_user)
 
         return {
@@ -6619,7 +6695,12 @@ async def refresh_cookies_from_qr_login(
                 updated_cookie_info = db_manager.get_cookie_by_id(cookie_id)
                 if updated_cookie_info:
                     # refresh_cookies_from_qr_login 已经保存到数据库了，这里不需要再保存
-                    cookie_manager.manager.update_cookie(cookie_id, updated_cookie_info['cookies_str'], save_to_db=False)
+                    handoff_result = cookie_manager.manager.update_cookie(
+                        cookie_id,
+                        updated_cookie_info['cookies_str'],
+                        save_to_db=False,
+                    )
+                    _consume_cookie_manager_handoff(handoff_result)
                     log_with_user('info', f"已更新cookie_manager中的cookie: {cookie_id}", current_user)
 
             return {
@@ -9375,7 +9456,8 @@ def _persist_cookie_value_for_account(
         user_id=current_user["user_id"],
     )
     if cookie_manager.manager is not None:
-        cookie_manager.manager.update_cookie(cookie_id, cleaned_latest, save_to_db=False)
+        handoff_result = cookie_manager.manager.update_cookie(cookie_id, cleaned_latest, save_to_db=False)
+        _consume_cookie_manager_handoff(handoff_result)
 
 
 async def _sync_items_after_publish(

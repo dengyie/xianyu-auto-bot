@@ -7,6 +7,8 @@
 - [ ] Configure trusted proxy env vars in production deployments that need forwarded client IPs
 - [ ] Evaluate whether the remaining uncovered risk now sits outside the current file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, update-management, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, cookie availability, system-cache, and debug metadata clusters
 ## Done
+- [x] Phase 100 background login/import/QR refresh CookieManager handoff consistency
+- [x] Phase 99 core data-flow audit and synchronous account runtime handoff regression coverage
 - [x] Stage and commit phase 97 production review risk fixes
 - [x] Stage and commit phase 96 unified audit logging
 - [x] Stage and commit phase 95 admin token revocation fix

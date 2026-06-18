@@ -1,30 +1,29 @@
 # Current State Snapshot - 2026-06-19
 
-- Phase 97 is implemented: production review risks from Phase 96 are closed.
+- Phase 100 is implemented: CookieManager runtime handoff false-success gaps are closed across the reviewed account intake and QR refresh paths.
 - Production code change:
-  - added `utils/client_ip.py` for trusted client IP resolution.
-  - login, captcha, captcha-required checks, and audit logging now ignore spoofed `X-Forwarded-For`/`X-Real-IP` unless proxy trust is explicitly enabled and the direct peer is trusted.
-  - `/admin/audit-logs` now returns `500` when audit log querying fails instead of reporting a successful empty result.
-  - audit logs now support retention cleanup through `audit_log_retention_days`, defaulting to 90 days, with best-effort hourly cleanup after audit writes.
+  - kept Phase 98/99 helpers `_qr_runtime_handoff_error(...)`, `_await_cookie_manager_handoff(...)`, and `_consume_cookie_manager_handoff(...)`.
+  - sync cookie routes, proxy restart, publish-time cookie persistence, password-login success path, manual-cookie-import success path, QR fallback save, and manual QR cookie refresh now consume CookieManager handoff results and surface failed `Future.result()` outcomes.
+  - QR standard/lite status reports runtime handoff failure as an error, and async QR processing awaits awaitable CookieManager handoffs.
+  - password-login post-success browser cookie refresh remains best-effort, but returned handoff failures now enter the existing refresh error log instead of disappearing.
+- Design / audit:
+  - `.codex-memory/phase99-core-data-flow-audit-design.md` maps the core data flows.
+  - `.codex-memory/phase100-background-handoff-design.md` documents password-login and manual-cookie-import handoff behavior.
+  - Phase 100 scope stayed limited to account cookie persistence-to-runtime handoff consistency; unrelated untracked workspace files were ignored.
 - Test coverage:
-  - forged forwarded headers no longer affect login failure tracking by default.
-  - trusted proxy configuration accepts forwarded client IP.
-  - audit log query failures surface as `500`.
-  - old audit logs are pruned while recent logs remain.
+  - added regressions for account-info update, cookie update, password login, manual cookie import, QR processed status, QR lite, async QR processing, and manual QR refresh when CookieManager handoff fails.
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_audit_logging.py tests/smoke/test_security_hardening.py -q -k "audit or forwarded_for or trusted_proxy or admin_security"` => 8 passed
-  - `python -m compileall -q reply_server.py db_manager.py db_manager tests utils` => passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 224 passed
-  - `git diff --check` => passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_accounts.py -q -k qr_login_refresh_cookies_surfaces_runtime_handoff_failure` => 1 passed.
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_accounts.py tests/smoke/test_reply_server_manual_cookie_import_flow.py -q --maxfail=1` => 21 passed.
+  - `python -m compileall -q reply_server.py tests\smoke\test_accounts.py tests\smoke\test_reply_server_manual_cookie_import_flow.py` => passed.
+  - `git diff --check` => passed.
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 232 passed.
 - Production review status:
-  - phase-97 scope reviewed with `production-code-quality-review`
-  - severe issues: none
-  - medium issues: none
-  - Manual-required: configure `TRUST_PROXY_HEADERS=true` plus `TRUSTED_PROXY_IPS` in deployments that sit behind a trusted reverse proxy
-  - quality score: 96/100
-  - pass status: passed
-- Environment note:
-  - validation used host Python because the project virtual environment has previously lacked `pytest`
-- Next testing priorities:
-  - future milestone can add a lightweight admin UI for audit log browsing or expand explicit audit events to more business mutations
-  - keep ignoring unrelated untracked workspace files
+  - phase-gate review found no P0/P1 blockers.
+  - security risk: no new authorization surface; existing owner checks remain in place.
+  - stability risk: reduced by eliminating false success after runtime handoff failures; synchronous wait is bounded to 30 seconds.
+  - quality score: 96/100; pass status: passed.
+- Backlog / manual:
+  - Backlog: continue evaluating the next unrelated owner/scoped route cluster in a future milestone.
+  - Manual-required: real Xianyu scan/slider/account-risk outcomes still require live external validation.
+  - keep ignoring unrelated untracked workspace files unless the user explicitly asks to manage them.
