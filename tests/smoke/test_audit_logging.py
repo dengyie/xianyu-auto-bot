@@ -64,3 +64,46 @@ def test_request_middleware_records_user_request_outcome(client, auth):
     admin_users_log = next(log for log in logs if log["request_path"] == "/admin/users")
     assert admin_users_log["status"] == "success"
     assert admin_users_log["details"]["status_code"] == 200
+
+
+def test_admin_audit_log_query_failure_is_not_reported_as_empty_success(
+    client, auth, monkeypatch
+):
+    def fail_query(**kwargs):
+        raise RuntimeError("audit store offline")
+
+    monkeypatch.setattr(reply_server.db_manager, "get_audit_logs", fail_query)
+
+    resp = client.get("/admin/audit-logs", headers=auth)
+
+    assert resp.status_code == 500
+    assert "审计日志查询失败" in resp.text
+
+
+def test_audit_log_retention_prunes_old_rows():
+    db = reply_server.db_manager
+    recent_id = db.add_audit_log(
+        category="admin",
+        action="retention_recent",
+        status="success",
+        details_json=json.dumps({"case": "recent"}),
+    )
+    old_id = db.add_audit_log(
+        category="admin",
+        action="retention_old",
+        status="success",
+        details_json=json.dumps({"case": "old"}),
+    )
+    cursor = db.conn.cursor()
+    cursor.execute(
+        "UPDATE audit_logs SET created_at = datetime('now', '-120 days') WHERE id = ?",
+        (old_id,),
+    )
+    db.conn.commit()
+
+    deleted = db.cleanup_audit_logs(90)
+
+    assert deleted >= 1
+    remaining_ids = {log["id"] for log in db.get_audit_logs(limit=500)}
+    assert recent_id in remaining_ids
+    assert old_id not in remaining_ids

@@ -1,5 +1,15 @@
 # Decisions
 
+## 2026-06-19 - Phase 97 should distrust forwarded IP headers by default
+- Decision: Add a central trusted client IP helper and only accept forwarded IP headers when proxy trust is explicitly enabled and the direct peer matches configured trusted proxies.
+- Rationale: Login brute-force protection, captcha decisions, and audit attribution must not be controlled by attacker-supplied headers in direct deployments.
+- Impact: Default deployments use the socket peer IP; reverse-proxy deployments can opt in with `TRUST_PROXY_HEADERS=true` and `TRUSTED_PROXY_IPS`.
+
+## 2026-06-19 - Phase 97 should fail audit queries loudly and prune old logs
+- Decision: Make audit-log query failures raise to the admin API as `500`, and add configurable retention cleanup for audit logs.
+- Rationale: Security operators must distinguish “no logs” from “audit store failed,” and request-level audit logging needs bounded database growth.
+- Impact: `/admin/audit-logs` no longer masks query errors, and audit logs default to 90-day retention with a setting override.
+
 ## 2026-06-19 - Phase 96 should centralize audit logs in the database
 - Decision: Add a structured `audit_logs` table plus a central `utils.audit_logger` wrapper instead of scattering ad-hoc JSON/file log writes across routes.
 - Rationale: Operators need queryable user/action/resource/result records, and a central helper gives one place for redaction, status normalization, and failure isolation.

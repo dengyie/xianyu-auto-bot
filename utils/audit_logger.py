@@ -7,6 +7,8 @@ from typing import Any, Dict, Optional
 
 from loguru import logger
 
+from utils.client_ip import get_client_ip
+
 
 SENSITIVE_KEYWORDS = (
     "authorization",
@@ -82,14 +84,7 @@ def actor_from_user(user: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 def request_ip(request: Any) -> Optional[str]:
     if not request:
         return None
-    forwarded_for = request.headers.get("X-Forwarded-For", "") if hasattr(request, "headers") else ""
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    real_ip = request.headers.get("X-Real-IP", "") if hasattr(request, "headers") else ""
-    if real_ip:
-        return real_ip
-    client = getattr(request, "client", None)
-    return getattr(client, "host", None)
+    return get_client_ip(request, default=None)
 
 
 def record_audit_event(

@@ -35,6 +35,7 @@ from utils.qr_login_lite import qrcode_login_lite
 from utils.xianyu_utils import trans_cookies
 from utils.image_utils import image_manager
 from utils.audit_logger import record_audit_event, status_from_http_status_code
+from utils.client_ip import get_client_ip
 from utils.time_utils import (
     LOCAL_TIMEZONE,
     get_local_now,
@@ -1427,9 +1428,7 @@ async def root():
 async def generate_captcha(request: Request):
     """生成验证码图片"""
     # 获取客户端IP
-    client_ip = request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or \
-                request.headers.get('X-Real-IP', '') or \
-                request.client.host if request.client else 'unknown'
+    client_ip = get_client_ip(request)
     
     # 清理过期验证码
     cleanup_expired_captchas()
@@ -1476,9 +1475,7 @@ async def generate_captcha(request: Request):
 
 @app.get("/captcha/check-required")
 async def check_captcha_required(request: Request):
-    client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or \
-                request.headers.get("X-Real-IP", "") or \
-                request.client.host if request.client else "unknown"
+    client_ip = get_client_ip(request)
     user_agent = request.headers.get("User-Agent", "")
     required = is_captcha_required(client_ip, user_agent)
     failure_count = get_ip_failure_count(client_ip)
@@ -1616,9 +1613,7 @@ async def login(login_request: LoginRequest, request: Request):
     from db_manager import db_manager
     
     # 获取客户端IP（考虑代理）
-    client_ip = request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or \
-                request.headers.get('X-Real-IP', '') or \
-                request.client.host if request.client else 'unknown'
+    client_ip = get_client_ip(request)
     
     # 定期清理过期记录
     cleanup_login_trackers()
@@ -10708,34 +10703,46 @@ def get_audit_logs(
     admin_user: Dict[str, Any] = Depends(require_admin),
 ):
     """Return structured audit logs for administrators."""
-    logs = db_manager.get_audit_logs(
-        limit=limit,
-        category=category,
-        action=action,
-        status=status,
-        actor_user_id=actor_user_id,
-        resource_type=resource_type,
-        resource_id=resource_id,
-    )
-    audit_event(
-        category="admin",
-        action="audit_log_query",
-        status="success",
-        actor=admin_user,
-        resource_type="audit_logs",
-        message="Admin queried audit logs",
-        details={
-            "limit": limit,
-            "category": category,
-            "action": action,
-            "status": status,
-            "actor_user_id": actor_user_id,
-            "resource_type": resource_type,
-            "resource_id": resource_id,
-            "result_count": len(logs),
-        },
-    )
-    return {"success": True, "logs": logs, "total": len(logs)}
+    try:
+        logs = db_manager.get_audit_logs(
+            limit=limit,
+            category=category,
+            action=action,
+            status=status,
+            actor_user_id=actor_user_id,
+            resource_type=resource_type,
+            resource_id=resource_id,
+        )
+        audit_event(
+            category="admin",
+            action="audit_log_query",
+            status="success",
+            actor=admin_user,
+            resource_type="audit_logs",
+            message="Admin queried audit logs",
+            details={
+                "limit": limit,
+                "category": category,
+                "action": action,
+                "status": status,
+                "actor_user_id": actor_user_id,
+                "resource_type": resource_type,
+                "resource_id": resource_id,
+                "result_count": len(logs),
+            },
+        )
+        return {"success": True, "logs": logs, "total": len(logs)}
+    except Exception as e:
+        audit_event(
+            category="admin",
+            action="audit_log_query",
+            status="error",
+            actor=admin_user,
+            resource_type="audit_logs",
+            message="Admin audit log query failed",
+            details={"error": str(e)},
+        )
+        raise HTTPException(status_code=500, detail="审计日志查询失败")
 
 
 @app.get('/admin/logs')

@@ -198,3 +198,42 @@ def test_admin_security_management_is_admin_only_and_mutates_security_state(
         reply_server.ip_blacklist.clear()
         reply_server.BRUTE_FORCE_CONFIG.clear()
         reply_server.BRUTE_FORCE_CONFIG.update(original_config)
+
+
+def test_login_failure_ignores_forged_forwarded_for_without_trusted_proxy(client, monkeypatch):
+    import reply_server
+
+    monkeypatch.delenv("TRUST_PROXY_HEADERS", raising=False)
+    monkeypatch.delenv("TRUSTED_PROXY_IPS", raising=False)
+    reply_server.db_manager.set_system_setting("login_captcha_enabled", "false")
+    reply_server.login_ip_tracker.clear()
+
+    resp = client.post(
+        "/login",
+        headers={"X-Forwarded-For": "203.0.113.200"},
+        json={"username": "admin", "password": "wrong-secret"},
+    )
+
+    assert resp.status_code == 200
+    assert "203.0.113.200" not in reply_server.login_ip_tracker
+    assert reply_server.login_ip_tracker
+    observed_ip = next(iter(reply_server.login_ip_tracker))
+    assert reply_server.login_ip_tracker[observed_ip]["attempts"] == 1
+
+
+def test_login_failure_accepts_forwarded_for_from_trusted_proxy(client, monkeypatch):
+    import reply_server
+
+    monkeypatch.setenv("TRUST_PROXY_HEADERS", "true")
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", "testclient")
+    reply_server.db_manager.set_system_setting("login_captcha_enabled", "false")
+    reply_server.login_ip_tracker.clear()
+
+    resp = client.post(
+        "/login",
+        headers={"X-Forwarded-For": "203.0.113.201"},
+        json={"username": "admin", "password": "wrong-secret"},
+    )
+
+    assert resp.status_code == 200
+    assert reply_server.login_ip_tracker["203.0.113.201"]["attempts"] == 1

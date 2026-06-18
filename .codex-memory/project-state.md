@@ -1,28 +1,27 @@
 # Current State Snapshot - 2026-06-19
 
-- Phase 96 is implemented: unified structured audit logging for high-value operational events.
+- Phase 97 is implemented: production review risks from Phase 96 are closed.
 - Production code change:
-  - added `audit_logs` table plus indexed DB helpers for write/query.
-  - added `utils/audit_logger.py` for status normalization, recursive sensitive-field redaction, request metadata capture, and failure-isolated persistence.
-  - request middleware now records non-static request outcomes with actor, path, duration, status, query, and user agent.
-  - login captcha failure, username/password success, and username/password failure emit explicit `auth/login` audit events.
-  - admin user deletion and admin-status updates emit explicit `admin` audit events.
-  - added admin-only `GET /admin/audit-logs` with filters for category/action/status/actor/resource.
+  - added `utils/client_ip.py` for trusted client IP resolution.
+  - login, captcha, captcha-required checks, and audit logging now ignore spoofed `X-Forwarded-For`/`X-Real-IP` unless proxy trust is explicitly enabled and the direct peer is trusted.
+  - `/admin/audit-logs` now returns `500` when audit log querying fails instead of reporting a successful empty result.
+  - audit logs now support retention cleanup through `audit_log_retention_days`, defaulting to 90 days, with best-effort hourly cleanup after audit writes.
 - Test coverage:
-  - failed username login creates an audit log and redacts the password.
-  - regular users cannot query audit logs; admins can query and see redacted details.
-  - request middleware records authenticated admin request outcomes.
+  - forged forwarded headers no longer affect login failure tracking by default.
+  - trusted proxy configuration accepts forwarded client IP.
+  - audit log query failures surface as `500`.
+  - old audit logs are pruned while recent logs remain.
 - Verification:
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_audit_logging.py tests/smoke/test_security_hardening.py -q -k "audit or forwarded_for or trusted_proxy or admin_security"` => 8 passed
   - `python -m compileall -q reply_server.py db_manager.py db_manager tests utils` => passed
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_audit_logging.py -q` => 3 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 220 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 224 passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-96 scope reviewed with `production-code-quality-review`
+  - phase-97 scope reviewed with `production-code-quality-review`
   - severe issues: none
   - medium issues: none
-  - non-blocking tradeoff: email-code/email-password login paths currently rely on request-level audit rather than explicit auth event details
-  - quality score: 95/100
+  - Manual-required: configure `TRUST_PROXY_HEADERS=true` plus `TRUSTED_PROXY_IPS` in deployments that sit behind a trusted reverse proxy
+  - quality score: 96/100
   - pass status: passed
 - Environment note:
   - validation used host Python because the project virtual environment has previously lacked `pytest`

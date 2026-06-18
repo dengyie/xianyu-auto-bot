@@ -70,6 +70,7 @@ class DBBase:
         self.lock = threading.RLock()  # 使用可重入锁保护数据库操作
         self.secret_fernet = None
         self.secret_key_path = None
+        self._last_audit_cleanup_at = 0.0
 
         # SQL日志配置 - 默认启用
         self.sql_log_enabled = False  # 默认关闭SQL日志，避免生产日志泄露业务数据
@@ -972,6 +973,7 @@ Cookie数量: {cookie_count}
             ('verification_email_api_url', '', '验证码邮件 API 地址（留空则仅使用 SMTP，不再向旧硬编码地址外发）'),
             ('qq_notification_api_url', '', 'QQ 私信通知 API 地址（留空则禁用 QQ 私信通知）'),
             ('auto_comment_api_url', '', '自动好评辅助 API 地址（留空则禁用此功能，避免 Cookie 外发）'),
+            ('audit_log_retention_days', '90', '审计日志保留天数（0或负数表示不自动清理）'),
             ('qq_reply_secret_key', 'xianyu_qq_reply_2024', 'QQ回复消息API秘钥')
             ''')
 
@@ -2147,6 +2149,7 @@ Cookie数量: {cookie_count}
                     ),
                 )
                 self.conn.commit()
+                self._cleanup_audit_logs_from_setting()
                 return cursor.lastrowid
             except Exception as e:
                 logger.warning(f"写入审计日志失败: {e}")
@@ -2234,7 +2237,37 @@ Cookie数量: {cookie_count}
                 return logs
             except Exception as e:
                 logger.error(f"查询审计日志失败: {e}")
-                return []
+                raise
+
+    def cleanup_audit_logs(self, days: int = 90) -> int:
+        """Delete audit logs older than the retention window and return deleted count."""
+        retention_days = int(days or 0)
+        if retention_days <= 0:
+            return 0
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "DELETE FROM audit_logs WHERE datetime(created_at) < datetime('now', '-' || ? || ' days')",
+                (retention_days,),
+            )
+            deleted = cursor.rowcount
+            self.conn.commit()
+            if deleted > 0:
+                logger.info(f"清理过期审计日志 {deleted} 条，保留 {retention_days} 天")
+            return deleted
+
+    def _cleanup_audit_logs_from_setting(self) -> None:
+        """Best-effort audit retention cleanup after writes."""
+        try:
+            now = time.time()
+            if now - self._last_audit_cleanup_at < 3600:
+                return
+            self._last_audit_cleanup_at = now
+            retention_value = self.get_system_setting("audit_log_retention_days")
+            retention_days = int(retention_value) if retention_value is not None else 90
+            self.cleanup_audit_logs(retention_days)
+        except Exception as e:
+            logger.warning(f"清理审计日志失败: {e}")
 
     def delete_table_record(self, table_name: str, record_id: str):
         """删除指定表的指定记录"""
