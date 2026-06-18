@@ -327,3 +327,7 @@
 - Decision: Restrict user-level backup imports to user-owned tables, skip global `system_settings`, and rewrite imported `user_id` values for cookies, cards, delivery rules, and notification channels to the authenticated user.
 - Rationale: `POST /backup/import` is a user endpoint, so it must not trust ownership values from a backup file or mutate global settings during a user restore.
 - Impact: User backup restores can no longer inject resources under another `user_id` or change system settings, while system-level backup behavior remains unchanged.
+## 2026-06-18 - Phase 76 should normalize update-management admin checks
+- Decision: Add `_ensure_update_admin(...)` for `/api/update/*` management endpoints and use the same compatibility rule as the rest of the admin surface: `is_admin=True` or `username == admin`.
+- Rationale: Several update-management endpoints previously accepted only the literal username `admin`, while restart accepted only `is_admin`; this could incorrectly reject delegated admins or legacy admin tokens depending on endpoint.
+- Impact: Regular users remain forbidden from update-management operations, delegated admins can operate consistently, and legacy admin username compatibility is preserved.

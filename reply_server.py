@@ -12702,6 +12702,12 @@ class UpdateResultResponse(PydanticBaseModel):
     new_version: str = ""
 
 
+def _ensure_update_admin(current_user: Dict[str, Any]) -> None:
+    """Update-management APIs accept both current and legacy admin markers."""
+    if not (current_user.get('is_admin', False) or current_user.get('username') == ADMIN_USERNAME):
+        raise HTTPException(status_code=403, detail="只有管理员可以执行更新管理操作")
+
+
 @app.get('/api/update/check')
 async def check_for_updates(current_user: Dict[str, Any] = Depends(get_current_user)):
     """
@@ -12786,9 +12792,7 @@ async def apply_updates(current_user: Dict[str, Any] = Depends(get_current_user)
     下载并安装所有可用更新
     """
     try:
-        # 只允许管理员执行更新，兼容历史 admin 用户名判断
-        if not current_user.get('is_admin') and current_user.get('username') != 'admin':
-            raise HTTPException(status_code=403, detail="只有管理员可以执行更新")
+        _ensure_update_admin(current_user)
         
         updater = get_updater()
         
@@ -12857,9 +12861,7 @@ async def get_local_file_hashes(current_user: Dict[str, Any] = Depends(get_curre
     用于服务端比对哪些文件需要更新
     """
     try:
-        # 只允许管理员查看（检查username是否为admin）
-        if current_user.get('username') != 'admin':
-            raise HTTPException(status_code=403, detail="只有管理员可以查看文件哈希")
+        _ensure_update_admin(current_user)
         
         updater = get_updater()
         hashes = updater.get_local_file_hashes()
@@ -12892,9 +12894,7 @@ async def cleanup_old_backups(days: int = 7, current_user: Dict[str, Any] = Depe
         days: 保留天数，默认7天
     """
     try:
-        # 只允许管理员执行（检查username是否为admin）
-        if current_user.get('username') != 'admin':
-            raise HTTPException(status_code=403, detail="只有管理员可以清理备份")
+        _ensure_update_admin(current_user)
         
         updater = get_updater()
         updater.cleanup_old_backups(keep_days=days)
@@ -12924,9 +12924,7 @@ async def get_file_changes(current_user: Dict[str, Any] = Depends(get_current_us
     用于检测哪些文件在更新后被本地修改过
     """
     try:
-        # 只允许管理员查看
-        if current_user.get('username') != 'admin':
-            raise HTTPException(status_code=403, detail="只有管理员可以查看文件变化")
+        _ensure_update_admin(current_user)
         
         updater = get_updater()
         result = updater.compare_file_hashes()
@@ -12954,9 +12952,7 @@ async def save_current_hashes(current_user: Dict[str, Any] = Depends(get_current
     用于记录当前状态，以便以后比较
     """
     try:
-        # 只允许管理员执行
-        if current_user.get('username') != 'admin':
-            raise HTTPException(status_code=403, detail="只有管理员可以保存哈希清单")
+        _ensure_update_admin(current_user)
         
         updater = get_updater()
         updater.save_file_hashes(updater.current_version)
@@ -12984,9 +12980,7 @@ async def get_saved_hashes(current_user: Dict[str, Any] = Depends(get_current_us
     获取上次保存的文件哈希清单
     """
     try:
-        # 只允许管理员查看
-        if current_user.get('username') != 'admin':
-            raise HTTPException(status_code=403, detail="只有管理员可以查看哈希清单")
+        _ensure_update_admin(current_user)
         
         updater = get_updater()
         saved_hashes = updater.load_file_hashes()
@@ -13027,9 +13021,7 @@ async def restart_application(current_user: Dict[str, Any] = Depends(get_current
     注意：此操作会重启整个应用
     """
     try:
-        # 只允许管理员执行
-        if not current_user.get('is_admin'):
-            raise HTTPException(status_code=403, detail="只有管理员可以重启应用")
+        _ensure_update_admin(current_user)
         
         log_with_user('info', "用户请求重启应用", current_user)
         

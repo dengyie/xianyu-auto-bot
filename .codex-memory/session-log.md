@@ -1174,3 +1174,22 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the now-covered backup/settings cluster.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+## 2026-06-18 09:40
+- Task: Finish phase 76 update-management admin-boundary coverage.
+- Actions:
+  - Reloaded project memory and audited remaining uncovered user/admin scoped route clusters.
+  - Added `.codex-memory/test-coverage-phase76-design.md` before implementation.
+  - Normalized admin checks for `/api/update/apply`, `/api/update/local-hashes`, `/api/update/cleanup-backups`, `/api/update/file-changes`, `/api/update/save-hashes`, `/api/update/saved-hashes`, and `/api/update/restart` through `_ensure_update_admin(...)`.
+  - Extended `tests/smoke/test_authz_matrix.py` with regular-user denial coverage and fake-updater admin success coverage for both delegated `is_admin=True` and legacy `username == admin` markers.
+  - Re-ran targeted tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted authz matrix smoke tests: 7 passed.
+  - Full smoke suite: 198 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-76 change set.
+  - Continue evaluating remaining owner/scoped route coverage gaps.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
