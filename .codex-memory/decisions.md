@@ -406,3 +406,8 @@
 - Decision: Add smoke coverage for `/admin/stats` without changing production code.
 - Rationale: System stats expose cross-user aggregate counts for users, cookies, and cards. The route already uses `require_admin`, but it lacked a focused regression proving regular-user denial and global aggregate behavior.
 - Impact: The smoke suite now proves regular users cannot read system stats, admins can read global totals across users, card enabled counts are present, and system version metadata remains available.
+
+## 2026-06-18 - Phase 92 should pin admin data management guards
+- Decision: Add smoke coverage for admin table read/export/clear management boundaries without changing production code.
+- Rationale: Admin data management can read, export, and destructively clear database tables. Existing routes already use `require_admin` and table allowlists, but needed focused regression coverage for regular-user denial, disallowed table names, and protected users-table clear attempts.
+- Impact: The smoke suite now proves regular users cannot access read/export/clear operations and admins still get `400` for forbidden table names or attempts to clear the `users` table.

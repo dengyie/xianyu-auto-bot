@@ -63,3 +63,19 @@ def test_admin_table_data_redacts_sensitive_fields(client, auth):
     users = users_resp.json()["data"]
     assert users
     assert users[0].get("password_hash") == "***REDACTED***"
+
+
+def test_admin_table_data_management_is_admin_only_and_protects_forbidden_tables(
+    client, auth, user_auth
+):
+    denied_read = client.get("/admin/data/users", headers=user_auth)
+    denied_export = client.get("/admin/data/users/export", headers=user_auth)
+    denied_clear = client.delete("/admin/data/cookies", headers=user_auth)
+    disallowed_read = client.get("/admin/data/sqlite_master", headers=auth)
+    protected_clear = client.delete("/admin/data/users", headers=auth)
+
+    assert denied_read.status_code == 403
+    assert denied_export.status_code == 403
+    assert denied_clear.status_code == 403
+    assert disallowed_read.status_code == 400
+    assert protected_clear.status_code == 400

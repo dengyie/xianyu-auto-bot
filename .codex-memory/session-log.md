@@ -1509,3 +1509,24 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the now-covered admin system stats cluster.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-18 18:53
+- Task: Finish phase 92 admin data management boundary coverage.
+- Actions:
+  - Re-checked skills/plugins per project rules and restored project memory.
+  - Selected admin data management endpoints because they can read, export, and destructively clear database tables.
+  - Added `.codex-memory/test-coverage-phase92-design.md` before implementation.
+  - Added a smoke regression in `tests/smoke/test_security_hardening.py` covering regular-user denial for table read/export/clear, admin disallowed-table rejection, and protected `users` table clear rejection.
+  - Kept production code unchanged because routes already use `require_admin` and table guard checks.
+  - Re-ran targeted security hardening tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted security hardening smoke tests: 5 passed.
+  - Full smoke suite: 214 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-92 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the now-covered admin data management cluster.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
