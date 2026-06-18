@@ -202,6 +202,112 @@ def test_item_flag_routes_are_scoped_to_cookie_owner(client, auth, user_auth):
     )
 
 
+def test_ai_reply_settings_and_test_are_scoped_to_cookie_owner(
+    client,
+    auth,
+    user_auth,
+    monkeypatch,
+):
+    client.post(
+        "/cookies",
+        headers=auth,
+        json={"id": "admin_ai_reply_cookie", "value": "unb=admin"},
+    )
+    client.post(
+        "/cookies",
+        headers=user_auth,
+        json={"id": "user_ai_reply_cookie", "value": "unb=user"},
+    )
+    from db_manager import db_manager
+    import reply_server
+
+    assert db_manager.save_ai_reply_settings(
+        "admin_ai_reply_cookie",
+        {
+            "ai_enabled": True,
+            "model_name": "owner-model",
+            "api_key": "owner-secret",
+            "base_url": "https://owner.example/v1",
+            "api_type": "openai",
+            "max_discount_percent": 12,
+            "max_discount_amount": 34,
+            "max_bargain_rounds": 2,
+            "custom_prompts": "owner prompt",
+        },
+    )
+    assert db_manager.save_ai_reply_settings(
+        "user_ai_reply_cookie",
+        {
+            "ai_enabled": True,
+            "model_name": "user-model",
+            "api_key": "user-secret",
+            "base_url": "https://user.example/v1",
+            "api_type": "openai",
+            "max_discount_percent": 8,
+            "max_discount_amount": 21,
+            "max_bargain_rounds": 1,
+            "custom_prompts": "user prompt",
+        },
+    )
+    monkeypatch.setattr(
+        reply_server.ai_reply_engine,
+        "is_ai_enabled",
+        lambda cid: cid in {"admin_ai_reply_cookie", "user_ai_reply_cookie"},
+    )
+    monkeypatch.setattr(
+        reply_server.ai_reply_engine,
+        "generate_reply",
+        lambda **kwargs: f"reply for {kwargs['cookie_id']}",
+    )
+
+    foreign_read = client.get("/ai-reply-settings/admin_ai_reply_cookie", headers=user_auth)
+    foreign_update = client.put(
+        "/ai-reply-settings/admin_ai_reply_cookie",
+        headers=user_auth,
+        json={"ai_enabled": False, "model_name": "stolen"},
+    )
+    foreign_test = client.post(
+        "/ai-reply-test/admin_ai_reply_cookie",
+        headers=user_auth,
+        json={"message": "test"},
+    )
+    user_list = client.get("/ai-reply-settings", headers=user_auth)
+    owner_read = client.get("/ai-reply-settings/admin_ai_reply_cookie", headers=auth)
+    owner_update = client.put(
+        "/ai-reply-settings/admin_ai_reply_cookie",
+        headers=auth,
+        json={
+            "ai_enabled": True,
+            "model_name": "updated-owner-model",
+            "api_key": "updated-owner-secret",
+            "base_url": "https://updated.example/v1",
+            "api_type": "openai",
+            "max_discount_percent": 15,
+            "max_discount_amount": 45,
+            "max_bargain_rounds": 4,
+            "custom_prompts": "updated owner prompt",
+        },
+    )
+    owner_test = client.post(
+        "/ai-reply-test/admin_ai_reply_cookie",
+        headers=auth,
+        json={"message": "test", "item_title": "Item"},
+    )
+
+    assert foreign_read.status_code == 403
+    assert foreign_update.status_code == 403
+    assert foreign_test.status_code == 403
+    assert user_list.status_code == 200
+    assert set(user_list.json()) == {"user_ai_reply_cookie"}
+    assert user_list.json()["user_ai_reply_cookie"]["model_name"] == "user-model"
+    assert owner_read.status_code == 200
+    assert owner_read.json()["model_name"] == "owner-model"
+    assert owner_update.status_code == 200
+    assert db_manager.get_ai_reply_settings("admin_ai_reply_cookie")["model_name"] == "updated-owner-model"
+    assert owner_test.status_code == 200
+    assert owner_test.json()["reply"] == "reply for admin_ai_reply_cookie"
+
+
 def test_regular_user_cannot_list_another_users_cookie(client, auth, user_auth):
     client.post(
         "/cookies",

@@ -1092,3 +1092,23 @@
   - Continue evaluating AI reply settings ownership coverage.
 - Blockers:
   - `gh auth status` previously reported an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` can complete.
+## 2026-06-18 08:38
+- Task: Fix phase 72 AI reply test ownership and add AI reply settings smoke coverage.
+- Actions:
+  - Reloaded project memory and reviewed `/ai-reply-settings/{cookie_id}`, `/ai-reply-settings`, and `/ai-reply-test/{cookie_id}`.
+  - Confirmed settings read/write/list routes already filter by the authenticated user's cookies.
+  - Found `POST /ai-reply-test/{cookie_id}` checked only global cookie-manager existence and AI-enabled state, not current-user ownership.
+  - Added the same `db_manager.get_all_cookies(user_id)` owner gate used by settings read/write.
+  - Added `.codex-memory/test-coverage-phase72-design.md` and a smoke regression covering foreign-user denial for read/update/test, filtered aggregate listing, and owner success for read/update/test.
+  - Re-ran targeted cookie-access smoke tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted cookie-access smoke tests: 15 passed.
+  - Full smoke suite: 190 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-72 change set.
+  - Continue evaluating whether remaining uncovered owner/scoped risk sits outside the current authz route clusters.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.

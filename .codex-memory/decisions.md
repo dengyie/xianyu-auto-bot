@@ -310,3 +310,7 @@
 - Decision: Add smoke coverage for chat keyword item read/save/copy and chat item list routes while keeping existing production behavior unchanged.
 - Rationale: The routes already delegate cookie authorization to `_ensure_cookie_access(...)` and DB helpers scope keyword operations by `cookie_id`, but this chat-specific API cluster had no focused owner-boundary regression.
 - Impact: Foreign-user denial and owner success paths for chat item keyword workflows are now explicitly covered.
+## 2026-06-18 - Phase 72 should require ownership before AI reply tests
+- Decision: Add a current-user cookie ownership check to `POST /ai-reply-test/{cookie_id}` and smoke coverage for AI reply settings read/update/list/test ownership.
+- Rationale: AI reply test generation is an account-scoped operation that can expose account behavior and consume configured AI resources. The route previously trusted global cookie-manager existence instead of proving that the authenticated user owned the cookie, unlike adjacent AI settings routes.
+- Impact: Foreign users now receive `403` before AI reply test generation for another user's cookie, aggregate settings stay filtered to the caller's cookies, and owner settings/test flows remain covered.
