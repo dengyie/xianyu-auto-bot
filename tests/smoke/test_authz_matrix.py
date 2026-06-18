@@ -251,6 +251,55 @@ def test_user_settings_are_scoped_to_current_user(client, auth, user_auth):
     assert missing.status_code == 404
 
 
+def test_admin_cookies_are_admin_only_and_do_not_expose_raw_values(client, auth, user_auth):
+    class _StatusManager:
+        def __init__(self):
+            self.cookie_status = {
+                "admin_ops_cookie": True,
+                "user_ops_cookie": False,
+            }
+
+        def get_cookie_status(self, cookie_id):
+            return self.cookie_status.get(cookie_id, False)
+
+    db_manager = reply_server.db_manager
+    assert db_manager.save_cookie("admin_ops_cookie", "raw-admin-secret", user_id=1)
+    assert db_manager.save_cookie("user_ops_cookie", "raw-user-secret", user_id=2)
+    assert db_manager.update_cookie_remark("admin_ops_cookie", "admin account")
+    assert db_manager.update_cookie_remark("user_ops_cookie", "user account")
+
+    original_manager = reply_server.cookie_manager.manager
+    reply_server.cookie_manager.manager = _StatusManager()
+    try:
+        denied = client.get("/admin/cookies", headers=user_auth)
+        allowed = client.get("/admin/cookies", headers=auth)
+    finally:
+        reply_server.cookie_manager.manager = original_manager
+
+    assert denied.status_code == 403
+    assert allowed.status_code == 200
+    body = allowed.json()
+    assert body["success"] is True
+    assert body["total"] == 2
+    cookies_by_id = {cookie["cookie_id"]: cookie for cookie in body["cookies"]}
+    assert cookies_by_id["admin_ops_cookie"] == {
+        "cookie_id": "admin_ops_cookie",
+        "user_id": 1,
+        "username": "admin",
+        "nickname": "admin account",
+        "enabled": True,
+    }
+    assert cookies_by_id["user_ops_cookie"] == {
+        "cookie_id": "user_ops_cookie",
+        "user_id": 2,
+        "username": "testuser",
+        "nickname": "user account",
+        "enabled": False,
+    }
+    assert "raw-admin-secret" not in str(body)
+    assert "raw-user-secret" not in str(body)
+
+
 class _FakeUpdateProgress:
     status = "idle"
     current_file = ""

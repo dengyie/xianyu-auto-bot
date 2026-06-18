@@ -386,3 +386,8 @@
 - Decision: Add smoke coverage for `/user-settings`, `/user-settings/{key}` reads, and `/user-settings/{key}` writes without changing production code.
 - Rationale: User settings are ordinary authenticated-user endpoints where same-key cross-user isolation matters. The implementation already passes the current `user_id` into DB helpers, but no focused regression proved that same keys remain independent by user.
 - Impact: The smoke suite now proves anonymous callers are rejected, same-key values stay isolated across users, list/read endpoints return the caller's value, and missing current-user settings return `404`.
+
+## 2026-06-18 - Phase 88 should pin admin cookie inventory to admins
+- Decision: Add smoke coverage for `/admin/cookies` without changing production code.
+- Rationale: The admin cookie inventory exposes cross-user account metadata and operational enabled state. The route already uses `require_admin`, but it lacked a focused regression proving regular users are rejected and raw cookie values are not returned.
+- Impact: The smoke suite now proves regular-user denial, admin metadata visibility across users, deterministic enabled status reporting, and raw cookie value exclusion.

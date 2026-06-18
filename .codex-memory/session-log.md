@@ -1424,3 +1424,25 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the now-covered user-settings cluster.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-18 18:04
+- Task: Finish phase 88 admin cookie inventory boundary coverage.
+- Actions:
+  - Re-checked skills/plugins per project rules and restored project memory.
+  - Audited public login/registration status routes and kept them public because they are login/register page contracts.
+  - Selected `/admin/cookies` because it exposes cross-user account metadata and enabled state for operations.
+  - Added `.codex-memory/test-coverage-phase88-design.md` before implementation.
+  - Added a smoke regression in `tests/smoke/test_authz_matrix.py` covering regular-user denial, admin cross-user metadata visibility, deterministic enabled flags through a fake runtime manager, and raw cookie value exclusion.
+  - Kept production code unchanged because the route already uses `require_admin` and returns metadata only.
+  - Re-ran targeted authz tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted authz matrix smoke tests: 16 passed.
+  - Full smoke suite: 210 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-88 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the now-covered admin cookie inventory cluster.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
