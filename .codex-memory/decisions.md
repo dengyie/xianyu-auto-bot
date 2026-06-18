@@ -381,3 +381,8 @@
 - Decision: Add smoke coverage for `/api/sales` and `/api/sales/summary` without changing production code.
 - Rationale: Sales totals are business-sensitive aggregate data. The existing implementation already scopes queries by the authenticated user's cookie ids, but the contract lacked a focused cross-user regression.
 - Impact: The smoke suite now proves anonymous callers are rejected, users only aggregate their own cookie orders, and cancelled or invalid-amount orders do not inflate totals.
+
+## 2026-06-18 - Phase 87 should pin user settings to current-user scope
+- Decision: Add smoke coverage for `/user-settings`, `/user-settings/{key}` reads, and `/user-settings/{key}` writes without changing production code.
+- Rationale: User settings are ordinary authenticated-user endpoints where same-key cross-user isolation matters. The implementation already passes the current `user_id` into DB helpers, but no focused regression proved that same keys remain independent by user.
+- Impact: The smoke suite now proves anonymous callers are rejected, same-key values stay isolated across users, list/read endpoints return the caller's value, and missing current-user settings return `404`.

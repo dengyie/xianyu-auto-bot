@@ -1,29 +1,31 @@
 # Current State Snapshot - 2026-06-18
 
 - Security hardening and smoke coverage are still moving in small bounded phases.
-- Phase 86 is now implemented: sales statistics endpoints are pinned by smoke coverage to current-user cookie scope.
+- Phase 87 is now implemented: user settings endpoints are pinned by smoke coverage to current-user scope.
 - Covered routes:
-  - `GET /api/sales`
-  - `GET /api/sales/summary`
+  - `GET /user-settings`
+  - `PUT /user-settings/{key}`
+  - `GET /user-settings/{key}`
 - Production code change:
-  - none; existing implementation already filters through `db_manager.get_all_cookies(current_user_id)` and `cookie_id IN (...)`
+  - none; existing implementation already reads/writes by `current_user['user_id']` and DB helpers filter by `(user_id, key)`
 - Test coverage:
-  - anonymous sales queries are rejected
-  - admin and regular users only aggregate orders attached to their own cookies
-  - foreign eligible orders, own cancelled orders, and own invalid amounts are excluded from totals
+  - anonymous user settings list is rejected
+  - two users can store the same setting key with independent values
+  - list and single-key reads return the current user's value only
+  - missing current-user settings return `404`
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q` => 14 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 208 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q` => 15 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 209 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py db_manager tests` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-86 scope reviewed with `production-code-quality-review` in checkpoint mode
+  - phase-87 scope reviewed with `production-code-quality-review` in checkpoint mode
   - severe issues: none
-  - improvement suggestions: none blocking for this focused sales statistics scope regression
+  - improvement suggestions: none blocking for this focused user settings scope regression
   - quality score: 96/100
   - pass status: passed
 - Environment note:
   - project `venv` still lacks `pytest`, so validation used host Python
 - Next testing priorities:
-  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, cookie availability, system-cache, debug metadata, and sales statistics clusters
+  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, cookie availability, system-cache, debug metadata, sales statistics, and user-settings clusters
   - keep ignoring unrelated untracked workspace files

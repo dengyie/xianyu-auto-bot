@@ -217,6 +217,40 @@ def test_sales_statistics_are_scoped_to_current_user(client, auth, user_auth):
     assert user_summary.json()["data"]["month_sales"] == 250.0
 
 
+def test_user_settings_are_scoped_to_current_user(client, auth, user_auth):
+    anonymous = client.get("/user-settings")
+    admin_update = client.put(
+        "/user-settings/dashboard_theme",
+        headers=auth,
+        json={"value": "admin-dark", "description": "admin preference"},
+    )
+    user_update = client.put(
+        "/user-settings/dashboard_theme",
+        headers=user_auth,
+        json={"value": "user-light", "description": "user preference"},
+    )
+    admin_list = client.get("/user-settings", headers=auth)
+    user_list = client.get("/user-settings", headers=user_auth)
+    admin_read = client.get("/user-settings/dashboard_theme", headers=auth)
+    user_read = client.get("/user-settings/dashboard_theme", headers=user_auth)
+    missing = client.get("/user-settings/not_set_for_user", headers=user_auth)
+
+    assert anonymous.status_code == 401
+    assert admin_update.status_code == 200
+    assert admin_update.json()["value"] == "admin-dark"
+    assert user_update.status_code == 200
+    assert user_update.json()["value"] == "user-light"
+    assert admin_list.status_code == 200
+    assert admin_list.json()["dashboard_theme"]["value"] == "admin-dark"
+    assert user_list.status_code == 200
+    assert user_list.json()["dashboard_theme"]["value"] == "user-light"
+    assert admin_read.status_code == 200
+    assert admin_read.json()["value"] == "admin-dark"
+    assert user_read.status_code == 200
+    assert user_read.json()["value"] == "user-light"
+    assert missing.status_code == 404
+
+
 class _FakeUpdateProgress:
     status = "idle"
     current_file = ""

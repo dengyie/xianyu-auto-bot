@@ -1403,3 +1403,24 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the now-covered sales statistics cluster.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-18 17:02
+- Task: Finish phase 87 user settings scope coverage.
+- Actions:
+  - Re-checked skills/plugins per project rules and audited the `/user-settings` route cluster.
+  - Selected user settings because same-key per-user settings are ordinary authenticated-user data that should never overwrite or leak across users.
+  - Added `.codex-memory/test-coverage-phase87-design.md` before implementation.
+  - Added a smoke regression in `tests/smoke/test_authz_matrix.py` covering anonymous denial, same-key cross-user write isolation, per-user list/read isolation, and missing-key `404`.
+  - Kept production code unchanged because routes already use `current_user['user_id']` and DB helpers filter by `(user_id, key)`.
+  - Re-ran targeted authz tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted authz matrix smoke tests: 15 passed.
+  - Full smoke suite: 209 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-87 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the now-covered user-settings cluster.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
