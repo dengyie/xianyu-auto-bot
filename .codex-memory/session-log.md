@@ -1551,3 +1551,24 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the now-covered admin backup management cluster.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-19 01:09
+- Task: Finish phase 94 admin security management boundary coverage.
+- Actions:
+  - Re-checked skills/plugins per project rules and restored project memory.
+  - Selected `/admin/security/*` because it controls login security stats, IP unblocking, user unlocking, IP blacklisting, and brute-force config.
+  - Added `.codex-memory/test-coverage-phase94-design.md` before implementation.
+  - Added a smoke regression in `tests/smoke/test_security_hardening.py` covering regular-user denial for stats and mutation endpoints plus admin read/mutation behavior for security state.
+  - Kept production code unchanged because routes already use admin-token checks and existing behavior matched the target contract.
+  - Re-ran targeted security hardening tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted security hardening smoke tests: 7 passed.
+  - Full smoke suite: 216 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe or medium findings.
+- Next:
+  - Stop this milestone after staging and committing the phase-94 change set.
+  - Future milestone can continue evaluating remaining owner/scoped API surfaces.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.

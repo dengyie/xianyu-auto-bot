@@ -416,3 +416,8 @@
 - Decision: Add smoke coverage for admin backup download/list/upload management boundaries without changing production code.
 - Rationale: Backup endpoints expose database files and restore-adjacent upload behavior, so the admin-only boundary and early invalid-upload rejection need focused regression coverage.
 - Impact: The smoke suite now proves regular users cannot access backup management, admin missing-DB downloads return `404`, empty backup lists stay stable, and non-`.db` uploads are rejected before restore logic.
+
+## 2026-06-19 - Phase 94 should pin admin security management guards
+- Decision: Add smoke coverage for admin login-security stats and mutation endpoints without changing production code.
+- Rationale: The `/admin/security/*` endpoints control blocked IPs, locked users, blacklists, and brute-force configuration; the existing routes already use admin-token checks but lacked focused regression coverage.
+- Impact: The smoke suite now proves regular users cannot access these security operations and admins can read and mutate the expected in-memory security state deterministically.

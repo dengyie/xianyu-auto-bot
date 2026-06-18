@@ -1,31 +1,36 @@
-# Current State Snapshot - 2026-06-18
+# Current State Snapshot - 2026-06-19
 
 - Security hardening and smoke coverage are still moving in small bounded phases.
-- Phase 93 is now implemented: admin backup management is pinned by smoke coverage to admin-only access and safe validation boundaries.
+- Phase 94 is now implemented: admin security management is pinned by smoke coverage to admin-only access and deterministic state mutation boundaries.
 - Covered routes:
-  - `GET /admin/backup/download`
-  - `GET /admin/backup/list`
-  - `POST /admin/backup/upload`
+  - `GET /admin/security/login-stats`
+  - `POST /admin/security/unblock-ip/{ip}`
+  - `POST /admin/security/unlock-user/{username}`
+  - `POST /admin/security/blacklist-ip/{ip}`
+  - `POST /admin/security/update-config`
 - Production code change:
-  - none; existing implementation already uses `require_admin`, reports missing DB backup downloads as `404`, returns stable backup lists, and rejects non-`.db` uploads before restore logic
+  - none; existing implementation already uses `verify_admin_token` and applies expected in-memory security state changes
 - Test coverage:
-  - regular authenticated users are rejected from backup download, list, and upload operations
-  - admin backup download returns `404` when the configured DB path is not a file
-  - admin backup list returns an empty result when no backup files are present
-  - admin upload rejects invalid `.txt` backup files with `400`
+  - regular authenticated users are rejected from login security stats and mutation endpoints
+  - admin login security stats report blocked IPs, locked users, blacklisted IPs, and config
+  - admin unblock removes blacklist state
+  - admin unlock clears locked-user attempt state
+  - admin blacklist adds an IP to the blacklist
+  - admin config update accepts valid numeric keys and ignores invalid keys or invalid value types
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_security_hardening.py -q` => 6 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 215 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_security_hardening.py -q` => 7 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 216 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py db_manager tests` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-93 scope reviewed with `production-code-quality-review` in checkpoint mode
+  - phase-94 scope reviewed with `production-code-quality-review` in checkpoint mode
   - severe issues: none
-  - improvement suggestions: none blocking for this focused admin backup management regression
+  - medium issues: none
+  - improvement suggestions: none blocking for this focused admin security management regression
   - quality score: 96/100
   - pass status: passed
 - Environment note:
   - project `venv` still lacks `pytest`, so validation used host Python
 - Next testing priorities:
-  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, cookie availability, system-cache, debug metadata, sales statistics, user-settings, admin-cookie-inventory, admin-user-management, admin-log-access, admin-system-stats, admin-data-management, and admin-backup-management clusters
+  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, cookie availability, system-cache, debug metadata, sales statistics, user-settings, admin-cookie-inventory, admin-user-management, admin-log-access, admin-system-stats, admin-data-management, admin-backup-management, and admin-security-management clusters
   - keep ignoring unrelated untracked workspace files

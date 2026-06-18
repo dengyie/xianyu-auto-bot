@@ -109,3 +109,92 @@ def test_admin_backup_management_is_admin_only_and_validates_inputs(
     assert admin_list.status_code == 200
     assert admin_list.json() == {"backups": [], "total": 0}
     assert admin_invalid_upload.status_code == 400
+
+
+def test_admin_security_management_is_admin_only_and_mutates_security_state(
+    client, auth, user_auth
+):
+    import reply_server
+
+    original_config = dict(reply_server.BRUTE_FORCE_CONFIG)
+    try:
+        reply_server.login_ip_tracker.clear()
+        reply_server.login_user_tracker.clear()
+        reply_server.ip_blacklist.clear()
+        future_time = reply_server.time.time() + 3600
+        reply_server.login_ip_tracker["203.0.113.10"] = {
+            "attempts": 7,
+            "last_attempt": 12345,
+            "blocked_until": future_time,
+        }
+        reply_server.login_user_tracker["locked-user"] = {
+            "attempts": 6,
+            "last_attempt": 12346,
+            "locked_until": future_time,
+        }
+        reply_server.ip_blacklist.add("203.0.113.20")
+
+        denied_stats = client.get("/admin/security/login-stats", headers=user_auth)
+        denied_unblock = client.post(
+            "/admin/security/unblock-ip/203.0.113.10", headers=user_auth
+        )
+        denied_unlock = client.post(
+            "/admin/security/unlock-user/locked-user", headers=user_auth
+        )
+        denied_blacklist = client.post(
+            "/admin/security/blacklist-ip/203.0.113.30", headers=user_auth
+        )
+        denied_config = client.post(
+            "/admin/security/update-config",
+            headers=user_auth,
+            json={"ip_max_attempts": 3},
+        )
+
+        stats = client.get("/admin/security/login-stats", headers=auth)
+        unblock = client.post("/admin/security/unblock-ip/203.0.113.20", headers=auth)
+        unlock = client.post("/admin/security/unlock-user/locked-user", headers=auth)
+        blacklist = client.post(
+            "/admin/security/blacklist-ip/203.0.113.30", headers=auth
+        )
+        config = client.post(
+            "/admin/security/update-config",
+            headers=auth,
+            json={
+                "ip_max_attempts": 3,
+                "ignored": 1,
+                "user_lock_seconds": "bad",
+            },
+        )
+
+        assert denied_stats.status_code == 403
+        assert denied_unblock.status_code == 403
+        assert denied_unlock.status_code == 403
+        assert denied_blacklist.status_code == 403
+        assert denied_config.status_code == 403
+        assert stats.status_code == 200
+        stats_data = stats.json()["data"]
+        assert stats_data["blocked_ip_count"] == 1
+        assert stats_data["locked_user_count"] == 1
+        assert "203.0.113.20" in stats_data["blacklisted_ips"]
+        assert unblock.status_code == 200
+        assert unblock.json()["success"] is True
+        assert "203.0.113.20" not in reply_server.ip_blacklist
+        assert unlock.status_code == 200
+        assert unlock.json()["success"] is True
+        assert reply_server.login_user_tracker["locked-user"]["attempts"] == 0
+        assert blacklist.status_code == 200
+        assert blacklist.json()["success"] is True
+        assert "203.0.113.30" in reply_server.ip_blacklist
+        assert config.status_code == 200
+        assert config.json()["success"] is True
+        assert reply_server.BRUTE_FORCE_CONFIG["ip_max_attempts"] == 3
+        assert "ignored" not in reply_server.BRUTE_FORCE_CONFIG
+        assert reply_server.BRUTE_FORCE_CONFIG["user_lock_seconds"] == original_config[
+            "user_lock_seconds"
+        ]
+    finally:
+        reply_server.login_ip_tracker.clear()
+        reply_server.login_user_tracker.clear()
+        reply_server.ip_blacklist.clear()
+        reply_server.BRUTE_FORCE_CONFIG.clear()
+        reply_server.BRUTE_FORCE_CONFIG.update(original_config)
