@@ -1112,3 +1112,23 @@
   - Continue evaluating whether remaining uncovered owner/scoped risk sits outside the current authz route clusters.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+## 2026-06-18 08:48
+- Task: Add phase 73 account runtime/config route ownership coverage.
+- Actions:
+  - Reloaded project memory and audited remaining `{cid}`/`{cookie_id}` account-scoped routes.
+  - Selected the account runtime/config route cluster: account-info, details, runtime-status, conversation history, session keepalive, and proxy read/update.
+  - Confirmed production routes already enforce ownership through `_ensure_cookie_access(...)` or current-user cookie maps.
+  - Added `.codex-memory/test-coverage-phase73-design.md` and a smoke regression covering foreign-user denial and owner success paths.
+  - Stubbed live history/keepalive runtime calls for deterministic owner success without browser or network dependencies.
+  - Re-ran targeted cookie-access smoke tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted cookie-access smoke tests: 16 passed.
+  - Full smoke suite: 191 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 95/100, no severe findings.
+- Next:
+  - Stage and commit the phase-73 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the covered account, notification, keyword, item, AI reply, scheduled-task, order, and file clusters.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.

@@ -314,3 +314,7 @@
 - Decision: Add a current-user cookie ownership check to `POST /ai-reply-test/{cookie_id}` and smoke coverage for AI reply settings read/update/list/test ownership.
 - Rationale: AI reply test generation is an account-scoped operation that can expose account behavior and consume configured AI resources. The route previously trusted global cookie-manager existence instead of proving that the authenticated user owned the cookie, unlike adjacent AI settings routes.
 - Impact: Foreign users now receive `403` before AI reply test generation for another user's cookie, aggregate settings stay filtered to the caller's cookies, and owner settings/test flows remain covered.
+## 2026-06-18 - Phase 73 should lock account runtime route ownership
+- Decision: Add focused smoke coverage for account runtime/config routes: account-info, details, runtime-status, conversation history, session keepalive, and proxy read/update.
+- Rationale: These routes already enforce ownership, but they expose sensitive account configuration or operational account state and lacked the same focused cross-user regression coverage as nearby cookie settings and AI reply routes.
+- Impact: Foreign-user denial and owner success paths are now explicitly covered for the account runtime/config cluster without changing production behavior.

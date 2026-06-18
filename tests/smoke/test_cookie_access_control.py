@@ -368,6 +368,134 @@ def test_regular_user_cannot_read_another_users_proxy_secret(client, auth, user_
     assert resp.status_code == 403
 
 
+def test_account_runtime_routes_are_scoped_to_cookie_owner(
+    client,
+    auth,
+    user_auth,
+    monkeypatch,
+):
+    client.post(
+        "/cookies",
+        headers=auth,
+        json={"id": "admin_runtime_cookie", "value": "unb=admin; cookie2=secret"},
+    )
+    client.post(
+        "/cookies",
+        headers=user_auth,
+        json={"id": "user_runtime_cookie", "value": "unb=user; cookie2=user-secret"},
+    )
+    import reply_server
+    from XianyuAutoAsync import XianyuLive
+
+    class _FakeLive:
+        async def list_all_conversations(self, conversation_id, page_size=20):
+            return [{"conversation_id": conversation_id, "content": "hello", "page_size": page_size}]
+
+        async def keep_session_alive(self):
+            return True
+
+    fake_live = _FakeLive()
+
+    async def _run_inline(_cid, factory, timeout=60):
+        result = factory()
+        if hasattr(result, "__await__"):
+            return await result
+        return result
+
+    monkeypatch.setattr(XianyuLive, "get_instance", staticmethod(lambda cid: fake_live))
+    monkeypatch.setattr(reply_server, "_run_live_instance_on_manager_loop", _run_inline)
+    monkeypatch.setattr(
+        reply_server,
+        "_build_live_runtime_status",
+        lambda cid: {"exists": True, "cookie_id": cid},
+    )
+
+    foreign_account_update = client.post(
+        "/cookie/admin_runtime_cookie/account-info",
+        headers=user_auth,
+        json={"username": "stolen", "password": "stolen"},
+    )
+    foreign_details = client.get(
+        "/cookie/admin_runtime_cookie/details?include_secrets=true",
+        headers=user_auth,
+    )
+    foreign_runtime = client.get("/cookies/admin_runtime_cookie/runtime-status", headers=user_auth)
+    foreign_history = client.get(
+        "/cookies/admin_runtime_cookie/conversations/conversation-1@goofish/history",
+        headers=user_auth,
+    )
+    foreign_keepalive = client.post("/cookies/admin_runtime_cookie/session-keepalive", headers=user_auth)
+    foreign_proxy_read = client.get(
+        "/cookie/admin_runtime_cookie/proxy?include_secret=true",
+        headers=user_auth,
+    )
+    foreign_proxy_update = client.post(
+        "/cookie/admin_runtime_cookie/proxy",
+        headers=user_auth,
+        json={
+            "proxy_type": "http",
+            "proxy_host": "127.0.0.1",
+            "proxy_port": 8080,
+            "proxy_user": "foreign",
+            "proxy_pass": "foreign-pass",
+        },
+    )
+    owner_account_update = client.post(
+        "/cookie/admin_runtime_cookie/account-info",
+        headers=auth,
+        json={"username": "owner", "password": "owner-pass", "show_browser": True},
+    )
+    owner_proxy_update = client.post(
+        "/cookie/admin_runtime_cookie/proxy",
+        headers=auth,
+        json={
+            "proxy_type": "http",
+            "proxy_host": "127.0.0.1",
+            "proxy_port": 8080,
+            "proxy_user": "owner",
+            "proxy_pass": "owner-pass",
+        },
+    )
+    owner_details = client.get(
+        "/cookie/admin_runtime_cookie/details?include_secrets=true",
+        headers=auth,
+    )
+    owner_runtime = client.get("/cookies/admin_runtime_cookie/runtime-status", headers=auth)
+    owner_history = client.get(
+        "/cookies/admin_runtime_cookie/conversations/conversation-1@goofish/history?page_size=2",
+        headers=auth,
+    )
+    owner_keepalive = client.post("/cookies/admin_runtime_cookie/session-keepalive", headers=auth)
+    owner_proxy_read = client.get(
+        "/cookie/admin_runtime_cookie/proxy?include_secret=true",
+        headers=auth,
+    )
+
+    assert foreign_account_update.status_code == 403
+    assert foreign_details.status_code == 403
+    assert foreign_runtime.status_code == 403
+    assert foreign_history.status_code == 403
+    assert foreign_keepalive.status_code == 403
+    assert foreign_proxy_read.status_code == 403
+    assert foreign_proxy_update.status_code == 403
+    assert owner_account_update.status_code == 200
+    assert owner_proxy_update.status_code == 200
+    assert owner_details.status_code == 200
+    assert owner_details.json()["username"] == "owner"
+    assert owner_details.json()["password"] == "owner-pass"
+    assert owner_details.json()["runtime_status"]["cookie_id"] == "admin_runtime_cookie"
+    assert owner_runtime.status_code == 200
+    assert owner_runtime.json()["runtime_status"]["cookie_id"] == "admin_runtime_cookie"
+    assert owner_history.status_code == 200
+    assert owner_history.json()["conversation_id"] == "conversation-1"
+    assert owner_history.json()["count"] == 1
+    assert owner_keepalive.status_code == 200
+    assert owner_keepalive.json()["success"] is True
+    assert owner_proxy_read.status_code == 200
+    assert owner_proxy_read.json()["data"]["proxy_user"] == "owner"
+    assert owner_proxy_read.json()["data"]["proxy_pass"] == "owner-pass"
+
+
 def test_duplicate_cookie_id_owned_by_other_user_is_rejected(client, auth, user_auth):
     client.post(
         "/cookies",
