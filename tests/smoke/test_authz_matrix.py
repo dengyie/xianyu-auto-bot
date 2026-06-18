@@ -322,6 +322,35 @@ def test_admin_user_management_is_admin_only_and_self_protected(client, auth, us
     assert self_admin_status.status_code == 400
 
 
+def test_admin_status_revocation_invalidates_existing_admin_token(client, auth):
+    import secrets
+    import time
+
+    db_manager = reply_server.db_manager
+    assert db_manager.create_user("tempadmin", "tempadmin@test.local", "test123")
+    temp_admin = db_manager.get_user_by_username("tempadmin")
+    assert db_manager.update_user_admin_status(temp_admin["id"], True)
+
+    stale_token = secrets.token_urlsafe(32)
+    reply_server.SESSION_TOKENS[stale_token] = {
+        "user_id": temp_admin["id"],
+        "username": "tempadmin",
+        "is_admin": True,
+        "timestamp": time.time(),
+    }
+    stale_auth = {"Authorization": f"Bearer {stale_token}"}
+
+    assert client.get("/admin/users", headers=stale_auth).status_code == 200
+
+    revoke = client.put(
+        f"/admin/users/{temp_admin['id']}/admin-status?is_admin=false",
+        headers=auth,
+    )
+    assert revoke.status_code == 200
+    assert stale_token not in reply_server.SESSION_TOKENS
+    assert client.get("/admin/users", headers=stale_auth).status_code == 401
+
+
 def test_admin_log_access_is_admin_only_and_missing_exports_are_safe(
     client, auth, user_auth, monkeypatch
 ):
@@ -456,11 +485,17 @@ def test_update_management_endpoints_reject_regular_users(client, user_auth):
 
 
 def test_update_management_accepts_is_admin_user_without_admin_username(client, mocker):
+    db_manager = reply_server.db_manager
+    assert db_manager.create_user("ops_manager", "ops-manager@test.local", "ops123")
+    ops_manager = db_manager.get_user_by_username("ops_manager")
+    assert db_manager.update_user_admin_status(ops_manager["id"], True)
+    assert db_manager.update_user_admin_status(1, False)
+
     fake_updater = _FakeUpdater()
     mocker.patch.object(reply_server, "get_updater", return_value=fake_updater)
     scheduled = []
     mocker.patch.object(reply_server.asyncio, "create_task", side_effect=lambda task: scheduled.append(task))
-    owner_auth = _make_auth_header(77, "ops_manager", True)
+    owner_auth = _make_auth_header(ops_manager["id"], "ops_manager", True)
 
     apply_resp = client.post("/api/update/apply", headers=owner_auth)
     local_hashes = client.get("/api/update/local-hashes", headers=owner_auth)
@@ -471,7 +506,7 @@ def test_update_management_accepts_is_admin_user_without_admin_username(client, 
     restart = client.post("/api/update/restart", headers=owner_auth)
     legacy_admin = client.get(
         "/api/update/local-hashes",
-        headers=_make_auth_header(78, "admin", False),
+        headers=_make_auth_header(1, "admin", False),
     )
 
     assert apply_resp.status_code == 200

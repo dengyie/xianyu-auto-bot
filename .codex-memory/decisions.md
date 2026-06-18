@@ -421,3 +421,8 @@
 - Decision: Add smoke coverage for admin login-security stats and mutation endpoints without changing production code.
 - Rationale: The `/admin/security/*` endpoints control blocked IPs, locked users, blacklists, and brute-force configuration; the existing routes already use admin-token checks but lacked focused regression coverage.
 - Impact: The smoke suite now proves regular users cannot access these security operations and admins can read and mutate the expected in-memory security state deterministically.
+
+## 2026-06-19 - Phase 95 should rehydrate session privileges from DB
+- Decision: Make `verify_token` refresh user identity and admin status from the current DB row, and revoke all in-memory sessions for a user after successful admin-status changes.
+- Rationale: Storing `is_admin` only inside the issued session token lets an already-issued admin token keep elevated access after the user's admin flag is removed.
+- Impact: Admin privilege revocation now takes effect immediately for in-memory sessions, missing or inactive users are rejected during token verification, and admin compatibility still works for the real `admin` user row.

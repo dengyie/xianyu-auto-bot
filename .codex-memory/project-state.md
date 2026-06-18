@@ -1,36 +1,27 @@
 # Current State Snapshot - 2026-06-19
 
-- Security hardening and smoke coverage are still moving in small bounded phases.
-- Phase 94 is now implemented: admin security management is pinned by smoke coverage to admin-only access and deterministic state mutation boundaries.
-- Covered routes:
-  - `GET /admin/security/login-stats`
-  - `POST /admin/security/unblock-ip/{ip}`
-  - `POST /admin/security/unlock-user/{username}`
-  - `POST /admin/security/blacklist-ip/{ip}`
-  - `POST /admin/security/update-config`
+- Phase 95 is implemented: stale admin sessions are invalidated when admin privileges change.
 - Production code change:
-  - none; existing implementation already uses `verify_admin_token` and applies expected in-memory security state changes
+  - `verify_token` now rehydrates session user data from the current DB row on every request.
+  - tokens for missing or inactive users are removed and treated as unauthenticated.
+  - successful `/admin/users/{user_id}/admin-status` calls revoke all in-memory sessions for the changed user and return `revoked_sessions`.
 - Test coverage:
-  - regular authenticated users are rejected from login security stats and mutation endpoints
-  - admin login security stats report blocked IPs, locked users, blacklisted IPs, and config
-  - admin unblock removes blacklist state
-  - admin unlock clears locked-user attempt state
-  - admin blacklist adds an IP to the blacklist
-  - admin config update accepts valid numeric keys and ignores invalid keys or invalid value types
+  - an existing admin token works before revocation, is removed during admin-status downgrade, and is rejected afterward.
+  - update-management compatibility tests now use DB-backed token fixtures, matching the stricter token verification contract.
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_security_hardening.py -q` => 7 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 216 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q -k "update_management_accepts or admin_status_revocation"` => 2 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 217 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py db_manager tests` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-94 scope reviewed with `production-code-quality-review` in checkpoint mode
+  - phase-95 scope reviewed with `production-code-quality-review` in checkpoint mode
   - severe issues: none
   - medium issues: none
-  - improvement suggestions: none blocking for this focused admin security management regression
+  - non-blocking tradeoff: per-request DB user lookup is intentional for immediate permission revocation
   - quality score: 96/100
   - pass status: passed
 - Environment note:
   - project `venv` still lacks `pytest`, so validation used host Python
 - Next testing priorities:
-  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, cookie availability, system-cache, debug metadata, sales statistics, user-settings, admin-cookie-inventory, admin-user-management, admin-log-access, admin-system-stats, admin-data-management, admin-backup-management, and admin-security-management clusters
+  - future milestone can continue evaluating remaining owner/scoped API surfaces outside the covered route clusters
   - keep ignoring unrelated untracked workspace files

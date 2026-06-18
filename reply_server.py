@@ -1044,6 +1044,16 @@ def generate_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def _remove_session_tokens_for_user(user_id: int) -> int:
+    """Remove all in-memory session tokens for a user after permission changes."""
+    removed = 0
+    for token, token_data in list(SESSION_TOKENS.items()):
+        if token_data.get('user_id') == user_id:
+            del SESSION_TOKENS[token]
+            removed += 1
+    return removed
+
+
 def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[Dict[str, Any]]:
     """验证token并返回用户信息"""
     if not credentials:
@@ -1060,7 +1070,19 @@ def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(s
         del SESSION_TOKENS[token]
         return None
 
-    return token_data
+    user = db_manager.get_user_by_id(token_data.get('user_id'))
+    if not user or not user.get('is_active', True):
+        del SESSION_TOKENS[token]
+        return None
+
+    refreshed_token_data = {
+        **token_data,
+        'user_id': user['id'],
+        'username': user['username'],
+        'is_admin': user.get('is_admin', False),
+    }
+    SESSION_TOKENS[token] = refreshed_token_data
+    return refreshed_token_data
 
 
 def verify_admin_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Dict[str, Any]:
@@ -10400,12 +10422,14 @@ def update_user_admin_status(user_id: int, is_admin: bool, admin_user: Dict[str,
 
         if success:
             action = "设置为管理员" if is_admin else "取消管理员权限"
+            removed_tokens = _remove_session_tokens_for_user(user_id)
             log_with_user('info', f"用户 {target_user['username']} 已{action}", admin_user)
             return {
                 "success": True,
                 "message": f"用户 {target_user['username']} 已{action}",
                 "user_id": user_id,
-                "is_admin": is_admin
+                "is_admin": is_admin,
+                "revoked_sessions": removed_tokens
             }
         else:
             log_with_user('error', f"更新用户管理员状态失败: {target_user['username']}", admin_user)

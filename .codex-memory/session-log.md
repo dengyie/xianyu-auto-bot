@@ -1572,3 +1572,25 @@
   - Future milestone can continue evaluating remaining owner/scoped API surfaces.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-19 02:27
+- Task: Fix phase 95 stale admin token revocation finding from the production review.
+- Actions:
+  - Re-checked skills/plugins per project rules and restored project memory.
+  - Added `.codex-memory/phase95-admin-token-revocation-design.md` before implementation.
+  - Updated `verify_token` to refresh current user state from the DB and reject missing or inactive users.
+  - Added in-memory session revocation for successful admin-status changes.
+  - Added smoke coverage proving an existing admin token is invalidated after admin privileges are removed.
+  - Updated update-management auth fixtures so manually injected tokens are backed by DB users under the stricter verification contract.
+  - Ran targeted smoke tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted authz matrix smoke tests: 2 passed.
+  - Full smoke suite: 217 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe or medium findings.
+- Next:
+  - Stage and commit the phase-95 change set.
+  - Future milestone can continue remaining owner/scoped API coverage.
+- Blockers:
+  - None for the phase-95 local delivery.
