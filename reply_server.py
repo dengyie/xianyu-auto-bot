@@ -9941,7 +9941,7 @@ def test_ai_reply(cookie_id: str, test_data: dict, current_user: Dict[str, Any] 
 # ==================== 日志管理API ====================
 
 @app.get("/logs")
-async def get_logs(lines: int = 200, level: str = None, source: str = None, current_user: Dict[str, Any] = Depends(get_current_user)):
+async def get_logs(lines: int = 200, level: str = None, source: str = None, admin_user: Dict[str, Any] = Depends(require_admin)):
     """获取实时系统日志"""
     try:
         # 获取文件日志收集器
@@ -10109,7 +10109,7 @@ async def delete_risk_control_log(
 
 
 @app.get("/logs/stats")
-async def get_log_stats(current_user: Dict[str, Any] = Depends(get_current_user)):
+async def get_log_stats(admin_user: Dict[str, Any] = Depends(require_admin)):
     """获取日志统计信息"""
     try:
         collector = get_file_log_collector()
@@ -10122,7 +10122,7 @@ async def get_log_stats(current_user: Dict[str, Any] = Depends(get_current_user)
 
 
 @app.post("/logs/clear")
-async def clear_logs(current_user: Dict[str, Any] = Depends(get_current_user)):
+async def clear_logs(admin_user: Dict[str, Any] = Depends(require_admin)):
     """清空日志"""
     try:
         collector = get_file_log_collector()

@@ -1297,3 +1297,24 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the now-covered order list/delete cluster.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-18 16:28
+- Task: Finish phase 82 realtime log API admin-boundary hardening.
+- Actions:
+  - Reloaded project memory and audited remaining owner/scoped route candidates.
+  - Selected legacy realtime log APIs because `/logs`, `/logs/stats`, and `/logs/clear` exposed system-wide operational data/actions to any authenticated user.
+  - Added `.codex-memory/test-coverage-phase82-design.md` before implementation.
+  - Updated the three realtime log endpoints to use `require_admin`, matching the existing admin-only log management surface.
+  - Added a smoke regression in `tests/smoke/test_authz_matrix.py` covering regular-user denial and admin success for all three endpoints.
+  - Re-ran targeted authz tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted authz matrix smoke tests: 10 passed.
+  - Full smoke suite: 204 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-82 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the now-covered realtime log cluster.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.

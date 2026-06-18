@@ -48,6 +48,23 @@ def test_admin_only_system_settings_update_rejects_regular_user(client, user_aut
     assert resp.status_code == 403
 
 
+def test_realtime_log_endpoints_are_admin_only(client, auth, user_auth):
+    denied = [
+        client.get("/logs", headers=user_auth),
+        client.get("/logs/stats", headers=user_auth),
+        client.post("/logs/clear", headers=user_auth),
+    ]
+    allowed = [
+        client.get("/logs", headers=auth),
+        client.get("/logs/stats", headers=auth),
+        client.post("/logs/clear", headers=auth),
+    ]
+
+    assert [resp.status_code for resp in denied] == [403, 403, 403]
+    assert [resp.status_code for resp in allowed] == [200, 200, 200]
+    assert all(resp.json()["success"] is True for resp in allowed)
+
+
 class _FakeUpdateProgress:
     status = "idle"
     current_file = ""

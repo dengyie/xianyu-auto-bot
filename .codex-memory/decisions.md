@@ -356,3 +356,8 @@
 - Decision: Add smoke coverage for order listing and deletion without changing production code.
 - Rationale: Orders are user-owned through their `cookie_id`; the existing list route gathers only current-user cookies and the delete route verifies the order cookie owner before mutation.
 - Impact: The smoke suite now proves a user cannot see or delete another user's order and that owner deletion still removes only the owner-visible order.
+
+## 2026-06-18 - Phase 82 should make realtime log APIs admin-only
+- Decision: Change legacy realtime log endpoints from authenticated-user access to `require_admin`.
+- Rationale: System logs, log statistics, and log clearing are system-level operational surfaces that can expose cross-user context or destroy diagnostic state; the UI already uses admin log routes for log management.
+- Impact: Regular users now receive `403` for `/logs`, `/logs/stats`, and `/logs/clear`, while admins retain access.
