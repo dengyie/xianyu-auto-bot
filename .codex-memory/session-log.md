@@ -1074,3 +1074,21 @@
   - Continue evaluating chat keyword item and AI reply settings ownership coverage.
 - Blockers:
   - `gh auth status` previously reported an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` can complete.
+## 2026-06-18 01:35
+- Task: Add phase 71 smoke coverage for chat keyword item ownership.
+- Actions:
+  - Reviewed `/api/chat/keywords/{cid}/item/{item_id}`, `/api/chat/keywords/{cid}/copy`, and `/api/chat/items/{cid}`.
+  - Confirmed all three route surfaces use `_ensure_cookie_access(...)` and DB helpers constrain keyword operations by `cookie_id`.
+  - Added `.codex-memory/test-coverage-phase71-design.md` and a smoke regression covering foreign-user denial plus owner item list, read, save, copy, and target-read success paths.
+  - Re-ran targeted keyword/default-reply smoke tests, full smoke suite, compileall, diff hygiene, and production review context collection.
+- Results:
+  - Targeted keyword/default-reply smoke tests: 8 passed.
+  - First full smoke attempt timed out without progress output; immediate rerun with `--maxfail=1` passed with 189 tests.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 95/100, no severe findings.
+- Next:
+  - Stage and commit the phase-71 change set.
+  - Continue evaluating AI reply settings ownership coverage.
+- Blockers:
+  - `gh auth status` previously reported an invalid token, so push/PR flow remains blocked until `gh auth login -h github.com` can complete.

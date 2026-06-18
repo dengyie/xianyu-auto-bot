@@ -171,3 +171,99 @@ def test_keywords_with_type_rejects_foreign_cookie_access(client, auth, user_aut
     assert owner_read.json()[0]["keyword"] == "typed"
     assert owner_read.json()[0]["reply"] == "Typed reply"
     assert owner_read.json()[0]["type"] == "text"
+
+
+def test_chat_keyword_item_routes_are_scoped_to_cookie_owner(client, auth, user_auth):
+    _add_cookie(client, auth, "admin_chat_keyword_cookie")
+    _add_cookie(client, user_auth, "user_chat_keyword_cookie")
+
+    from db_manager import db_manager
+
+    assert db_manager.save_item_info(
+        "admin_chat_keyword_cookie",
+        "chat_item_001",
+        {
+            "title": "Chat source item",
+            "description": "Owner source",
+            "category": "digital",
+            "price": "49.90",
+        },
+    )
+    assert db_manager.save_item_info(
+        "admin_chat_keyword_cookie",
+        "chat_item_002",
+        {
+            "title": "Chat target item",
+            "description": "Owner target",
+            "category": "digital",
+            "price": "59.90",
+        },
+    )
+    assert db_manager.save_keywords_for_item(
+        "admin_chat_keyword_cookie",
+        "chat_item_001",
+        [{"keyword": "hello", "reply": "Hi from owner", "type": "text"}],
+    )
+    assert db_manager.update_item_reply(
+        "admin_chat_keyword_cookie",
+        "chat_item_001",
+        "Owner item reply",
+    )
+
+    foreign_read = client.get(
+        "/api/chat/keywords/admin_chat_keyword_cookie/item/chat_item_001",
+        headers=user_auth,
+    )
+    foreign_save = client.post(
+        "/api/chat/keywords/admin_chat_keyword_cookie/item/chat_item_001",
+        headers=user_auth,
+        json={"keywords": [{"keyword": "stolen", "reply": "nope"}], "item_reply": "stolen"},
+    )
+    foreign_copy = client.post(
+        "/api/chat/keywords/admin_chat_keyword_cookie/copy",
+        headers=user_auth,
+        json={"source_item_id": "chat_item_001", "target_item_ids": ["chat_item_002"]},
+    )
+    foreign_items = client.get("/api/chat/items/admin_chat_keyword_cookie", headers=user_auth)
+    owner_items = client.get("/api/chat/items/admin_chat_keyword_cookie", headers=auth)
+    owner_read = client.get(
+        "/api/chat/keywords/admin_chat_keyword_cookie/item/chat_item_001",
+        headers=auth,
+    )
+    owner_save = client.post(
+        "/api/chat/keywords/admin_chat_keyword_cookie/item/chat_item_001",
+        headers=auth,
+        json={
+            "keywords": [{"keyword": "updated", "reply": "Updated reply", "type": "text"}],
+            "item_reply": "Updated item reply",
+        },
+    )
+    owner_copy = client.post(
+        "/api/chat/keywords/admin_chat_keyword_cookie/copy",
+        headers=auth,
+        json={"source_item_id": "chat_item_001", "target_item_ids": ["chat_item_002"]},
+    )
+    target_read = client.get(
+        "/api/chat/keywords/admin_chat_keyword_cookie/item/chat_item_002",
+        headers=auth,
+    )
+
+    assert foreign_read.status_code == 403
+    assert foreign_save.status_code == 403
+    assert foreign_copy.status_code == 403
+    assert foreign_items.status_code == 403
+    assert owner_items.status_code == 200
+    assert owner_items.json()["items"] == [
+        {"item_id": "chat_item_001", "item_title": "Chat source item"},
+        {"item_id": "chat_item_002", "item_title": "Chat target item"},
+    ]
+    assert owner_read.status_code == 200
+    assert owner_read.json()["item_reply"] == "Owner item reply"
+    assert owner_read.json()["keywords"][0]["keyword"] == "hello"
+    assert owner_save.status_code == 200
+    assert owner_save.json() == {"success": True, "count": 1}
+    assert owner_copy.status_code == 200
+    assert owner_copy.json()["results"] == {"chat_item_002": 1}
+    assert target_read.status_code == 200
+    assert target_read.json()["item_reply"] == "Updated item reply"
+    assert target_read.json()["keywords"][0]["keyword"] == "updated"

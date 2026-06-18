@@ -306,3 +306,7 @@
 - Decision: Add cookie ownership checks to the item multi-spec and multi-quantity delivery update routes before calling the item flag data-layer helpers.
 - Rationale: The helpers update by `cookie_id` and `item_id`, but the API routes previously accepted any authenticated user's request for another user's `cookie_id`. Route-level authorization keeps these item-scoped mutations aligned with the surrounding item-info and item-reply route clusters.
 - Impact: Foreign users now receive `403` before item flag mutation, owner updates still work, and smoke coverage protects both route surfaces.
+## 2026-06-18 - Phase 71 should lock chat keyword item route ownership
+- Decision: Add smoke coverage for chat keyword item read/save/copy and chat item list routes while keeping existing production behavior unchanged.
+- Rationale: The routes already delegate cookie authorization to `_ensure_cookie_access(...)` and DB helpers scope keyword operations by `cookie_id`, but this chat-specific API cluster had no focused owner-boundary regression.
+- Impact: Foreign-user denial and owner success paths for chat item keyword workflows are now explicitly covered.

@@ -1,21 +1,23 @@
 # Current State Snapshot - 2026-06-18
 
 - Security hardening and smoke coverage are still moving in small bounded phases.
-- Phase 70 is now implemented: item flag update routes now enforce cookie ownership before mutating multi-spec or multi-quantity delivery flags.
+- Phase 71 is now implemented: chat keyword item route ownership smoke coverage added for item read/save/copy and item list.
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_cookie_access_control.py -q` => 14 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q` => 188 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_keywords_default_replies.py -q` => 8 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 189 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py db_manager tests` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-70 scope reviewed with `production-code-quality-review` in checkpoint mode
+  - phase-71 scope reviewed with `production-code-quality-review` in checkpoint mode
   - severe issues: none
   - improvement suggestions: none blocking for this focused regression
-  - quality score: 96/100
+  - quality score: 95/100
   - pass status: passed
+- Verification note:
+  - first full smoke attempt timed out without progress output, but immediate rerun passed with 189 tests
 - Environment note:
   - project `venv` still lacks `pytest`, so validation used host Python
 - Next testing priorities:
   - continue evaluating remaining owner/scoped routes for focused smoke gaps
-  - likely next clusters: chat keyword item routes, AI reply settings
+  - likely next cluster: AI reply settings
   - keep ignoring unrelated untracked workspace files
