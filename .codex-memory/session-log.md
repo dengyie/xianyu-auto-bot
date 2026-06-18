@@ -1276,3 +1276,24 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the now-covered AI config preset cluster.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-18 16:21
+- Task: Finish phase 81 order list/delete ownership coverage.
+- Actions:
+  - Reloaded project memory and audited remaining owner/scoped route candidates.
+  - Selected `GET /api/orders` and `DELETE /api/orders/{order_id}` as the next focused order data surface.
+  - Added `.codex-memory/test-coverage-phase81-design.md` before implementation.
+  - Confirmed production code already scopes listing through current-user cookies and deletion through the order's cookie owner.
+  - Added a smoke regression in `tests/smoke/test_orders.py` covering filtered user listing, foreign delete denial with no mutation, owner delete success, and post-delete isolation.
+  - Re-ran targeted order tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted order smoke tests: 4 passed.
+  - Full smoke suite: 203 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 95/100, no severe findings.
+- Next:
+  - Stage and commit the phase-81 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the now-covered order list/delete cluster.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.

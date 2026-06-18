@@ -351,3 +351,8 @@
 - Decision: Add smoke coverage for AI config preset list/create/delete behavior without changing production code.
 - Rationale: Presets can contain API keys and provider URLs, and the existing route plus DB helpers already scope operations by `user_id`; a focused regression is enough to lock the sensitive ownership contract.
 - Impact: The smoke suite now proves users can independently create the same preset name, cannot list or delete another user's preset, and owner deletion does not affect another user's preset.
+
+## 2026-06-18 - Phase 81 should pin order list/delete to cookie ownership
+- Decision: Add smoke coverage for order listing and deletion without changing production code.
+- Rationale: Orders are user-owned through their `cookie_id`; the existing list route gathers only current-user cookies and the delete route verifies the order cookie owner before mutation.
+- Impact: The smoke suite now proves a user cannot see or delete another user's order and that owner deletion still removes only the owner-visible order.
