@@ -1318,3 +1318,24 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the now-covered realtime log cluster.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-18 16:33
+- Task: Finish phase 83 cookie availability check user scoping.
+- Actions:
+  - Reloaded project memory and audited remaining owner/scoped route candidates.
+  - Selected `/cookies/check` because it used optional auth and counted all cookies globally.
+  - Added `.codex-memory/test-coverage-phase83-design.md` before implementation.
+  - Updated `/cookies/check` so anonymous callers receive zero counts and authenticated callers count only current-user cookies.
+  - Added a smoke regression in `tests/smoke/test_authz_matrix.py` covering anonymous zero counts, admin-owned counts, and regular-user-owned counts.
+  - Re-ran targeted authz tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted authz matrix smoke tests: 11 passed.
+  - Full smoke suite: 205 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-83 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the now-covered cookie availability cluster.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.

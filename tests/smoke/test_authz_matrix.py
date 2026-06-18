@@ -65,6 +65,39 @@ def test_realtime_log_endpoints_are_admin_only(client, auth, user_auth):
     assert all(resp.json()["success"] is True for resp in allowed)
 
 
+def test_cookie_check_counts_are_scoped_to_current_user(client, auth, user_auth):
+    db_manager = reply_server.db_manager
+    assert db_manager.save_cookie("admin_valid_cookie", "x" * 64, user_id=1)
+    assert db_manager.save_cookie("user_valid_cookie", "y" * 64, user_id=2)
+    assert db_manager.save_cookie("user_short_cookie", "short", user_id=2)
+    reply_server.cookie_manager.manager.cookie_status["admin_valid_cookie"] = True
+    reply_server.cookie_manager.manager.cookie_status["user_valid_cookie"] = True
+    reply_server.cookie_manager.manager.cookie_status["user_short_cookie"] = False
+
+    anonymous = client.get("/cookies/check")
+    admin_resp = client.get("/cookies/check", headers=auth)
+    user_resp = client.get("/cookies/check", headers=user_auth)
+
+    assert anonymous.status_code == 200
+    assert anonymous.json() == {
+        "success": True,
+        "hasValidCookies": False,
+        "validCount": 0,
+        "enabledCount": 0,
+        "totalCount": 0,
+    }
+    assert admin_resp.status_code == 200
+    assert admin_resp.json()["totalCount"] == 1
+    assert admin_resp.json()["enabledCount"] == 1
+    assert admin_resp.json()["validCount"] == 1
+    assert admin_resp.json()["hasValidCookies"] is True
+    assert user_resp.status_code == 200
+    assert user_resp.json()["totalCount"] == 2
+    assert user_resp.json()["enabledCount"] == 1
+    assert user_resp.json()["validCount"] == 1
+    assert user_resp.json()["hasValidCookies"] is True
+
+
 class _FakeUpdateProgress:
     status = "idle"
     current_file = ""

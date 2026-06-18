@@ -9376,8 +9376,17 @@ async def check_valid_cookies(
 
         from db_manager import db_manager
 
-        # 获取所有cookies
-        all_cookies = db_manager.get_all_cookies()
+        if not current_user:
+            return {
+                "success": True,
+                "hasValidCookies": False,
+                "validCount": 0,
+                "enabledCount": 0,
+                "totalCount": 0
+            }
+
+        # 获取当前用户的cookies
+        all_cookies = db_manager.get_all_cookies(current_user["user_id"])
 
         # 检查启用状态和有效性
         valid_cookies = []

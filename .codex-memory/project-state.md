@@ -1,27 +1,25 @@
 # Current State Snapshot - 2026-06-18
 
 - Security hardening and smoke coverage are still moving in small bounded phases.
-- Phase 82 is now implemented: legacy realtime log APIs are now admin-only and have focused authz smoke coverage.
-- Covered routes:
-  - `GET /logs`
-  - `GET /logs/stats`
-  - `POST /logs/clear`
+- Phase 83 is now implemented: `/cookies/check` is scoped to the authenticated user's cookies and no longer exposes global counts to anonymous callers.
+- Covered route:
+  - `GET /cookies/check`
 - Production code change:
-  - switched the three legacy realtime log endpoints from `get_current_user` to `require_admin`
-  - existing `/admin/logs` routes remain unchanged
+  - anonymous callers now receive zero availability counts
+  - authenticated callers now count only `db_manager.get_all_cookies(current_user["user_id"])`
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q` => 10 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 204 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q` => 11 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 205 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py db_manager tests` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-82 scope reviewed with `production-code-quality-review` in checkpoint mode
+  - phase-83 scope reviewed with `production-code-quality-review` in checkpoint mode
   - severe issues: none
-  - improvement suggestions: none blocking for this focused realtime log admin-boundary fix
+  - improvement suggestions: none blocking for this focused cookie availability scope fix
   - quality score: 96/100
   - pass status: passed
 - Environment note:
   - project `venv` still lacks `pytest`, so validation used host Python
 - Next testing priorities:
-  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, and realtime log clusters
+  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, and cookie availability clusters
   - keep ignoring unrelated untracked workspace files

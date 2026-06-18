@@ -361,3 +361,8 @@
 - Decision: Change legacy realtime log endpoints from authenticated-user access to `require_admin`.
 - Rationale: System logs, log statistics, and log clearing are system-level operational surfaces that can expose cross-user context or destroy diagnostic state; the UI already uses admin log routes for log management.
 - Impact: Regular users now receive `403` for `/logs`, `/logs/stats`, and `/logs/clear`, while admins retain access.
+
+## 2026-06-18 - Phase 83 should scope cookie availability checks to the caller
+- Decision: Keep `/cookies/check` available for anonymous UI compatibility, but return zero counts when unauthenticated and count only current-user cookies when authenticated.
+- Rationale: Global cookie availability counts leak cross-user operational state and can make a user's UI depend on accounts they do not own.
+- Impact: The endpoint now reports availability for the caller's own account set only, while anonymous requests no longer reveal whether any user has valid cookies.
