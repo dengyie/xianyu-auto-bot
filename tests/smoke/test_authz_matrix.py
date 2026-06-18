@@ -213,3 +213,51 @@ def test_slider_verification_stats_are_scoped_to_admin_owned_cookies(client, use
     assert foreign_data["success_count"] == 0
     assert foreign_data["failure_count"] == 0
     assert foreign_data["selected_cookie_id"] == "foreign_slider_cookie"
+
+
+def test_ai_config_presets_are_scoped_to_user(client, auth, user_auth):
+    admin_create = client.post(
+        "/ai-config-presets",
+        headers=auth,
+        json={
+            "preset_name": "shared-preset",
+            "model_name": "admin-model",
+            "api_key": "admin-secret-key",
+            "base_url": "https://admin.example/v1",
+            "api_type": "openai",
+        },
+    )
+    user_create = client.post(
+        "/ai-config-presets",
+        headers=user_auth,
+        json={
+            "preset_name": "shared-preset",
+            "model_name": "user-model",
+            "api_key": "user-secret-key",
+            "base_url": "https://user.example/v1",
+            "api_type": "compatible",
+        },
+    )
+
+    assert admin_create.status_code == 200
+    assert user_create.status_code == 200
+
+    admin_preset_id = admin_create.json()["preset_id"]
+    user_preset_id = user_create.json()["preset_id"]
+    foreign_delete = client.delete(f"/ai-config-presets/{admin_preset_id}", headers=user_auth)
+    admin_list = client.get("/ai-config-presets", headers=auth)
+    user_list = client.get("/ai-config-presets", headers=user_auth)
+    owner_delete = client.delete(f"/ai-config-presets/{admin_preset_id}", headers=auth)
+    admin_after_delete = client.get("/ai-config-presets", headers=auth)
+    user_after_admin_delete = client.get("/ai-config-presets", headers=user_auth)
+
+    assert foreign_delete.status_code == 404
+    assert admin_list.status_code == 200
+    assert user_list.status_code == 200
+    assert [preset["id"] for preset in admin_list.json()] == [admin_preset_id]
+    assert admin_list.json()[0]["api_key"] == "admin-secret-key"
+    assert [preset["id"] for preset in user_list.json()] == [user_preset_id]
+    assert user_list.json()[0]["api_key"] == "user-secret-key"
+    assert owner_delete.status_code == 200
+    assert admin_after_delete.json() == []
+    assert [preset["id"] for preset in user_after_admin_delete.json()] == [user_preset_id]

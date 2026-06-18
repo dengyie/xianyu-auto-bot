@@ -346,3 +346,8 @@
 - Decision: Add smoke coverage for `/admin/slider-verification-stats` proving regular users are rejected and admins only aggregate risk-control records for their own cookies.
 - Rationale: Slider verification stats expose account operational signals; even for an admin endpoint, the current contract is user-scoped aggregation through `get_all_cookies(admin_user['user_id'])`.
 - Impact: The smoke suite now proves explicit foreign-cookie queries return an empty scoped result and aggregate stats exclude another user's slider records.
+
+## 2026-06-18 - Phase 80 should pin AI config presets to user ownership
+- Decision: Add smoke coverage for AI config preset list/create/delete behavior without changing production code.
+- Rationale: Presets can contain API keys and provider URLs, and the existing route plus DB helpers already scope operations by `user_id`; a focused regression is enough to lock the sensitive ownership contract.
+- Impact: The smoke suite now proves users can independently create the same preset name, cannot list or delete another user's preset, and owner deletion does not affect another user's preset.

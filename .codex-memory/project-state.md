@@ -1,24 +1,26 @@
 # Current State Snapshot - 2026-06-18
 
 - Security hardening and smoke coverage are still moving in small bounded phases.
-- Phase 79 is now implemented: admin slider verification statistics now have focused smoke coverage proving aggregation is scoped to the authenticated admin user's own cookies.
-- Covered route:
-  - `GET /admin/slider-verification-stats`
+- Phase 80 is now implemented: AI configuration preset list/create/delete behavior has focused smoke coverage proving presets are scoped to the authenticated user.
+- Covered routes:
+  - `GET /ai-config-presets`
+  - `POST /ai-config-presets`
+  - `DELETE /ai-config-presets/{preset_id}`
 - Production code change:
-  - none; the existing `db_manager.get_all_cookies(admin_user['user_id'])` scoping was already correct
+  - none; the existing route and DB helper paths already pass/filter by `user_id`
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q` => 8 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 201 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q` => 9 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 202 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py db_manager tests` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-79 scope reviewed with `production-code-quality-review` in checkpoint mode
+  - phase-80 scope reviewed with `production-code-quality-review` in checkpoint mode
   - severe issues: none
-  - improvement suggestions: none blocking for this focused slider-stat ownership regression
+  - improvement suggestions: none blocking for this focused AI preset ownership regression
   - quality score: 95/100
   - pass status: passed
 - Environment note:
   - project `venv` still lacks `pytest`, so validation used host Python
 - Next testing priorities:
-  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, and slider-stat clusters
+  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, slider-stat, and AI config preset clusters
   - keep ignoring unrelated untracked workspace files

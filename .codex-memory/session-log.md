@@ -1256,3 +1256,23 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the now-covered slider-stat cluster.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-18 16:15
+- Task: Finish phase 80 AI config preset ownership coverage.
+- Actions:
+  - Reloaded project memory and audited the current phase-80 diff against the AI config preset route and DB helper paths.
+  - Added `.codex-memory/test-coverage-phase80-design.md` before implementation.
+  - Confirmed production code already scopes `GET`, `POST`, and `DELETE` preset operations by `current_user['user_id']` and DB `user_id` filters.
+  - Added a smoke regression in `tests/smoke/test_authz_matrix.py` covering same-name preset isolation, per-user listing, foreign delete denial, owner delete success, and post-delete isolation.
+  - Re-ran targeted authz tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted authz matrix smoke tests: 9 passed.
+  - Full smoke suite: 202 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 95/100, no severe findings.
+- Next:
+  - Stage and commit the phase-80 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the now-covered AI config preset cluster.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
