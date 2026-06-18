@@ -2,8 +2,9 @@
 ## In Progress
 - [ ] Evaluate the next remaining owner/scoped route cluster for a focused smoke regression
 ## Next
-- [ ] Evaluate whether the remaining uncovered risk now sits outside the current file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, update-management, and account item operation clusters
+- [ ] Evaluate whether the remaining uncovered risk now sits outside the current file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, update-management, account item operation, and chat runtime clusters
 ## Done
+- [x] Stage and commit phase 78 chat runtime ownership coverage
 - [x] Stage and commit phase 77 account item operation ownership coverage
 - [x] Stage and commit phase 76 update-management admin-boundary coverage
 - [x] Stage and commit phase 75 user backup and settings scope hardening

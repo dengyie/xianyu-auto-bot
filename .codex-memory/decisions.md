@@ -336,3 +336,8 @@
 - Decision: Add `_ensure_cookie_access(...)` to the account item sync, paged item fetch, and polish routes before reading cookie data or constructing `XianyuLive`.
 - Rationale: These routes execute live account-scoped operations from caller-supplied cookie ids, so route-level ownership must be proved before any external side effect or secret access.
 - Impact: Foreign users now receive the standard cookie-access `403`, owner operations remain compatible, and smoke coverage prevents the authorization boundary from regressing.
+
+## 2026-06-18 - Phase 78 should pin chat runtime owner gates with smoke coverage
+- Decision: Add route-level smoke coverage for chat session list, chat message list, and chat send using local DB rows plus a fake connected live instance.
+- Rationale: The existing `_ensure_cookie_access(...)` gates were correct, but this high-value chat API cluster lacked focused cross-user regression coverage for both read and send paths.
+- Impact: Foreign users are now explicitly proven unable to read another account's chat state or send through another account, while owner read/send behavior remains covered.

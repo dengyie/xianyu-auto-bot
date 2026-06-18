@@ -584,6 +584,107 @@ def test_account_item_operation_routes_are_scoped_to_cookie_owner(
     assert ("polish_all_items", "admin_item_ops_cookie") in calls
 
 
+def test_chat_runtime_routes_are_scoped_to_cookie_owner(
+    client,
+    auth,
+    user_auth,
+    monkeypatch,
+):
+    client.post(
+        "/cookies",
+        headers=auth,
+        json={"id": "admin_chat_runtime_cookie", "value": "unb=admin"},
+    )
+    from db_manager import db_manager
+
+    chat_id = "chat-runtime-1"
+    db_manager.save_chat_message(
+        cookie_id="admin_chat_runtime_cookie",
+        chat_id=chat_id,
+        sender_id="buyer-1",
+        sender_name="Owner buyer",
+        content="owner-only message",
+        direction=2,
+    )
+
+    sent = []
+
+    class _FakeLive:
+        connection_state = None
+        ws = object()
+        myid = "owner-seller"
+
+        async def send_msg(self, ws, target_chat_id, to_user_id, message):
+            sent.append((ws, target_chat_id, to_user_id, message))
+
+    from XianyuAutoAsync import ConnectionState, XianyuLive
+    import reply_server
+
+    live = _FakeLive()
+    live.connection_state = ConnectionState.CONNECTED
+
+    monkeypatch.setattr(
+        XianyuLive,
+        "get_instance",
+        staticmethod(lambda cookie_id: live if cookie_id == "admin_chat_runtime_cookie" else None),
+    )
+
+    async def _run_inline(cookie_id, coroutine_factory, timeout=None):
+        return await coroutine_factory()
+
+    monkeypatch.setattr(reply_server, "_run_live_instance_on_manager_loop", _run_inline)
+
+    foreign_sessions = client.get(
+        "/api/chat/sessions?cookie_id=admin_chat_runtime_cookie",
+        headers=user_auth,
+    )
+    foreign_messages = client.get(
+        f"/api/chat/messages?cookie_id=admin_chat_runtime_cookie&chat_id={chat_id}",
+        headers=user_auth,
+    )
+    foreign_send = client.post(
+        "/api/chat/send",
+        headers=user_auth,
+        json={
+            "cookie_id": "admin_chat_runtime_cookie",
+            "chat_id": chat_id,
+            "to_user_id": "buyer-1",
+            "message": "foreign send",
+        },
+    )
+
+    owner_sessions = client.get(
+        "/api/chat/sessions?cookie_id=admin_chat_runtime_cookie&include_order_fallback=false",
+        headers=auth,
+    )
+    owner_messages = client.get(
+        f"/api/chat/messages?cookie_id=admin_chat_runtime_cookie&chat_id={chat_id}",
+        headers=auth,
+    )
+    owner_send = client.post(
+        "/api/chat/send",
+        headers=auth,
+        json={
+            "cookie_id": "admin_chat_runtime_cookie",
+            "chat_id": chat_id,
+            "to_user_id": "buyer-1",
+            "message": "owner send",
+        },
+    )
+
+    assert foreign_sessions.status_code == 403
+    assert foreign_messages.status_code == 403
+    assert foreign_send.status_code == 403
+    assert owner_sessions.status_code == 200
+    assert owner_sessions.json()["success"] is True
+    assert owner_sessions.json()["sessions"][0]["chat_id"] == chat_id
+    assert owner_messages.status_code == 200
+    assert owner_messages.json()["messages"][0]["content"] == "owner-only message"
+    assert owner_send.status_code == 200
+    assert owner_send.json()["success"] is True
+    assert sent == [(live.ws, chat_id, "buyer-1", "owner send")]
+
+
 def test_duplicate_cookie_id_owned_by_other_user_is_rejected(client, auth, user_auth):
     client.post(
         "/cookies",

@@ -1214,3 +1214,24 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the now-covered account item operation cluster.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-18 13:11
+- Task: Finish phase 78 chat runtime API ownership coverage.
+- Actions:
+  - Reloaded project memory and audited remaining caller-supplied `cookie_id` route clusters.
+  - Selected `/api/chat/sessions`, `/api/chat/messages`, and `/api/chat/send` as the next focused owner-scoped chat runtime surface.
+  - Added `.codex-memory/test-coverage-phase78-design.md` before implementation.
+  - Confirmed production routes already use `_ensure_cookie_access(...)`, so no runtime code change was needed.
+  - Added a smoke regression in `tests/smoke/test_cookie_access_control.py` covering foreign-user denial and owner success for session reads, message reads, and live send through a fake connected `XianyuLive` instance.
+  - Re-ran targeted cookie-access tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted cookie-access smoke tests: 18 passed.
+  - Full smoke suite: 200 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 95/100, no severe findings.
+- Next:
+  - Stage and commit the phase-78 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the now-covered chat runtime cluster.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.

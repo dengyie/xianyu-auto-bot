@@ -1,24 +1,26 @@
 # Current State Snapshot - 2026-06-18
 
 - Security hardening and smoke coverage are still moving in small bounded phases.
-- Phase 77 is now implemented: account item operation routes are scoped to the owning cookie user before reading cookie secrets or constructing `XianyuLive`.
+- Phase 78 is now implemented: online chat runtime API routes now have focused smoke coverage proving cookie-owner scoping for local session reads, local message reads, and live send actions.
 - Covered routes:
-  - `POST /items/get-all-from-account`
-  - `POST /items/get-by-page`
-  - `POST /accounts/{cid}/polish-items`
+  - `GET /api/chat/sessions`
+  - `GET /api/chat/messages`
+  - `POST /api/chat/send`
+- Production code change:
+  - none; the existing `_ensure_cookie_access(...)` checks were already correct
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_cookie_access_control.py -q` => 17 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 199 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_cookie_access_control.py -q` => 18 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 200 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py db_manager tests` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-77 scope reviewed with `production-code-quality-review` in checkpoint mode
+  - phase-78 scope reviewed with `production-code-quality-review` in checkpoint mode
   - severe issues: none
-  - improvement suggestions: none blocking for this focused account-item-operation ownership regression
-  - quality score: 96/100
+  - improvement suggestions: none blocking for this focused chat runtime ownership regression
+  - quality score: 95/100
   - pass status: passed
 - Environment note:
   - project `venv` still lacks `pytest`, so validation used host Python
 - Next testing priorities:
-  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, and account item operation clusters
+  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, and chat runtime clusters
   - keep ignoring unrelated untracked workspace files
