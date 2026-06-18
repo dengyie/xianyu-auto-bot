@@ -136,7 +136,16 @@ class DBUsersMixin:
 
                 # 导入数据
                 data = backup_data['data']
+                user_import_tables = {
+                    'cookies', 'keywords', 'cookie_status', 'cards',
+                    'delivery_rules', 'default_replies', 'notification_channels',
+                    'message_notifications', 'item_info', 'ai_reply_settings',
+                    'ai_conversations'
+                }
                 for table_name, table_data in data.items():
+                    if user_id is not None and table_name not in user_import_tables:
+                        continue
+
                     if table_name not in ['cookies', 'keywords', 'cookie_status', 'cards',
                                         'delivery_rules', 'default_replies', 'notification_channels',
                                         'message_notifications', 'system_settings', 'item_info',
@@ -149,9 +158,10 @@ class DBUsersMixin:
                     if not rows:
                         continue
 
-                    # 如果是用户级导入，需要确保cookies表的user_id正确
-                    if user_id is not None and table_name == 'cookies':
-                        # 更新所有导入的cookies的user_id
+                    # 用户级导入必须把资源重新绑定到当前用户，不能信任备份里的 user_id。
+                    if user_id is not None and table_name in {
+                        'cookies', 'cards', 'delivery_rules', 'notification_channels'
+                    } and 'user_id' in columns:
                         updated_rows = []
                         for row in rows:
                             row_dict = dict(zip(columns, row))

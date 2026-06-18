@@ -1153,3 +1153,24 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the covered clusters.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-18 09:10
+- Task: Finish phase 75 user-settings and user-backup scope hardening.
+- Actions:
+  - Reloaded project memory and audited remaining user-scoped backup/settings routes.
+  - Added `.codex-memory/test-coverage-phase75-design.md` before implementation.
+  - Preserved explicit `HTTPException` status codes for user-settings missing/update failures and backup-import validation failures.
+  - Updated user-level backup import logic in `db_manager.py` and `db_manager/users.py` to skip global tables and rebind imported user-owned resources to the authenticated user.
+  - Added `tests/smoke/test_backup_user_settings.py` covering user-settings isolation, missing-key `404`, backup export isolation, backup import rebinding, skipped system settings, and validation status codes.
+  - Re-ran targeted tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted backup/user-settings smoke tests: 4 passed.
+  - Full smoke suite: 196 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-75 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the now-covered backup/settings cluster.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.

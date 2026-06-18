@@ -322,3 +322,8 @@
 - Decision: Re-raise explicit `HTTPException` values in single-card and single-delivery-rule read routes, and add focused ownership coverage for cards and delivery rules.
 - Rationale: Foreign or missing user-scoped cards/rules should return the intended `404` contract instead of being wrapped as `500`. The surrounding data-layer helpers already bind these resources to `user_id`, so smoke coverage should lock that boundary.
 - Impact: Foreign reads now return `404`, owner operations remain functional, list endpoints are explicitly filtered by user, and delivery rules cannot be created with another user's card.
+
+## 2026-06-18 - Phase 75 should treat user backup imports as scoped restores
+- Decision: Restrict user-level backup imports to user-owned tables, skip global `system_settings`, and rewrite imported `user_id` values for cookies, cards, delivery rules, and notification channels to the authenticated user.
+- Rationale: `POST /backup/import` is a user endpoint, so it must not trust ownership values from a backup file or mutate global settings during a user restore.
+- Impact: User backup restores can no longer inject resources under another `user_id` or change system settings, while system-level backup behavior remains unchanged.

@@ -9145,6 +9145,8 @@ def import_backup(file: UploadFile = File(...), current_user: Dict[str, Any] = D
 
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="备份文件格式无效")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"导入备份失败: {str(e)}")
 
@@ -10276,6 +10278,8 @@ def update_user_setting(key: str, setting_data: dict, current_user: Dict[str, An
         else:
             log_with_user('error', f"用户设置更新失败: {key}", current_user)
             raise HTTPException(status_code=400, detail='更新失败')
+    except HTTPException:
+        raise
     except Exception as e:
         log_with_user('error', f"更新用户设置异常: {key} - {str(e)}", current_user)
         raise HTTPException(status_code=500, detail=str(e))
@@ -10291,6 +10295,8 @@ def get_user_setting(key: str, current_user: Dict[str, Any] = Depends(get_curren
             return setting
         else:
             raise HTTPException(status_code=404, detail='设置不存在')
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

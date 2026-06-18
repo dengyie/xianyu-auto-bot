@@ -4,6 +4,7 @@
 ## Next
 - [ ] Evaluate whether the remaining uncovered risk now sits outside the current file/download, notification, account, keyword, cookie-setting, and item-info ownership clusters
 ## Done
+- [x] Stage and commit phase 75 user backup and settings scope hardening
 - [x] Stage and commit phase 74 card and delivery-rule ownership coverage
 - [x] Stage and commit phase 73 account runtime/config route ownership coverage
 - [x] Stage and commit phase 72 AI reply settings/test ownership fix
