@@ -1,25 +1,29 @@
 # Current State Snapshot - 2026-06-18
 
 - Security hardening and smoke coverage are still moving in small bounded phases.
-- Phase 85 is now implemented: `/debug/keywords-table-info` is admin-only and reads metadata from the active DB connection.
-- Covered route:
-  - `GET /debug/keywords-table-info`
+- Phase 86 is now implemented: sales statistics endpoints are pinned by smoke coverage to current-user cookie scope.
+- Covered routes:
+  - `GET /api/sales`
+  - `GET /api/sales/summary`
 - Production code change:
-  - switched the keywords debug metadata endpoint from `get_current_user` to `require_admin`
-  - replaced a separate SQLite path connection with `db_manager.conn` so in-memory/runtime DB state is inspected correctly
+  - none; existing implementation already filters through `db_manager.get_all_cookies(current_user_id)` and `cookie_id IN (...)`
+- Test coverage:
+  - anonymous sales queries are rejected
+  - admin and regular users only aggregate orders attached to their own cookies
+  - foreign eligible orders, own cancelled orders, and own invalid amounts are excluded from totals
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q` => 13 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 207 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q` => 14 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 208 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py db_manager tests` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-85 scope reviewed with `production-code-quality-review` in checkpoint mode
+  - phase-86 scope reviewed with `production-code-quality-review` in checkpoint mode
   - severe issues: none
-  - improvement suggestions: none blocking for this focused debug metadata admin-boundary fix
+  - improvement suggestions: none blocking for this focused sales statistics scope regression
   - quality score: 96/100
   - pass status: passed
 - Environment note:
   - project `venv` still lacks `pytest`, so validation used host Python
 - Next testing priorities:
-  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, cookie availability, system-cache, and debug metadata clusters
+  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, cookie availability, system-cache, debug metadata, and sales statistics clusters
   - keep ignoring unrelated untracked workspace files

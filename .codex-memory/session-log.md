@@ -1382,3 +1382,24 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the now-covered debug metadata cluster.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-18 16:55
+- Task: Finish phase 86 sales statistics user-scope coverage.
+- Actions:
+  - Reloaded project memory and audited remaining owner/scoped route candidates.
+  - Selected `/api/sales` and `/api/sales/summary` because they expose business-sensitive aggregate order totals.
+  - Added `.codex-memory/test-coverage-phase86-design.md` before implementation.
+  - Added a smoke regression in `tests/smoke/test_authz_matrix.py` covering anonymous denial, current-user aggregation, foreign-order exclusion, cancelled-order exclusion, and invalid-amount exclusion.
+  - Kept production code unchanged because the current implementation already filters by `db_manager.get_all_cookies(current_user_id)` and `cookie_id IN (...)`.
+  - Re-ran targeted authz tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted authz matrix smoke tests: 14 passed.
+  - Full smoke suite: 208 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-86 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the now-covered sales statistics cluster.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.

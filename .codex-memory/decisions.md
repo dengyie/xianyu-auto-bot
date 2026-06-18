@@ -376,3 +376,8 @@
 - Decision: Change `/debug/keywords-table-info` from authenticated-user access to `require_admin` and read metadata from the active DB connection.
 - Rationale: Schema/version metadata is operational debug information, and opening a separate SQLite connection can inspect the wrong database when the app uses `:memory:`.
 - Impact: Regular users now receive `403`, admins still get metadata, and the endpoint reflects the running application's DB state.
+
+## 2026-06-18 - Phase 86 should pin sales statistics to user-owned cookies
+- Decision: Add smoke coverage for `/api/sales` and `/api/sales/summary` without changing production code.
+- Rationale: Sales totals are business-sensitive aggregate data. The existing implementation already scopes queries by the authenticated user's cookie ids, but the contract lacked a focused cross-user regression.
+- Impact: The smoke suite now proves anonymous callers are rejected, users only aggregate their own cookie orders, and cancelled or invalid-amount orders do not inflate totals.

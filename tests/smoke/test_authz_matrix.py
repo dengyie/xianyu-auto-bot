@@ -5,6 +5,21 @@ import time
 import reply_server
 
 
+def _insert_sales_order(db, *, order_id, cookie_id, amount, status, paid_at):
+    ok = db.insert_or_update_order(
+        order_id=order_id,
+        cookie_id=cookie_id,
+        item_id=f"item-{order_id}",
+        buyer_id=f"buyer-{order_id}",
+        sid=f"chat-{order_id}@goofish",
+        quantity=1,
+        amount=amount,
+        order_status=status,
+        platform_paid_at=paid_at,
+    )
+    assert ok is True
+
+
 def test_admin_only_file_upload_rejects_anonymous(client):
     resp = client.post(
         "/api/files",
@@ -131,6 +146,75 @@ def test_keywords_table_debug_metadata_is_admin_only(client, auth, user_auth):
     body = allowed.json()
     assert "db_version" in body
     assert any(column["name"] == "cookie_id" for column in body["table_columns"])
+
+
+def test_sales_statistics_are_scoped_to_current_user(client, auth, user_auth):
+    db_manager = reply_server.db_manager
+    today = reply_server.get_local_now().strftime("%Y-%m-%d")
+    paid_at = f"{today} 10:00:00"
+
+    assert db_manager.save_cookie("admin_sales_cookie", "unb=admin-sales", user_id=1)
+    assert db_manager.save_cookie("user_sales_cookie", "unb=user-sales", user_id=2)
+    _insert_sales_order(
+        db_manager,
+        order_id="admin-sales-owned",
+        cookie_id="admin_sales_cookie",
+        amount="100.50",
+        status="completed",
+        paid_at=paid_at,
+    )
+    _insert_sales_order(
+        db_manager,
+        order_id="admin-sales-ineligible",
+        cookie_id="admin_sales_cookie",
+        amount="999.99",
+        status="cancelled",
+        paid_at=paid_at,
+    )
+    _insert_sales_order(
+        db_manager,
+        order_id="admin-sales-invalid-amount",
+        cookie_id="admin_sales_cookie",
+        amount="not-money",
+        status="completed",
+        paid_at=paid_at,
+    )
+    _insert_sales_order(
+        db_manager,
+        order_id="user-sales-foreign",
+        cookie_id="user_sales_cookie",
+        amount="250.00",
+        status="completed",
+        paid_at=paid_at,
+    )
+
+    anonymous_sales = client.get(f"/api/sales?start_date={today}&end_date={today}")
+    admin_sales = client.get(f"/api/sales?start_date={today}&end_date={today}", headers=auth)
+    user_sales = client.get(f"/api/sales?start_date={today}&end_date={today}", headers=user_auth)
+    admin_summary = client.get("/api/sales/summary", headers=auth)
+    user_summary = client.get("/api/sales/summary", headers=user_auth)
+
+    assert anonymous_sales.status_code == 401
+    assert admin_sales.status_code == 200
+    assert admin_sales.json()["data"] == {
+        "sales": [{"date": today, "amount": 100.5}],
+        "total": 100.5,
+        "count": 1,
+    }
+    assert user_sales.status_code == 200
+    assert user_sales.json()["data"] == {
+        "sales": [{"date": today, "amount": 250.0}],
+        "total": 250.0,
+        "count": 1,
+    }
+    assert admin_summary.status_code == 200
+    assert admin_summary.json()["data"]["today_sales"] == 100.5
+    assert admin_summary.json()["data"]["week_sales"] == 100.5
+    assert admin_summary.json()["data"]["month_sales"] == 100.5
+    assert user_summary.status_code == 200
+    assert user_summary.json()["data"]["today_sales"] == 250.0
+    assert user_summary.json()["data"]["week_sales"] == 250.0
+    assert user_summary.json()["data"]["month_sales"] == 250.0
 
 
 class _FakeUpdateProgress:
