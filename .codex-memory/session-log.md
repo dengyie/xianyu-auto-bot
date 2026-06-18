@@ -1193,3 +1193,24 @@
   - Continue evaluating remaining owner/scoped route coverage gaps.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-18 13:03
+- Task: Finish phase 77 account item operation ownership hardening and coverage.
+- Actions:
+  - Reloaded project memory and reviewed the active owner/scoped route coverage TODO.
+  - Added `.codex-memory/test-coverage-phase77-design.md` before implementation.
+  - Added `_ensure_cookie_access(...)` to account item sync, paged item fetch, and polish routes before cookie lookup or live account construction.
+  - Preserved FastAPI `HTTPException` status codes by re-raising them before the routes' broad exception handlers.
+  - Added a smoke regression in `tests/smoke/test_cookie_access_control.py` covering foreign-user denial and owner success for all three routes with fake `XianyuLive` seams.
+  - Re-ran targeted cookie-access tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted cookie-access smoke tests: 17 passed.
+  - Full smoke suite: 199 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-77 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the now-covered account item operation cluster.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.

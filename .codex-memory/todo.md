@@ -1,9 +1,10 @@
 # TODO
 ## In Progress
-- [ ] Evaluate whether any remaining owner/scoped route still lacks a focused smoke regression
+- [ ] Evaluate the next remaining owner/scoped route cluster for a focused smoke regression
 ## Next
-- [ ] Evaluate whether the remaining uncovered risk now sits outside the current file/download, notification, account, keyword, cookie-setting, and item-info ownership clusters
+- [ ] Evaluate whether the remaining uncovered risk now sits outside the current file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, update-management, and account item operation clusters
 ## Done
+- [x] Stage and commit phase 77 account item operation ownership coverage
 - [x] Stage and commit phase 76 update-management admin-boundary coverage
 - [x] Stage and commit phase 75 user backup and settings scope hardening
 - [x] Stage and commit phase 74 card and delivery-rule ownership coverage

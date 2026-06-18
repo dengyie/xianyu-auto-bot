@@ -1,20 +1,24 @@
 # Current State Snapshot - 2026-06-18
 
 - Security hardening and smoke coverage are still moving in small bounded phases.
-- Phase 76 is now implemented: update-management API admin checks are normalized across the high-risk `/api/update/*` management endpoints, and smoke coverage now proves regular-user denial plus both `is_admin=True` and legacy `username == admin` admin acceptance.
+- Phase 77 is now implemented: account item operation routes are scoped to the owning cookie user before reading cookie secrets or constructing `XianyuLive`.
+- Covered routes:
+  - `POST /items/get-all-from-account`
+  - `POST /items/get-by-page`
+  - `POST /accounts/{cid}/polish-items`
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q` => 7 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 198 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_cookie_access_control.py -q` => 17 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 199 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py db_manager tests` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-76 scope reviewed with `production-code-quality-review` in checkpoint mode
+  - phase-77 scope reviewed with `production-code-quality-review` in checkpoint mode
   - severe issues: none
-  - improvement suggestions: none blocking for this focused update-admin-boundary regression
+  - improvement suggestions: none blocking for this focused account-item-operation ownership regression
   - quality score: 96/100
   - pass status: passed
 - Environment note:
   - project `venv` still lacks `pytest`, so validation used host Python
 - Next testing priorities:
-  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, and delivery-rule clusters
+  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, and account item operation clusters
   - keep ignoring unrelated untracked workspace files

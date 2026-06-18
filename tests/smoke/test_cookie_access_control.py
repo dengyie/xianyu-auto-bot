@@ -496,6 +496,94 @@ def test_account_runtime_routes_are_scoped_to_cookie_owner(
     assert owner_proxy_read.json()["data"]["proxy_pass"] == "owner-pass"
 
 
+def test_account_item_operation_routes_are_scoped_to_cookie_owner(
+    client,
+    auth,
+    user_auth,
+    monkeypatch,
+):
+    client.post(
+        "/cookies",
+        headers=auth,
+        json={"id": "admin_item_ops_cookie", "value": "unb=admin; cookie2=secret"},
+    )
+
+    from XianyuAutoAsync import XianyuLive
+
+    calls = []
+
+    class _FakeLive:
+        def __init__(self, cookies_str, cookie_id, register_instance=False):
+            self.cookie_id = cookie_id
+            calls.append(("init", cookie_id, cookies_str, register_instance))
+
+        async def get_all_items(self, sync_item_details=False):
+            calls.append(("get_all_items", self.cookie_id, sync_item_details))
+            return {"total_count": 2, "total_pages": 1}
+
+        async def get_item_list_info(self, page_number=1, page_size=20, sync_item_details=False):
+            calls.append(("get_item_list_info", self.cookie_id, page_number, page_size, sync_item_details))
+            return {
+                "success": True,
+                "items": [{"item_id": "item-1"}],
+                "current_count": 1,
+                "page_number": page_number,
+                "page_size": page_size,
+            }
+
+        async def polish_all_items(self):
+            calls.append(("polish_all_items", self.cookie_id))
+            return {"success": True, "polished_count": 2}
+
+        async def close_session(self):
+            calls.append(("close_session", self.cookie_id))
+
+    monkeypatch.setattr(XianyuLive, "__init__", _FakeLive.__init__)
+    monkeypatch.setattr(XianyuLive, "get_all_items", _FakeLive.get_all_items)
+    monkeypatch.setattr(XianyuLive, "get_item_list_info", _FakeLive.get_item_list_info)
+    monkeypatch.setattr(XianyuLive, "polish_all_items", _FakeLive.polish_all_items)
+    monkeypatch.setattr(XianyuLive, "close_session", _FakeLive.close_session)
+
+    foreign_all = client.post(
+        "/items/get-all-from-account",
+        headers=user_auth,
+        json={"cookie_id": "admin_item_ops_cookie"},
+    )
+    foreign_page = client.post(
+        "/items/get-by-page",
+        headers=user_auth,
+        json={"cookie_id": "admin_item_ops_cookie", "page_number": 1, "page_size": 10},
+    )
+    foreign_polish = client.post("/accounts/admin_item_ops_cookie/polish-items", headers=user_auth)
+
+    owner_all = client.post(
+        "/items/get-all-from-account",
+        headers=auth,
+        json={"cookie_id": "admin_item_ops_cookie"},
+    )
+    owner_page = client.post(
+        "/items/get-by-page",
+        headers=auth,
+        json={"cookie_id": "admin_item_ops_cookie", "page_number": 2, "page_size": 5},
+    )
+    owner_polish = client.post("/accounts/admin_item_ops_cookie/polish-items", headers=auth)
+
+    assert foreign_all.status_code == 403
+    assert foreign_page.status_code == 403
+    assert foreign_polish.status_code == 403
+    assert owner_all.status_code == 200
+    assert owner_all.json()["success"] is True
+    assert owner_all.json()["total_count"] == 2
+    assert owner_page.status_code == 200
+    assert owner_page.json()["success"] is True
+    assert owner_page.json()["current_count"] == 1
+    assert owner_polish.status_code == 200
+    assert owner_polish.json()["success"] is True
+    assert ("get_all_items", "admin_item_ops_cookie", True) in calls
+    assert ("get_item_list_info", "admin_item_ops_cookie", 2, 5, True) in calls
+    assert ("polish_all_items", "admin_item_ops_cookie") in calls
+
+
 def test_duplicate_cookie_id_owned_by_other_user_is_rejected(client, auth, user_auth):
     client.post(
         "/cookies",

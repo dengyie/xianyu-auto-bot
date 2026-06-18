@@ -331,3 +331,8 @@
 - Decision: Add `_ensure_update_admin(...)` for `/api/update/*` management endpoints and use the same compatibility rule as the rest of the admin surface: `is_admin=True` or `username == admin`.
 - Rationale: Several update-management endpoints previously accepted only the literal username `admin`, while restart accepted only `is_admin`; this could incorrectly reject delegated admins or legacy admin tokens depending on endpoint.
 - Impact: Regular users remain forbidden from update-management operations, delegated admins can operate consistently, and legacy admin username compatibility is preserved.
+
+## 2026-06-18 - Phase 77 should gate live account item operations by cookie owner
+- Decision: Add `_ensure_cookie_access(...)` to the account item sync, paged item fetch, and polish routes before reading cookie data or constructing `XianyuLive`.
+- Rationale: These routes execute live account-scoped operations from caller-supplied cookie ids, so route-level ownership must be proved before any external side effect or secret access.
+- Impact: Foreign users now receive the standard cookie-access `403`, owner operations remain compatible, and smoke coverage prevents the authorization boundary from regressing.
