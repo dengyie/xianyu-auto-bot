@@ -8742,6 +8742,8 @@ def get_card(card_id: int, current_user: Dict[str, Any] = Depends(get_current_us
             return card
         else:
             raise HTTPException(status_code=404, detail="卡券不存在")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -9010,6 +9012,8 @@ def get_delivery_rule(rule_id: int, current_user: Dict[str, Any] = Depends(get_c
             return rule
         else:
             raise HTTPException(status_code=404, detail="发货规则不存在")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

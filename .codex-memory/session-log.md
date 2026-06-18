@@ -1132,3 +1132,24 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the covered account, notification, keyword, item, AI reply, scheduled-task, order, and file clusters.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+## 2026-06-18 08:55
+- Task: Fix phase 74 card/delivery-rule read status preservation and add ownership coverage.
+- Actions:
+  - Reloaded project memory and audited non-cookie user-owned resource routes.
+  - Selected `/cards` and `/delivery-rules` as the next uncovered owner-scoped cluster.
+  - Found single-card and single-delivery-rule read routes wrapped intended `HTTPException(404)` responses into `500`.
+  - Preserved explicit `HTTPException` status codes in both read routes.
+  - Added `.codex-memory/test-coverage-phase74-design.md` and `tests/smoke/test_cards_delivery_rules.py`.
+  - Covered list filtering, foreign read/update/delete denial, foreign rule creation with another user's card, and owner read/update/delete success.
+  - Re-ran targeted card/delivery-rule smoke test, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted card/delivery-rule smoke test: 1 passed.
+  - Full smoke suite: 192 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-74 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the covered clusters.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.

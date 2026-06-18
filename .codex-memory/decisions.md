@@ -318,3 +318,7 @@
 - Decision: Add focused smoke coverage for account runtime/config routes: account-info, details, runtime-status, conversation history, session keepalive, and proxy read/update.
 - Rationale: These routes already enforce ownership, but they expose sensitive account configuration or operational account state and lacked the same focused cross-user regression coverage as nearby cookie settings and AI reply routes.
 - Impact: Foreign-user denial and owner success paths are now explicitly covered for the account runtime/config cluster without changing production behavior.
+## 2026-06-18 - Phase 74 should preserve user-scoped missing-resource status
+- Decision: Re-raise explicit `HTTPException` values in single-card and single-delivery-rule read routes, and add focused ownership coverage for cards and delivery rules.
+- Rationale: Foreign or missing user-scoped cards/rules should return the intended `404` contract instead of being wrapped as `500`. The surrounding data-layer helpers already bind these resources to `user_id`, so smoke coverage should lock that boundary.
+- Impact: Foreign reads now return `404`, owner operations remain functional, list endpoints are explicitly filtered by user, and delivery rules cannot be created with another user's card.
