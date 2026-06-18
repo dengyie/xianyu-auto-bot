@@ -1467,3 +1467,24 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the now-covered admin user management cluster.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-18 18:38
+- Task: Finish phase 90 admin log access boundary coverage.
+- Actions:
+  - Re-checked skills/plugins per project rules and restored project memory.
+  - Selected `/admin/logs`, `/admin/log-files`, and `/admin/logs/export` because logs are sensitive operational data and exports touch the filesystem.
+  - Added `.codex-memory/test-coverage-phase90-design.md` before implementation.
+  - Added a smoke regression in `tests/smoke/test_authz_matrix.py` covering regular-user denial for read/list/export, stable admin no-log read behavior, admin log-file list success, and missing export `404`.
+  - Kept production code unchanged because routes already use `require_admin` and missing exports already return `404`.
+  - Re-ran targeted authz tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted authz matrix smoke tests: 18 passed.
+  - Full smoke suite: 212 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-90 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the now-covered admin log access cluster.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.

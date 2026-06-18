@@ -1,31 +1,31 @@
 # Current State Snapshot - 2026-06-18
 
 - Security hardening and smoke coverage are still moving in small bounded phases.
-- Phase 89 is now implemented: admin user management is pinned by smoke coverage to the admin boundary and self-protection contract.
+- Phase 90 is now implemented: admin log access is pinned by smoke coverage to the admin boundary and missing-export contract.
 - Covered routes:
-  - `GET /admin/users`
-  - `DELETE /admin/users/{user_id}`
-  - `PUT /admin/users/{user_id}/admin-status`
+  - `GET /admin/logs`
+  - `GET /admin/log-files`
+  - `GET /admin/logs/export`
 - Production code change:
-  - none; existing implementation already uses `require_admin` and blocks self-delete/self-admin-status changes
+  - none; existing implementation already uses `require_admin`, handles no-log reads, and returns `404` for missing log exports
 - Test coverage:
-  - regular authenticated users are rejected from list, delete, and admin-status mutations
-  - admins can list users
-  - list responses omit `password_hash` and include operational counts
-  - admin self-delete and self-admin-status changes return `400`
+  - regular authenticated users are rejected from log read, log-file list, and log export endpoints
+  - admin log reads remain stable when no log files are present
+  - admin log-file listing succeeds
+  - missing log exports return `404`
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q` => 17 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 211 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q` => 18 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 212 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py db_manager tests` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-89 scope reviewed with `production-code-quality-review` in checkpoint mode
+  - phase-90 scope reviewed with `production-code-quality-review` in checkpoint mode
   - severe issues: none
-  - improvement suggestions: none blocking for this focused admin user management regression
+  - improvement suggestions: none blocking for this focused admin log access regression
   - quality score: 96/100
   - pass status: passed
 - Environment note:
   - project `venv` still lacks `pytest`, so validation used host Python
 - Next testing priorities:
-  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, cookie availability, system-cache, debug metadata, sales statistics, user-settings, admin-cookie-inventory, and admin-user-management clusters
+  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, cookie availability, system-cache, debug metadata, sales statistics, user-settings, admin-cookie-inventory, admin-user-management, and admin-log-access clusters
   - keep ignoring unrelated untracked workspace files

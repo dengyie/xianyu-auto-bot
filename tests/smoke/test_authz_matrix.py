@@ -1,5 +1,6 @@
 """Authorization matrix regressions for high-risk API boundaries."""
 
+import glob
 import time
 
 import reply_server
@@ -319,6 +320,28 @@ def test_admin_user_management_is_admin_only_and_self_protected(client, auth, us
     assert all("cookie_count" in user and "card_count" in user for user in users)
     assert self_delete.status_code == 400
     assert self_admin_status.status_code == 400
+
+
+def test_admin_log_access_is_admin_only_and_missing_exports_are_safe(
+    client, auth, user_auth, monkeypatch
+):
+    monkeypatch.setattr(glob, "glob", lambda pattern: [])
+
+    denied_logs = client.get("/admin/logs", headers=user_auth)
+    denied_files = client.get("/admin/log-files", headers=user_auth)
+    denied_export = client.get("/admin/logs/export?file=xianyu_missing.log", headers=user_auth)
+    admin_logs = client.get("/admin/logs", headers=auth)
+    admin_files = client.get("/admin/log-files", headers=auth)
+    missing_export = client.get("/admin/logs/export?file=xianyu_missing.log", headers=auth)
+
+    assert denied_logs.status_code == 403
+    assert denied_files.status_code == 403
+    assert denied_export.status_code == 403
+    assert admin_logs.status_code == 200
+    assert admin_logs.json()["success"] is False
+    assert admin_files.status_code == 200
+    assert admin_files.json()["success"] is True
+    assert missing_export.status_code == 404
 
 
 class _FakeUpdateProgress:

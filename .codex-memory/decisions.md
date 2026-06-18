@@ -396,3 +396,8 @@
 - Decision: Add smoke coverage for `/admin/users`, `/admin/users/{user_id}`, and `/admin/users/{user_id}/admin-status` without changing production code.
 - Rationale: User management exposes cross-user account inventory and destructive/elevating operations. The routes already use `require_admin` and self-protection guards, but they lacked a focused regression covering regular-user denial and admin self-protection.
 - Impact: The smoke suite now proves regular users cannot list/delete/change admin status, admin list responses omit password hashes, and admins cannot delete themselves or remove their own admin status.
+
+## 2026-06-18 - Phase 90 should pin admin log access to admins
+- Decision: Add smoke coverage for `/admin/logs`, `/admin/log-files`, and `/admin/logs/export` without changing production code.
+- Rationale: System logs can expose operational and cross-user context. The admin log routes already use `require_admin`, but they lacked a focused regression proving regular-user denial and safe missing-file behavior.
+- Impact: The smoke suite now proves regular users cannot read/list/export logs, admin no-log reads remain stable, log-file listing succeeds, and missing exports return `404`.
