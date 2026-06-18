@@ -366,3 +366,8 @@
 - Decision: Keep `/cookies/check` available for anonymous UI compatibility, but return zero counts when unauthenticated and count only current-user cookies when authenticated.
 - Rationale: Global cookie availability counts leak cross-user operational state and can make a user's UI depend on accounts they do not own.
 - Impact: The endpoint now reports availability for the caller's own account set only, while anonymous requests no longer reveal whether any user has valid cookies.
+
+## 2026-06-18 - Phase 84 should restrict system cache reload to admins
+- Decision: Change `/system/reload-cache` from authenticated-user access to `require_admin`.
+- Rationale: Reloading `CookieManager` refreshes global runtime account/cache state and is presented as system cache management, so regular users should not be able to trigger it.
+- Impact: Regular users now receive `403`, admin reload behavior remains intact, and route-raised `HTTPException` status codes are preserved.

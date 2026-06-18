@@ -98,6 +98,30 @@ def test_cookie_check_counts_are_scoped_to_current_user(client, auth, user_auth)
     assert user_resp.json()["hasValidCookies"] is True
 
 
+def test_system_reload_cache_is_admin_only(client, auth, user_auth):
+    class _ReloadManager:
+        def __init__(self):
+            self.calls = 0
+
+        def reload_from_db(self):
+            self.calls += 1
+            return True
+
+    original_manager = reply_server.cookie_manager.manager
+    manager = _ReloadManager()
+    reply_server.cookie_manager.manager = manager
+    try:
+        denied = client.post("/system/reload-cache", headers=user_auth)
+        allowed = client.post("/system/reload-cache", headers=auth)
+    finally:
+        reply_server.cookie_manager.manager = original_manager
+
+    assert denied.status_code == 403
+    assert allowed.status_code == 200
+    assert allowed.json()["success"] is True
+    assert manager.calls == 1
+
+
 class _FakeUpdateProgress:
     status = "idle"
     current_file = ""

@@ -1,25 +1,25 @@
 # Current State Snapshot - 2026-06-18
 
 - Security hardening and smoke coverage are still moving in small bounded phases.
-- Phase 83 is now implemented: `/cookies/check` is scoped to the authenticated user's cookies and no longer exposes global counts to anonymous callers.
+- Phase 84 is now implemented: `/system/reload-cache` is admin-only and preserves explicit route error status codes.
 - Covered route:
-  - `GET /cookies/check`
+  - `POST /system/reload-cache`
 - Production code change:
-  - anonymous callers now receive zero availability counts
-  - authenticated callers now count only `db_manager.get_all_cookies(current_user["user_id"])`
+  - switched the global cache reload endpoint from `get_current_user` to `require_admin`
+  - re-raises `HTTPException` before the generic exception wrapper
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q` => 11 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 205 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q` => 12 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 206 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py db_manager tests` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-83 scope reviewed with `production-code-quality-review` in checkpoint mode
+  - phase-84 scope reviewed with `production-code-quality-review` in checkpoint mode
   - severe issues: none
-  - improvement suggestions: none blocking for this focused cookie availability scope fix
+  - improvement suggestions: none blocking for this focused system-cache admin-boundary fix
   - quality score: 96/100
   - pass status: passed
 - Environment note:
   - project `venv` still lacks `pytest`, so validation used host Python
 - Next testing priorities:
-  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, and cookie availability clusters
+  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, cookie availability, and system-cache clusters
   - keep ignoring unrelated untracked workspace files

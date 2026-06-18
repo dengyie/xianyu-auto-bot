@@ -9152,7 +9152,7 @@ def import_backup(file: UploadFile = File(...), current_user: Dict[str, Any] = D
 
 
 @app.post("/system/reload-cache")
-def reload_cache(current_user: Dict[str, Any] = Depends(get_current_user)):
+def reload_cache(admin_user: Dict[str, Any] = Depends(require_admin)):
     """重新加载系统缓存（用于手动刷新数据）"""
     try:
         import cookie_manager
@@ -9164,6 +9164,8 @@ def reload_cache(current_user: Dict[str, Any] = Depends(get_current_user)):
                 raise HTTPException(status_code=500, detail="缓存刷新失败")
         else:
             raise HTTPException(status_code=500, detail="CookieManager 未初始化")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"刷新缓存失败: {str(e)}")
 

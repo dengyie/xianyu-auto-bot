@@ -1339,3 +1339,24 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the now-covered cookie availability cluster.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-18 16:39
+- Task: Finish phase 84 system cache reload admin-boundary hardening.
+- Actions:
+  - Reloaded project memory and audited remaining system-level route candidates.
+  - Selected `/system/reload-cache` because it refreshes global `CookieManager` runtime state while previously allowing any authenticated user.
+  - Added `.codex-memory/test-coverage-phase84-design.md` before implementation.
+  - Updated the route to use `require_admin` and to re-raise explicit `HTTPException` responses before generic error wrapping.
+  - Added a smoke regression in `tests/smoke/test_authz_matrix.py` proving regular-user denial and admin success triggers exactly one reload.
+  - Re-ran targeted authz tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted authz matrix smoke tests: 12 passed.
+  - Full smoke suite: 206 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-84 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the now-covered system-cache cluster.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
