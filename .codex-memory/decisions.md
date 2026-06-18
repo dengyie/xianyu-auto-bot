@@ -401,3 +401,8 @@
 - Decision: Add smoke coverage for `/admin/logs`, `/admin/log-files`, and `/admin/logs/export` without changing production code.
 - Rationale: System logs can expose operational and cross-user context. The admin log routes already use `require_admin`, but they lacked a focused regression proving regular-user denial and safe missing-file behavior.
 - Impact: The smoke suite now proves regular users cannot read/list/export logs, admin no-log reads remain stable, log-file listing succeeds, and missing exports return `404`.
+
+## 2026-06-18 - Phase 91 should pin admin system stats to admins
+- Decision: Add smoke coverage for `/admin/stats` without changing production code.
+- Rationale: System stats expose cross-user aggregate counts for users, cookies, and cards. The route already uses `require_admin`, but it lacked a focused regression proving regular-user denial and global aggregate behavior.
+- Impact: The smoke suite now proves regular users cannot read system stats, admins can read global totals across users, card enabled counts are present, and system version metadata remains available.

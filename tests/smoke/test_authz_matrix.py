@@ -344,6 +344,39 @@ def test_admin_log_access_is_admin_only_and_missing_exports_are_safe(
     assert missing_export.status_code == 404
 
 
+def test_admin_system_stats_are_admin_only_and_global(client, auth, user_auth):
+    db_manager = reply_server.db_manager
+    assert db_manager.save_cookie("admin_stats_cookie", "unb=admin-stats", user_id=1)
+    assert db_manager.save_cookie("user_stats_cookie", "unb=user-stats", user_id=2)
+    admin_card_id = db_manager.create_card(
+        name="admin stats card",
+        card_type="text",
+        text_content="admin",
+        user_id=1,
+    )
+    user_card_id = db_manager.create_card(
+        name="user stats card",
+        card_type="text",
+        text_content="user",
+        user_id=2,
+        enabled=False,
+    )
+    assert admin_card_id is not None
+    assert user_card_id is not None
+
+    denied = client.get("/admin/stats", headers=user_auth)
+    allowed = client.get("/admin/stats", headers=auth)
+
+    assert denied.status_code == 403
+    assert allowed.status_code == 200
+    body = allowed.json()
+    assert body["users"]["total"] >= 2
+    assert body["cookies"]["total"] >= 2
+    assert body["cards"]["total"] >= 2
+    assert body["cards"]["enabled"] >= 1
+    assert body["system"]["version"] == "1.0.0"
+
+
 class _FakeUpdateProgress:
     status = "idle"
     current_file = ""

@@ -1488,3 +1488,24 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the now-covered admin log access cluster.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-18 18:48
+- Task: Finish phase 91 admin system stats boundary coverage.
+- Actions:
+  - Re-checked skills/plugins per project rules and restored project memory.
+  - Selected `/admin/stats` because it exposes cross-user aggregate counts for users, cookies, and cards.
+  - Added `.codex-memory/test-coverage-phase91-design.md` before implementation.
+  - Added a smoke regression in `tests/smoke/test_authz_matrix.py` covering regular-user denial, admin success, seeded cross-user user/cookie/card totals, enabled-card counts, and system version metadata.
+  - Kept production code unchanged because the route already uses `require_admin` and returns global aggregate data.
+  - Re-ran targeted authz tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted authz matrix smoke tests: 19 passed.
+  - Full smoke suite: 213 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-91 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the now-covered admin system stats cluster.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.

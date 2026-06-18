@@ -1,31 +1,29 @@
 # Current State Snapshot - 2026-06-18
 
 - Security hardening and smoke coverage are still moving in small bounded phases.
-- Phase 90 is now implemented: admin log access is pinned by smoke coverage to the admin boundary and missing-export contract.
+- Phase 91 is now implemented: admin system stats are pinned by smoke coverage to the admin boundary and global aggregate contract.
 - Covered routes:
-  - `GET /admin/logs`
-  - `GET /admin/log-files`
-  - `GET /admin/logs/export`
+  - `GET /admin/stats`
 - Production code change:
-  - none; existing implementation already uses `require_admin`, handles no-log reads, and returns `404` for missing log exports
+  - none; existing implementation already uses `require_admin` and returns global users/cookies/cards/system stats
 - Test coverage:
-  - regular authenticated users are rejected from log read, log-file list, and log export endpoints
-  - admin log reads remain stable when no log files are present
-  - admin log-file listing succeeds
-  - missing log exports return `404`
+  - regular authenticated users are rejected
+  - admins can read global aggregate stats
+  - seeded users, cookies, and cards across users are reflected in totals
+  - enabled-card counts and system version metadata are present
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q` => 18 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 212 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q` => 19 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 213 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py db_manager tests` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-90 scope reviewed with `production-code-quality-review` in checkpoint mode
+  - phase-91 scope reviewed with `production-code-quality-review` in checkpoint mode
   - severe issues: none
-  - improvement suggestions: none blocking for this focused admin log access regression
+  - improvement suggestions: none blocking for this focused admin system stats regression
   - quality score: 96/100
   - pass status: passed
 - Environment note:
   - project `venv` still lacks `pytest`, so validation used host Python
 - Next testing priorities:
-  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, cookie availability, system-cache, debug metadata, sales statistics, user-settings, admin-cookie-inventory, admin-user-management, and admin-log-access clusters
+  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, cookie availability, system-cache, debug metadata, sales statistics, user-settings, admin-cookie-inventory, admin-user-management, admin-log-access, and admin-system-stats clusters
   - keep ignoring unrelated untracked workspace files
