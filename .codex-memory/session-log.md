@@ -1446,3 +1446,24 @@
   - Continue evaluating remaining owner/scoped API surfaces outside the now-covered admin cookie inventory cluster.
 - Blockers:
   - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.
+
+## 2026-06-18 18:20
+- Task: Finish phase 89 admin user management boundary coverage.
+- Actions:
+  - Re-checked skills/plugins per project rules and restored project memory.
+  - Selected `/admin/users`, `/admin/users/{user_id}`, and `/admin/users/{user_id}/admin-status` because they expose cross-user account inventory and destructive/elevating operations.
+  - Added `.codex-memory/test-coverage-phase89-design.md` before implementation.
+  - Added a smoke regression in `tests/smoke/test_authz_matrix.py` covering regular-user denial for list/delete/admin-status, admin list success without password hashes, operational count fields, self-delete rejection, and self-admin-status rejection.
+  - Kept production code unchanged because the routes already use `require_admin` and self-protection guards.
+  - Re-ran targeted authz tests, full smoke suite, compileall, diff hygiene, and checkpoint production review.
+- Results:
+  - Targeted authz matrix smoke tests: 17 passed.
+  - Full smoke suite: 211 passed.
+  - compileall: passed.
+  - `git diff --check`: passed.
+  - Checkpoint production review: passed, score 96/100, no severe findings.
+- Next:
+  - Stage and commit the phase-89 change set.
+  - Continue evaluating remaining owner/scoped API surfaces outside the now-covered admin user management cluster.
+- Blockers:
+  - GitHub push/PR flow remains dependent on successful `gh auth login -h github.com`.

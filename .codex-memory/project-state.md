@@ -1,29 +1,31 @@
 # Current State Snapshot - 2026-06-18
 
 - Security hardening and smoke coverage are still moving in small bounded phases.
-- Phase 88 is now implemented: admin cookie inventory is pinned by smoke coverage to the admin boundary.
+- Phase 89 is now implemented: admin user management is pinned by smoke coverage to the admin boundary and self-protection contract.
 - Covered routes:
-  - `GET /admin/cookies`
+  - `GET /admin/users`
+  - `DELETE /admin/users/{user_id}`
+  - `PUT /admin/users/{user_id}/admin-status`
 - Production code change:
-  - none; existing implementation already uses `require_admin` and returns metadata rather than raw cookie values
+  - none; existing implementation already uses `require_admin` and blocks self-delete/self-admin-status changes
 - Test coverage:
-  - regular authenticated users are rejected
-  - admins can list cookie metadata across users
-  - response includes owner username, remark/nickname, and enabled status
-  - response does not expose raw cookie values
+  - regular authenticated users are rejected from list, delete, and admin-status mutations
+  - admins can list users
+  - list responses omit `password_hash` and include operational counts
+  - admin self-delete and self-admin-status changes return `400`
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q` => 16 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 210 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q` => 17 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 211 passed
   - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py db_manager tests` => passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-88 scope reviewed with `production-code-quality-review` in checkpoint mode
+  - phase-89 scope reviewed with `production-code-quality-review` in checkpoint mode
   - severe issues: none
-  - improvement suggestions: none blocking for this focused admin cookie inventory regression
+  - improvement suggestions: none blocking for this focused admin user management regression
   - quality score: 96/100
   - pass status: passed
 - Environment note:
   - project `venv` still lacks `pytest`, so validation used host Python
 - Next testing priorities:
-  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, cookie availability, system-cache, debug metadata, sales statistics, user-settings, and admin-cookie-inventory clusters
+  - continue evaluating remaining owner/scoped API surfaces outside the covered update-management, backup, file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, cookie availability, system-cache, debug metadata, sales statistics, user-settings, admin-cookie-inventory, and admin-user-management clusters
   - keep ignoring unrelated untracked workspace files

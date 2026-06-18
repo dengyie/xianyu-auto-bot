@@ -300,6 +300,27 @@ def test_admin_cookies_are_admin_only_and_do_not_expose_raw_values(client, auth,
     assert "raw-user-secret" not in str(body)
 
 
+def test_admin_user_management_is_admin_only_and_self_protected(client, auth, user_auth):
+    denied_list = client.get("/admin/users", headers=user_auth)
+    denied_delete = client.delete("/admin/users/1", headers=user_auth)
+    denied_admin_status = client.put("/admin/users/1/admin-status?is_admin=false", headers=user_auth)
+    allowed_list = client.get("/admin/users", headers=auth)
+    self_delete = client.delete("/admin/users/1", headers=auth)
+    self_admin_status = client.put("/admin/users/1/admin-status?is_admin=false", headers=auth)
+
+    assert denied_list.status_code == 403
+    assert denied_delete.status_code == 403
+    assert denied_admin_status.status_code == 403
+    assert allowed_list.status_code == 200
+    users = allowed_list.json()["users"]
+    assert any(user["id"] == 1 and user["username"] == "admin" for user in users)
+    assert any(user["id"] == 2 and user["username"] == "testuser" for user in users)
+    assert all("password_hash" not in user for user in users)
+    assert all("cookie_count" in user and "card_count" in user for user in users)
+    assert self_delete.status_code == 400
+    assert self_admin_status.status_code == 400
+
+
 class _FakeUpdateProgress:
     status = "idle"
     current_file = ""

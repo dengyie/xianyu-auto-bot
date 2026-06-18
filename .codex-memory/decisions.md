@@ -391,3 +391,8 @@
 - Decision: Add smoke coverage for `/admin/cookies` without changing production code.
 - Rationale: The admin cookie inventory exposes cross-user account metadata and operational enabled state. The route already uses `require_admin`, but it lacked a focused regression proving regular users are rejected and raw cookie values are not returned.
 - Impact: The smoke suite now proves regular-user denial, admin metadata visibility across users, deterministic enabled status reporting, and raw cookie value exclusion.
+
+## 2026-06-18 - Phase 89 should pin admin user management to admins
+- Decision: Add smoke coverage for `/admin/users`, `/admin/users/{user_id}`, and `/admin/users/{user_id}/admin-status` without changing production code.
+- Rationale: User management exposes cross-user account inventory and destructive/elevating operations. The routes already use `require_admin` and self-protection guards, but they lacked a focused regression covering regular-user denial and admin self-protection.
+- Impact: The smoke suite now proves regular users cannot list/delete/change admin status, admin list responses omit password hashes, and admins cannot delete themselves or remove their own admin status.
