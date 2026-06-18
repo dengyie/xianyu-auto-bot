@@ -1,5 +1,10 @@
 # Decisions
 
+## 2026-06-19 - Phase 96 should centralize audit logs in the database
+- Decision: Add a structured `audit_logs` table plus a central `utils.audit_logger` wrapper instead of scattering ad-hoc JSON/file log writes across routes.
+- Rationale: Operators need queryable user/action/resource/result records, and a central helper gives one place for redaction, status normalization, and failure isolation.
+- Impact: Request outcomes, selected auth events, and selected admin mutations now land in a common admin-queryable audit stream without breaking primary request handling when audit persistence fails.
+
 ## 2026-06-17 - Phase 7 order-message coverage stays deterministic
 - Decision: Cover delayed order-message binding and direct cancelled-message resolution with unit-shaped smoke tests around `OrderStatusHandler`, using a focused fake DB manager.
 - Rationale: These branches depend on in-memory queues, strong match keys, and timestamp comparisons; deterministic fakes give stable regression coverage without live Xianyu traffic.

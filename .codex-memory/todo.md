@@ -2,8 +2,11 @@
 ## In Progress
 - [ ] Evaluate the next remaining owner/scoped route cluster for a focused smoke regression
 ## Next
+- [ ] Add lightweight admin UI browsing for `/admin/audit-logs` if operators need in-page filtering
+- [ ] Expand explicit audit events from request-level coverage to additional business mutations
 - [ ] Evaluate whether the remaining uncovered risk now sits outside the current file/download, notification, account, keyword, cookie-setting, item-info, cards, delivery-rule, update-management, account item operation, chat runtime, slider-stat, AI config preset, order list/delete, realtime log, cookie availability, system-cache, and debug metadata clusters
 ## Done
+- [x] Stage and commit phase 96 unified audit logging
 - [x] Stage and commit phase 95 admin token revocation fix
 - [x] Stage and commit phase 94 admin security management boundary coverage
 - [x] Stage and commit phase 93 admin backup management boundary coverage

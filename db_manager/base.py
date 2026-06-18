@@ -623,6 +623,34 @@ class DBBase:
             self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_delivery_logs_order_id ON delivery_logs(order_id)")
 
             cursor.execute('''
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                action TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'success',
+                actor_user_id INTEGER,
+                actor_username TEXT,
+                actor_is_admin BOOLEAN DEFAULT FALSE,
+                client_ip TEXT,
+                request_method TEXT,
+                request_path TEXT,
+                resource_type TEXT,
+                resource_id TEXT,
+                duration_ms INTEGER,
+                message TEXT,
+                details_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
+            )
+            ''')
+            self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC)")
+            self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_created ON audit_logs(actor_user_id, created_at DESC)")
+            self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_audit_logs_category_created ON audit_logs(category, created_at DESC)")
+            self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_audit_logs_action_created ON audit_logs(action, created_at DESC)")
+            self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_audit_logs_status_created ON audit_logs(status, created_at DESC)")
+            self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_audit_logs_resource ON audit_logs(resource_type, resource_id)")
+
+            cursor.execute('''
             CREATE TABLE IF NOT EXISTS delivery_finalization_states (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 order_id TEXT NOT NULL,
@@ -2070,6 +2098,144 @@ Cookie数量: {cookie_count}
             return sanitized_existing
 
         return None
+
+    def add_audit_log(
+        self,
+        *,
+        category: str,
+        action: str,
+        status: str = 'success',
+        actor_user_id: int = None,
+        actor_username: str = None,
+        actor_is_admin: bool = False,
+        client_ip: str = None,
+        request_method: str = None,
+        request_path: str = None,
+        resource_type: str = None,
+        resource_id: str = None,
+        duration_ms: int = None,
+        message: str = None,
+        details_json: str = None,
+    ) -> int:
+        """Persist a normalized audit event and return its row id."""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    '''
+                    INSERT INTO audit_logs (
+                        category, action, status, actor_user_id, actor_username,
+                        actor_is_admin, client_ip, request_method, request_path,
+                        resource_type, resource_id, duration_ms, message, details_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''',
+                    (
+                        category,
+                        action,
+                        status,
+                        actor_user_id,
+                        actor_username,
+                        1 if actor_is_admin else 0,
+                        client_ip,
+                        request_method,
+                        request_path,
+                        resource_type,
+                        resource_id,
+                        duration_ms,
+                        message,
+                        details_json,
+                    ),
+                )
+                self.conn.commit()
+                return cursor.lastrowid
+            except Exception as e:
+                logger.warning(f"写入审计日志失败: {e}")
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                return 0
+
+    def get_audit_logs(
+        self,
+        *,
+        limit: int = 100,
+        category: str = None,
+        action: str = None,
+        status: str = None,
+        actor_user_id: int = None,
+        resource_type: str = None,
+        resource_id: str = None,
+    ):
+        """Return recent audit logs with optional filters."""
+        with self.lock:
+            try:
+                safe_limit = max(1, min(int(limit or 100), 500))
+                query = '''
+                    SELECT id, created_at, category, action, status, actor_user_id,
+                           actor_username, actor_is_admin, client_ip, request_method,
+                           request_path, resource_type, resource_id, duration_ms,
+                           message, details_json
+                    FROM audit_logs
+                '''
+                conditions = []
+                params = []
+                if category:
+                    conditions.append('category = ?')
+                    params.append(category)
+                if action:
+                    conditions.append('action = ?')
+                    params.append(action)
+                if status:
+                    conditions.append('status = ?')
+                    params.append(status)
+                if actor_user_id is not None:
+                    conditions.append('actor_user_id = ?')
+                    params.append(actor_user_id)
+                if resource_type:
+                    conditions.append('resource_type = ?')
+                    params.append(resource_type)
+                if resource_id:
+                    conditions.append('resource_id = ?')
+                    params.append(str(resource_id))
+                if conditions:
+                    query += ' WHERE ' + ' AND '.join(conditions)
+                query += ' ORDER BY datetime(created_at) DESC, id DESC LIMIT ?'
+                params.append(safe_limit)
+
+                cursor = self.conn.cursor()
+                cursor.execute(query, params)
+                logs = []
+                for row in cursor.fetchall():
+                    details = None
+                    if row[15]:
+                        try:
+                            details = json.loads(row[15])
+                        except Exception:
+                            details = row[15]
+                    logs.append({
+                        'id': row[0],
+                        'created_at': row[1],
+                        'category': row[2],
+                        'action': row[3],
+                        'status': row[4],
+                        'actor_user_id': row[5],
+                        'actor_username': row[6],
+                        'actor_is_admin': bool(row[7]),
+                        'client_ip': row[8],
+                        'request_method': row[9],
+                        'request_path': row[10],
+                        'resource_type': row[11],
+                        'resource_id': row[12],
+                        'duration_ms': row[13],
+                        'message': row[14],
+                        'details': details,
+                    })
+                return logs
+            except Exception as e:
+                logger.error(f"查询审计日志失败: {e}")
+                return []
+
     def delete_table_record(self, table_name: str, record_id: str):
         """删除指定表的指定记录"""
         with self.lock:

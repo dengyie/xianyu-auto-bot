@@ -34,6 +34,7 @@ from utils.qr_login import qr_login_manager
 from utils.qr_login_lite import qrcode_login_lite
 from utils.xianyu_utils import trans_cookies
 from utils.image_utils import image_manager
+from utils.audit_logger import record_audit_event, status_from_http_status_code
 from utils.time_utils import (
     LOCAL_TIMEZONE,
     get_local_now,
@@ -1149,6 +1150,69 @@ def log_with_user(level: str, message: str, user_info: Dict[str, Any] = None):
         logger.info(full_message)
 
 
+def _audit_actor_from_request(request: Request) -> Optional[Dict[str, Any]]:
+    try:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return None
+        token = auth_header.split(" ", 1)[1]
+        token_data = SESSION_TOKENS.get(token)
+        if not token_data:
+            return None
+        if time.time() - token_data.get('timestamp', 0) > TOKEN_EXPIRE_TIME:
+            return None
+        return {
+            "user_id": token_data.get("user_id"),
+            "username": token_data.get("username"),
+            "is_admin": bool(token_data.get("is_admin", False)),
+        }
+    except Exception:
+        return None
+
+
+def _should_audit_request(path: str) -> bool:
+    if not path:
+        return False
+    excluded_prefixes = (
+        "/static/",
+        "/favicon",
+        "/captcha/",
+        "/health",
+        "/docs",
+        "/redoc",
+        "/openapi.json",
+    )
+    return not any(path.startswith(prefix) for prefix in excluded_prefixes)
+
+
+def audit_event(
+    *,
+    category: str,
+    action: str,
+    status: str = "success",
+    actor: Optional[Dict[str, Any]] = None,
+    request: Optional[Request] = None,
+    resource_type: str = None,
+    resource_id: Any = None,
+    duration_ms: int = None,
+    message: str = None,
+    details: Optional[Dict[str, Any]] = None,
+) -> int:
+    return record_audit_event(
+        db_manager,
+        category=category,
+        action=action,
+        status=status,
+        actor=actor,
+        request=request,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        duration_ms=duration_ms,
+        message=message,
+        details=details,
+    )
+
+
 def match_reply(cookie_id: str, message: str) -> Optional[str]:
     """根据 cookie_id 及消息内容匹配回复
     只有启用的账号才会匹配关键字回复
@@ -1251,6 +1315,23 @@ async def log_requests(request, call_next):
 
     process_time = time.time() - start_time
     logger.info(f"✅ {user_info} API响应: {request.method} {request.url.path} - {response.status_code} ({process_time:.3f}s)")
+
+    request_path = request.url.path
+    if _should_audit_request(request_path):
+        audit_event(
+            category="request",
+            action="http_request",
+            status=status_from_http_status_code(response.status_code),
+            actor=_audit_actor_from_request(request),
+            request=request,
+            duration_ms=int(process_time * 1000),
+            message=f"{request.method} {request_path} -> {response.status_code}",
+            details={
+                "status_code": response.status_code,
+                "query": dict(request.query_params),
+                "user_agent": request.headers.get("User-Agent"),
+            },
+        )
 
     return response
 
@@ -1594,6 +1675,20 @@ async def login(login_request: LoginRequest, request: Request):
                 client_ip
             )
             if not captcha_valid:
+                audit_event(
+                    category="auth",
+                    action="login",
+                    status="failed",
+                    request=request,
+                    message="Login captcha failed",
+                    details={
+                        "login_type": "captcha",
+                        "identifier": login_identifier,
+                        "captcha_id": login_request.captcha_id,
+                        "captcha_code": login_request.captcha_code,
+                        "error": captcha_error,
+                    },
+                )
                 logger.warning(f"🔢 IP {client_ip} 验证码验证失败: {captcha_error}")
                 return LoginResponse(
                 success=False,
@@ -1627,6 +1722,17 @@ async def login(login_request: LoginRequest, request: Request):
                     'is_admin': user_is_admin,
                     'timestamp': time.time()
                 }
+                audit_event(
+                    category="auth",
+                    action="login",
+                    status="success",
+                    actor={"user_id": user["id"], "username": user["username"], "is_admin": user_is_admin},
+                    request=request,
+                    resource_type="user",
+                    resource_id=user["id"],
+                    message="Login succeeded",
+                    details={"login_type": "username", "identifier": login_request.username},
+                )
 
                 # 区分管理员和普通用户的日志
                 if user_is_admin:
@@ -1655,6 +1761,19 @@ async def login(login_request: LoginRequest, request: Request):
         logger.warning(f"【{login_request.username}】登录失败：用户名或密码错误 (IP: {client_ip})")
         # 检查下次是否需要验证码
         next_captcha_required = is_captcha_required(client_ip)
+        audit_event(
+            category="auth",
+            action="login",
+            status="failed",
+            request=request,
+            message="Login failed",
+            details={
+                "login_type": "username",
+                "username": login_request.username,
+                "password": login_request.password,
+                "captcha_required": next_captcha_required,
+            },
+        )
         return LoginResponse(
             success=False,
             message="用户名或密码错误",
@@ -10389,6 +10508,19 @@ def delete_user(user_id: int, admin_user: Dict[str, Any] = Depends(require_admin
         success = db_manager.delete_user_and_data(user_id)
 
         if success:
+            audit_event(
+                category="admin",
+                action="admin_user_delete",
+                status="success",
+                actor=admin_user,
+                resource_type="user",
+                resource_id=user_id,
+                message="Admin deleted user",
+                details={
+                    "target_username": user_to_delete.get("username"),
+                    "target_user_id": user_id,
+                },
+            )
             log_with_user('info', f"用户删除成功: {user_to_delete['username']} (ID: {user_id})", admin_user)
             return {"message": f"用户 {user_to_delete['username']} 删除成功"}
         else:
@@ -10423,6 +10555,20 @@ def update_user_admin_status(user_id: int, is_admin: bool, admin_user: Dict[str,
         if success:
             action = "设置为管理员" if is_admin else "取消管理员权限"
             removed_tokens = _remove_session_tokens_for_user(user_id)
+            audit_event(
+                category="admin",
+                action="admin_user_status_update",
+                status="success",
+                actor=admin_user,
+                resource_type="user",
+                resource_id=user_id,
+                message="Admin updated user admin status",
+                details={
+                    "target_username": target_user.get("username"),
+                    "is_admin": is_admin,
+                    "revoked_sessions": removed_tokens,
+                },
+            )
             log_with_user('info', f"用户 {target_user['username']} 已{action}", admin_user)
             return {
                 "success": True,
@@ -10548,6 +10694,48 @@ def get_admin_cookies(admin_user: Dict[str, Any] = Depends(require_admin)):
             "cookies": [],
             "message": f"获取失败: {str(e)}"
         }
+
+
+@app.get('/admin/audit-logs')
+def get_audit_logs(
+    limit: int = 100,
+    category: str = None,
+    action: str = None,
+    status: str = None,
+    actor_user_id: int = None,
+    resource_type: str = None,
+    resource_id: str = None,
+    admin_user: Dict[str, Any] = Depends(require_admin),
+):
+    """Return structured audit logs for administrators."""
+    logs = db_manager.get_audit_logs(
+        limit=limit,
+        category=category,
+        action=action,
+        status=status,
+        actor_user_id=actor_user_id,
+        resource_type=resource_type,
+        resource_id=resource_id,
+    )
+    audit_event(
+        category="admin",
+        action="audit_log_query",
+        status="success",
+        actor=admin_user,
+        resource_type="audit_logs",
+        message="Admin queried audit logs",
+        details={
+            "limit": limit,
+            "category": category,
+            "action": action,
+            "status": status,
+            "actor_user_id": actor_user_id,
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "result_count": len(logs),
+        },
+    )
+    return {"success": True, "logs": logs, "total": len(logs)}
 
 
 @app.get('/admin/logs')

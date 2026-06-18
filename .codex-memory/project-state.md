@@ -1,27 +1,31 @@
 # Current State Snapshot - 2026-06-19
 
-- Phase 95 is implemented: stale admin sessions are invalidated when admin privileges change.
+- Phase 96 is implemented: unified structured audit logging for high-value operational events.
 - Production code change:
-  - `verify_token` now rehydrates session user data from the current DB row on every request.
-  - tokens for missing or inactive users are removed and treated as unauthenticated.
-  - successful `/admin/users/{user_id}/admin-status` calls revoke all in-memory sessions for the changed user and return `revoked_sessions`.
+  - added `audit_logs` table plus indexed DB helpers for write/query.
+  - added `utils/audit_logger.py` for status normalization, recursive sensitive-field redaction, request metadata capture, and failure-isolated persistence.
+  - request middleware now records non-static request outcomes with actor, path, duration, status, query, and user agent.
+  - login captcha failure, username/password success, and username/password failure emit explicit `auth/login` audit events.
+  - admin user deletion and admin-status updates emit explicit `admin` audit events.
+  - added admin-only `GET /admin/audit-logs` with filters for category/action/status/actor/resource.
 - Test coverage:
-  - an existing admin token works before revocation, is removed during admin-status downgrade, and is rejected afterward.
-  - update-management compatibility tests now use DB-backed token fixtures, matching the stricter token verification contract.
+  - failed username login creates an audit log and redacts the password.
+  - regular users cannot query audit logs; admins can query and see redacted details.
+  - request middleware records authenticated admin request outcomes.
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_authz_matrix.py -q -k "update_management_accepts or admin_status_revocation"` => 2 passed
-  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 217 passed
-  - `python -m compileall -q reply_server.py XianyuAutoAsync.py db_manager.py db_manager tests` => passed
+  - `python -m compileall -q reply_server.py db_manager.py db_manager tests utils` => passed
+  - `python -m pytest -p no:cacheprovider tests/smoke/test_audit_logging.py -q` => 3 passed
+  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 220 passed
   - `git diff --check` => passed
 - Production review status:
-  - phase-95 scope reviewed with `production-code-quality-review` in checkpoint mode
+  - phase-96 scope reviewed with `production-code-quality-review`
   - severe issues: none
   - medium issues: none
-  - non-blocking tradeoff: per-request DB user lookup is intentional for immediate permission revocation
-  - quality score: 96/100
+  - non-blocking tradeoff: email-code/email-password login paths currently rely on request-level audit rather than explicit auth event details
+  - quality score: 95/100
   - pass status: passed
 - Environment note:
-  - project `venv` still lacks `pytest`, so validation used host Python
+  - validation used host Python because the project virtual environment has previously lacked `pytest`
 - Next testing priorities:
-  - future milestone can continue evaluating remaining owner/scoped API surfaces outside the covered route clusters
+  - future milestone can add a lightweight admin UI for audit log browsing or expand explicit audit events to more business mutations
   - keep ignoring unrelated untracked workspace files
