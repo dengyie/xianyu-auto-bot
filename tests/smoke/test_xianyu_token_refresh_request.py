@@ -1,5 +1,7 @@
 """Smoke tests for Xianyu token refresh request."""
 import pytest
+import sys
+import types
 from unittest import mock
 
 import XianyuAutoAsync
@@ -45,6 +47,50 @@ class _FakeSession:
 
 class TestXianyuTokenRefreshRequest:
     """Token refresh request smoke tests."""
+
+    def test_token_refresh_slider_runtime_prefers_slidex_when_installed(self, monkeypatch):
+        fake_module = types.ModuleType("slidex")
+
+        class FakeSlidexConfig:
+            pass
+
+        class FakeSliderSolver:
+            pass
+
+        fake_module.SlidexConfig = FakeSlidexConfig
+        fake_module.SliderSolver = FakeSliderSolver
+        monkeypatch.setitem(sys.modules, "slidex", fake_module)
+
+        config_cls, slider_cls, runtime_name = XianyuAutoAsync._load_token_refresh_slider_runtime()
+
+        assert config_cls is FakeSlidexConfig
+        assert slider_cls is FakeSliderSolver
+        assert runtime_name == "slidex"
+
+    def test_token_refresh_slider_runtime_falls_back_only_when_slidex_missing(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "slidex", raising=False)
+        fake_legacy_module = types.ModuleType("utils.slider_solver")
+
+        class FakeLegacySliderSolver:
+            pass
+
+        fake_legacy_module.SliderSolver = FakeLegacySliderSolver
+        monkeypatch.setitem(sys.modules, "utils.slider_solver", fake_legacy_module)
+
+        real_import = __import__
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "slidex":
+                raise ModuleNotFoundError("No module named 'slidex'", name="slidex")
+            return real_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr("builtins.__import__", fake_import)
+
+        config_cls, slider_cls, runtime_name = XianyuAutoAsync._load_token_refresh_slider_runtime()
+
+        assert config_cls is XianyuAutoAsync._LegacySliderConfig
+        assert slider_cls is FakeLegacySliderSolver
+        assert runtime_name == "legacy"
 
     @pytest.mark.asyncio
     async def test_refresh_token_reuses_session_and_passes_proxy(self):

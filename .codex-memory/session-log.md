@@ -1,5 +1,29 @@
 # Session Log
 
+## 2026-06-19 08:06
+- Task: Phase 101 integrate GitHub `dengyie/slidex` for token-refresh slider verification and diagnose historical-account reconnect/backoff.
+- Actions:
+  - Re-checked skills/plugins per project rules and restored project memory.
+  - Confirmed the existing loader in `XianyuAutoAsync.py` already prefers `from slidex import SlidexConfig, SliderSolver` and falls back to `utils.slider_solver` only when the package itself is missing.
+  - Added dependency declarations for GitHub `dengyie/slidex`, NumPy/OpenCV compatibility bounds, and bcrypt `<5` for passlib compatibility.
+  - Added smoke coverage proving token-refresh slider runtime selection prefers `slidex` and falls back to legacy only when `slidex` is missing.
+  - Installed/synchronized the project venv test tools and fixed the venv bcrypt 5 incompatibility discovered during verification.
+  - Restarted/check-tested the local admin service at `http://127.0.0.1:8090/admin` and inspected runtime logs.
+- Results:
+  - Runtime import checks in venv and host Python show `_load_token_refresh_slider_runtime()[2] == "slidex"`.
+  - Runtime logs show `SliderSolver imported (slidex)` for accounts `1926782908` and `2638850042`.
+  - Runtime logs still show Xianyu returning `FAIL_SYS_USER_VALIDATE`; after three slider retries the service reaches `captcha_max_retries_exceeded`, which explains the UI's reconnect/backoff state.
+  - `venv\Scripts\python.exe -m pytest -p no:cacheprovider tests/smoke/test_xianyu_token_refresh_request.py -q` => 5 passed.
+  - `venv\Scripts\python.exe -m pytest -p no:cacheprovider tests/smoke/test_xianyu_token_refresh_request.py tests/smoke/test_accounts.py -q --maxfail=1` => 24 passed.
+  - `venv\Scripts\python.exe -m compileall -q XianyuAutoAsync.py tests\smoke\test_xianyu_token_refresh_request.py` => passed.
+  - `git diff --check` => passed.
+  - Phase-gate production review: passed, score 96/100, no P0/P1 blockers.
+- Next:
+  - Commit and push Phase 101.
+  - User can retest in the local admin UI; if Xianyu still returns `FAIL_SYS_USER_VALIDATE`, the remaining action is live platform validation/re-login rather than code-side slidex integration.
+- Blockers:
+  - Manual-required: clearing Xianyu live account risk-control requires real account/platform interaction.
+
 ## 2026-06-19 06:39
 - Task: Fully fix production review findings from the unified audit logging review.
 - Actions:

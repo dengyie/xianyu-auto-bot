@@ -1,29 +1,31 @@
 # Current State Snapshot - 2026-06-19
 
-- Phase 100 is implemented: CookieManager runtime handoff false-success gaps are closed across the reviewed account intake and QR refresh paths.
-- Production code change:
-  - kept Phase 98/99 helpers `_qr_runtime_handoff_error(...)`, `_await_cookie_manager_handoff(...)`, and `_consume_cookie_manager_handoff(...)`.
-  - sync cookie routes, proxy restart, publish-time cookie persistence, password-login success path, manual-cookie-import success path, QR fallback save, and manual QR cookie refresh now consume CookieManager handoff results and surface failed `Future.result()` outcomes.
-  - QR standard/lite status reports runtime handoff failure as an error, and async QR processing awaits awaitable CookieManager handoffs.
-  - password-login post-success browser cookie refresh remains best-effort, but returned handoff failures now enter the existing refresh error log instead of disappearing.
-- Design / audit:
-  - `.codex-memory/phase99-core-data-flow-audit-design.md` maps the core data flows.
-  - `.codex-memory/phase100-background-handoff-design.md` documents password-login and manual-cookie-import handoff behavior.
-  - Phase 100 scope stayed limited to account cookie persistence-to-runtime handoff consistency; unrelated untracked workspace files were ignored.
+- Phase 101 is implemented: token-refresh slider verification now declares and verifies the GitHub `dengyie/slidex` runtime instead of relying on the legacy local solver.
+- Root-cause result for the current "连接正在恢复 / password_login_backoff_wait" state:
+  - runtime logs show `FAIL_SYS_USER_VALIDATE` from Xianyu during token refresh for accounts `1926782908` and `2638850042`.
+  - runtime logs also show `SliderSolver imported (slidex)`, so the current blocker is no longer "slidex missing" or "legacy solver selected".
+  - `slidex` reports remote fallback/session completion, but Xianyu still keeps returning risk-control validation, eventually reaching `captcha_max_retries_exceeded`; this keeps WebSocket initialization in reconnect/backoff.
+- Production dependency change:
+  - pinned `slidex @ git+https://github.com/dengyie/slidex.git@d4d372ba7554795bed8cb71c31b4d481366db99f`.
+  - constrained `numpy>=1.24,<2` and `opencv-python-headless>=4.8.0,<4.13` to avoid the NumPy 2 ABI break with pandas/pyarrow.
+  - constrained `bcrypt>=4.0,<5` because `passlib[bcrypt]` fails under bcrypt 5 during admin password hashing in a fresh test DB.
 - Test coverage:
-  - added regressions for account-info update, cookie update, password login, manual cookie import, QR processed status, QR lite, async QR processing, and manual QR refresh when CookieManager handoff fails.
+  - added token-refresh smoke coverage proving `_load_token_refresh_slider_runtime()` prefers installed `slidex` and falls back to legacy only when the `slidex` package itself is missing.
 - Verification:
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_accounts.py -q -k qr_login_refresh_cookies_surfaces_runtime_handoff_failure` => 1 passed.
-  - `python -m pytest -p no:cacheprovider tests/smoke/test_accounts.py tests/smoke/test_reply_server_manual_cookie_import_flow.py -q --maxfail=1` => 21 passed.
-  - `python -m compileall -q reply_server.py tests\smoke\test_accounts.py tests\smoke\test_reply_server_manual_cookie_import_flow.py` => passed.
+  - `venv\Scripts\python.exe -m pytest -p no:cacheprovider tests/smoke/test_xianyu_token_refresh_request.py -q` => 5 passed.
+  - `venv\Scripts\python.exe -m pytest -p no:cacheprovider tests/smoke/test_xianyu_token_refresh_request.py tests/smoke/test_accounts.py -q --maxfail=1` => 24 passed.
+  - `venv\Scripts\python.exe -m compileall -q XianyuAutoAsync.py tests\smoke\test_xianyu_token_refresh_request.py` => passed.
   - `git diff --check` => passed.
-  - `python -m pytest -p no:cacheprovider tests/smoke -q --maxfail=1` => 232 passed.
+  - import checks in venv and host Python return `_load_token_refresh_slider_runtime()[2] == "slidex"`.
+- Runtime status:
+  - local admin UI is reachable at `http://127.0.0.1:8090/admin`.
+  - current process tree has a venv launcher parent and a child process displayed as the base conda interpreter; package imports in logs come from the project venv path.
 - Production review status:
-  - phase-gate review found no P0/P1 blockers.
-  - security risk: no new authorization surface; existing owner checks remain in place.
-  - stability risk: reduced by eliminating false success after runtime handoff failures; synchronous wait is bounded to 30 seconds.
+  - phase-gate review found no P0/P1 blockers in the Phase 101 increment.
+  - security risk: no new auth or permission surface.
+  - stability risk: reduced by pinning the correct slider package and dependency compatibility bounds.
   - quality score: 96/100; pass status: passed.
 - Backlog / manual:
   - Backlog: continue evaluating the next unrelated owner/scoped route cluster in a future milestone.
-  - Manual-required: real Xianyu scan/slider/account-risk outcomes still require live external validation.
+  - Manual-required: real Xianyu account risk-control outcome still requires a successful live platform validation or re-login; code cannot guarantee clearing `FAIL_SYS_USER_VALIDATE`.
   - keep ignoring unrelated untracked workspace files unless the user explicitly asks to manage them.

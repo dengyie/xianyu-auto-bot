@@ -1,5 +1,15 @@
 # Decisions
 
+## 2026-06-19 - Phase 101 should pin the GitHub slidex package
+- Decision: Declare `slidex` from `https://github.com/dengyie/slidex` at commit `d4d372ba7554795bed8cb71c31b4d481366db99f` instead of relying on the unrelated PyPI `slidex` package name.
+- Rationale: The token-refresh runtime imports `SlidexConfig` and `SliderSolver`; the GitHub project provides those symbols while PyPI `slidex==0.1.1` is a different slide/presentation package.
+- Impact: New installs select the intended slider runtime, and smoke coverage proves fallback to the legacy local solver happens only when the real `slidex` package is missing.
+
+## 2026-06-19 - Phase 101 should bound binary dependency compatibility
+- Decision: Bound NumPy/OpenCV and bcrypt dependency versions as part of the slider integration environment fix.
+- Rationale: Installing GitHub `slidex` can otherwise pull NumPy 2.x, which breaks existing pandas/pyarrow ABI expectations; fresh venv tests also showed `passlib[bcrypt]` failing with bcrypt 5.x during admin password hashing.
+- Impact: The project venv can import the slider stack and run the token-refresh/account smoke tests reliably.
+
 ## 2026-06-19 - Phase 97 should distrust forwarded IP headers by default
 - Decision: Add a central trusted client IP helper and only accept forwarded IP headers when proxy trust is explicitly enabled and the direct peer matches configured trusted proxies.
 - Rationale: Login brute-force protection, captcha decisions, and audit attribution must not be controlled by attacker-supplied headers in direct deployments.

@@ -37,17 +37,20 @@ python-multipart>=0.0.6
 openai>=1.50.0
 
 # ==================== 图像处理 ====================
+numpy>=1.24,<2
 Pillow>=10.0.0
-opencv-python-headless>=4.8.0
+opencv-python-headless>=4.8.0,<4.13
 qrcode[pil]>=7.4.2
 
 # ==================== 浏览器自动化 ====================
 playwright==1.59.0
 DrissionPage>=4.0.0
+slidex @ git+https://github.com/dengyie/slidex.git@d4d372ba7554795bed8cb71c31b4d481366db99f
 
 # ==================== 加密和安全 ====================
 PyJWT>=2.8.0
 passlib[bcrypt]>=1.7.4
+bcrypt>=4.0,<5
 cryptography>=41.0.0
 
 # ==================== 时间处理 ====================
