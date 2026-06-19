@@ -10,6 +10,7 @@
   - Auto-refresh only calls `/cookies/{cid}/runtime-status`.
   - Session keepalive and conversation history remain manual button actions.
   - Account rows show local runtime badges: running, reconnecting, risk-controlled, recovering, or not running.
+  - Account diagnostics selector now uses the same runtime badge classification as the account table, so reconnecting accounts do not appear as healthy running accounts in the selector.
 - Root-cause result for the current reconnect/backoff account state:
   - Previous Phase 101 logs showed `SliderSolver imported (slidex)`, so the current blocker is not missing `dengyie/slidex`.
   - Xianyu still returned `FAIL_SYS_USER_VALIDATE` / `captcha_max_retries_exceeded` for affected accounts, so code can expose and avoid worsening the state, but cannot guarantee clearing official risk-control.
@@ -20,6 +21,7 @@
   - `node --check static/js/app-accounts.js` => passed.
   - `node --check static/js/app-dashboard.js` => passed.
   - `git diff --check` => passed.
+  - In-app browser smoke on `http://127.0.0.1:8090/admin` verified account table runtime badges, local-snapshot monitoring notice, no-probe notice, and no console errors.
 - Production review status:
   - Phase-gate review found and fixed one medium frontend attribute-escaping risk in the new runtime badge.
   - No remaining P0/P1 blockers in the Phase 102 increment.
@@ -29,4 +31,5 @@
 - Backlog / manual:
   - Backlog: SSE/WebSocket status push, full monitoring center, broader UI modularization, and unrelated owner/scoped route clusters remain future milestones.
   - Manual-required: revalidate real Xianyu account after live scan/slider/re-login clears `FAIL_SYS_USER_VALIDATE`.
+  - Process rule: future UI-visible milestones should include an in-app browser automation smoke step before delivery.
   - Keep ignoring unrelated untracked workspace files unless the user explicitly asks to manage them.

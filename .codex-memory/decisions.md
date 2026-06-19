@@ -1,5 +1,10 @@
 # Decisions
 
+## 2026-06-19 - Browser automation smoke is required for UI-visible changes
+- Decision: For future milestones that change visible UI, browser navigation, login/admin workflows, or frontend runtime behavior, include an in-app browser automation smoke step before delivery.
+- Rationale: Unit and syntax checks did not catch a real UI consistency issue where the account table showed `重连中` while the diagnostics account selector showed `运行中`.
+- Impact: Delivery summaries should name the browser route tested, the visible state verified, and whether console errors were observed.
+
 ## 2026-06-19 - Phase 102 monitoring must remain local snapshot only
 - Decision: Account runtime auto-monitoring may poll `/cookies/{cid}/runtime-status`, but must not trigger session keepalive, token refresh, history fetch, QR login, browser automation, or any Xianyu official request.
 - Rationale: The affected accounts are already in official risk-control states such as `FAIL_SYS_USER_VALIDATE`; continuous probing would increase operational risk and could worsen backoff or validation requirements.

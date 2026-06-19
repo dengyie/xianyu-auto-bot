@@ -1788,3 +1788,19 @@
   - User can retest the admin UI; a continued `FAIL_SYS_USER_VALIDATE` status means official account verification is still required, not missing slidex.
 - Blockers:
   - Manual-required: real Xianyu scan/slider/re-login outcome remains outside automated verification.
+
+## 2026-06-19 08:54
+- Task: Make browser automation smoke part of the development workflow and close Phase 102 UI smoke feedback.
+- Actions:
+  - Used the in-app browser automation plugin against `http://127.0.0.1:8090/admin`.
+  - Verified the account table shows runtime badges, the diagnostics panel shows `本地状态刷新，不触发闲鱼探活`, the no-probe notice is visible, and there were no console errors.
+  - Found a UI consistency issue: the account table showed reconnecting accounts as `重连中`, while the diagnostics selector labeled the same accounts as `运行中` because it only checked `runtime_status.running`.
+  - Updated the diagnostics account selector to reuse `getAccountRuntimeBadge(...)` so selector labels match the table state.
+  - Recorded a durable process decision that future UI-visible work must include an in-app browser automation smoke step.
+- Results:
+  - `node --check static/js/app-accounts.js` => passed.
+  - `venv\Scripts\python.exe -m pytest -p no:cacheprovider tests/smoke/test_accounts.py -q -k runtime` => 8 passed.
+- Next:
+  - Commit and push the selector consistency fix and memory update.
+- Blockers:
+  - Login-page CAPTCHA still requires explicit user confirmation before automated login if the browser session is not already authenticated.

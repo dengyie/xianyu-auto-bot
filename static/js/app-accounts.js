@@ -592,8 +592,8 @@ function populateAboutAccountOptions(accounts) {
     accountSelect.innerHTML = `
         <option value="">请选择账号</option>
         ${accounts.map(account => {
-            const runningSuffix = account.runtime_status?.running ? ' · 运行中' : '';
-            return `<option value="${escapeHtml(account.id)}">${escapeHtml(account.id + runningSuffix)}</option>`;
+            const runtimeLabel = getAccountRuntimeBadge(account.runtime_status).label;
+            return `<option value="${escapeHtml(account.id)}">${escapeHtml(`${account.id} · ${runtimeLabel}`)}</option>`;
         }).join('')}
     `;
 }
