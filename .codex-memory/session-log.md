@@ -1758,3 +1758,33 @@
   - Future milestone can continue unrelated owner/scoped route coverage.
 - Blockers:
   - Real Xianyu scan/slider/account-risk outcomes remain Manual-required.
+
+## 2026-06-19 08:31
+- Task: Phase 102 account runtime real-time monitor without active Xianyu probing.
+- Actions:
+  - Restored project memory, rechecked skills/plugins, and continued from `.codex-memory/phase102-account-runtime-monitor-design.md`.
+  - Added a runtime-status smoke test proving `/cookies/{cid}/runtime-status` returns monitoring-safe metadata and does not call CookieManager add/update, session keepalive, or token refresh paths.
+  - Added backend monitoring contract fields to `_build_live_runtime_status(...)`: `monitoring_safe`, `monitoring_mode=local_snapshot`, `monitoring_description`, `external_probe_performed=false`, and `auto_probe_allowed=false`.
+  - Added Chinese risk-control summary fields for states including `FAIL_SYS_USER_VALIDATE`, `captcha_max_retries_exceeded`, and `password_login_backoff_wait`.
+  - Updated the account diagnostics UI to show local-snapshot safety, risk-control/manual-action notices, and 5-second polling only while the account page is active and visible.
+  - Added account-list runtime badges from the already fetched `/cookies/details` local snapshot.
+  - Kept session keepalive and conversation-history calls manual-only.
+- Results:
+  - The new runtime-status test initially failed with missing `monitoring_safe`, proving the backend contract gap.
+  - `venv\Scripts\python.exe -m pytest -p no:cacheprovider tests/smoke/test_accounts.py -q -k runtime` => 8 passed.
+  - `venv\Scripts\python.exe -m pytest -p no:cacheprovider tests/smoke/test_accounts.py -q` => 20 passed.
+  - `venv\Scripts\python.exe -m compileall -q reply_server.py tests\smoke\test_accounts.py` => passed.
+  - `node --check static/js/app-accounts.js` => passed.
+  - `node --check static/js/app-dashboard.js` => passed.
+  - `git diff --check` => passed.
+- Review:
+  - Phase-gate production review found and fixed one medium issue: the new runtime badge used text escaping in an HTML attribute, so `escapeHtmlAttribute(...)` was added for the badge title.
+  - No remaining severe or medium P0/P1 blockers.
+  - Security risk: no new auth surface; monitoring is explicitly local snapshot only.
+  - Stability risk: reduced by avoiding automatic official probing while still exposing local state.
+  - Quality score: 95/100; pass status: conditionally passed due only to real Xianyu manual verification.
+- Next:
+  - Commit and push Phase 102.
+  - User can retest the admin UI; a continued `FAIL_SYS_USER_VALIDATE` status means official account verification is still required, not missing slidex.
+- Blockers:
+  - Manual-required: real Xianyu scan/slider/re-login outcome remains outside automated verification.

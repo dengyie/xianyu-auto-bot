@@ -3504,9 +3504,63 @@ def _is_runtime_timestamp_recent(value: Any, window_seconds: Any) -> bool:
     return (time.time() - timestamp) <= window
 
 
+def _build_runtime_monitoring_contract() -> Dict[str, Any]:
+    return {
+        'monitoring_safe': True,
+        'monitoring_mode': 'local_snapshot',
+        'monitoring_description': '仅读取本地运行态，不触发闲鱼探活、保活、刷新或历史消息拉取',
+        'external_probe_performed': False,
+        'auto_probe_allowed': False,
+    }
+
+
+def _build_runtime_risk_control_summary(
+    token_refresh_status: Optional[Any],
+    token_refresh_error_message: Optional[Any],
+    session_keepalive_status: Optional[Any] = None,
+    session_keepalive_error_message: Optional[Any] = None,
+) -> Dict[str, Any]:
+    status = str(token_refresh_status or session_keepalive_status or '').strip()
+    token_error = str(token_refresh_error_message or '').strip()
+    session_error = str(session_keepalive_error_message or '').strip()
+    combined_detail = ' | '.join(part for part in [status, token_error, session_error] if part)
+    status_lower = status.lower()
+    detail_upper = combined_detail.upper()
+
+    summary = None
+    operator_action_required = False
+    if status_lower in {
+        'captcha_max_retries_exceeded',
+        'manual_verification_required',
+        'verification_pending_manual',
+    } or 'FAIL_SYS_USER_VALIDATE' in detail_upper:
+        summary = '闲鱼仍要求账号验证，自动刷新已进入受限状态；请在真实平台完成验证或重新登录后再观察。'
+        operator_action_required = True
+    elif status_lower == 'password_login_backoff_wait':
+        summary = '账号登录/刷新处于退避等待，系统正在避免高频重试以降低风控风险。'
+        operator_action_required = True
+    elif status_lower in {
+        'slider_failed',
+        'risk_control',
+        'token_expired_recovery_failed',
+        'token_refresh_failed',
+        'token_refresh_exception',
+        'token_init_failed',
+    }:
+        summary = '账号刷新链路最近失败，当前监控仅展示本地失败状态，不会自动探活闲鱼。'
+
+    return {
+        'risk_control_status': status or None,
+        'risk_control_summary': summary,
+        'risk_control_detail': combined_detail or None,
+        'operator_action_required': operator_action_required,
+    }
+
+
 def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
     cleaned_cid = str(cookie_id or '').strip()
     runtime_status = {
+        **_build_runtime_monitoring_contract(),
         'instance_exists': False,
         'running': False,
         'connection_state': 'not_running',
@@ -3559,6 +3613,10 @@ def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
         'cookie_refresh_enabled': None,
         'manual_refresh_active': False,
         'auth_recovery_owner': None,
+        'risk_control_status': None,
+        'risk_control_summary': None,
+        'risk_control_detail': None,
+        'operator_action_required': False,
     }
     if not cleaned_cid:
         return runtime_status
@@ -3807,6 +3865,12 @@ def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
         'cookie_refresh_enabled': getattr(live_instance, 'cookie_refresh_enabled', None),
         'manual_refresh_active': bool(XianyuLive.is_manual_refresh_active(cleaned_cid, allow_handoff_recovery=True)),
     })
+    runtime_status.update(_build_runtime_risk_control_summary(
+        token_refresh_status,
+        runtime_status.get('token_refresh_error_message'),
+        session_keepalive_status,
+        runtime_status.get('session_keepalive_error_message'),
+    ))
     return runtime_status
 
 

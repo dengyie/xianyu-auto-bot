@@ -422,20 +422,16 @@ function scheduleAboutRuntimeAutoRetry(accountId, runtimeStatus) {
         return;
     }
 
-    if (!shouldAutoRetryRuntimeStatus(runtimeStatus)) {
+    if (document.visibilityState && document.visibilityState !== 'visible') {
         return;
     }
-
-    if (Date.now() - lastAboutRuntimeRetryAt < 12000) {
-        return;
-    }
-
-    const connectionState = String(runtimeStatus?.connection_state || '').trim();
-    const delay = (connectionState === 'connecting' || connectionState === 'reconnecting') ? 3000 : 5000;
 
     aboutRuntimeRetryTimer = setTimeout(() => {
         aboutRuntimeRetryTimer = null;
         if (!document.getElementById('accounts-section')?.classList.contains('active')) {
+            return;
+        }
+        if (document.visibilityState && document.visibilityState !== 'visible') {
             return;
         }
         if (getAboutSelectedAccountId() !== normalizedAccountId) {
@@ -443,7 +439,7 @@ function scheduleAboutRuntimeAutoRetry(accountId, runtimeStatus) {
         }
         lastAboutRuntimeRetryAt = Date.now();
         loadAboutRuntimeStatus(normalizedAccountId);
-    }, delay);
+    }, 5000);
 }
 
 function renderDashboardAccountRuntimeSnapshot(runtimeStatus) {
@@ -1791,4 +1787,3 @@ function clearKeywordCache() {
     accountKeywordCache = {};
     cacheTimestamp = 0;
 }
-

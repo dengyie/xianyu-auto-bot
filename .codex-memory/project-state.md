@@ -1,31 +1,32 @@
 # Current State Snapshot - 2026-06-19
 
-- Phase 101 is implemented: token-refresh slider verification now declares and verifies the GitHub `dengyie/slidex` runtime instead of relying on the legacy local solver.
-- Root-cause result for the current "连接正在恢复 / password_login_backoff_wait" state:
-  - runtime logs show `FAIL_SYS_USER_VALIDATE` from Xianyu during token refresh for accounts `1926782908` and `2638850042`.
-  - runtime logs also show `SliderSolver imported (slidex)`, so the current blocker is no longer "slidex missing" or "legacy solver selected".
-  - `slidex` reports remote fallback/session completion, but Xianyu still keeps returning risk-control validation, eventually reaching `captcha_max_retries_exceeded`; this keeps WebSocket initialization in reconnect/backoff.
-- Production dependency change:
-  - pinned `slidex @ git+https://github.com/dengyie/slidex.git@d4d372ba7554795bed8cb71c31b4d481366db99f`.
-  - constrained `numpy>=1.24,<2` and `opencv-python-headless>=4.8.0,<4.13` to avoid the NumPy 2 ABI break with pandas/pyarrow.
-  - constrained `bcrypt>=4.0,<5` because `passlib[bcrypt]` fails under bcrypt 5 during admin password hashing in a fresh test DB.
-- Test coverage:
-  - added token-refresh smoke coverage proving `_load_token_refresh_slider_runtime()` prefers installed `slidex` and falls back to legacy only when the `slidex` package itself is missing.
+- Phase 102 is implemented: account runtime monitoring is near-real-time in the admin account page while remaining read-only against Xianyu.
+- Runtime status contract:
+  - `/cookies/{cid}/runtime-status` and `/cookies/details` embedded `runtime_status` now include `monitoring_safe=true`, `monitoring_mode=local_snapshot`, `external_probe_performed=false`, and `auto_probe_allowed=false`.
+  - `_build_live_runtime_status(...)` still reads only local CookieManager, XianyuLive instance fields, and DB-owned account access state; it does not call token refresh, session keepalive, history fetch, QR login, browser automation, or Xianyu endpoints.
+  - Risk-control states such as `FAIL_SYS_USER_VALIDATE`, `captcha_max_retries_exceeded`, and `password_login_backoff_wait` now produce Chinese operator summaries and `operator_action_required` where manual platform action is needed.
+- Admin UI behavior:
+  - Account diagnostics auto-refreshes the selected account every 5 seconds only while the account section is active and the document is visible.
+  - Auto-refresh only calls `/cookies/{cid}/runtime-status`.
+  - Session keepalive and conversation history remain manual button actions.
+  - Account rows show local runtime badges: running, reconnecting, risk-controlled, recovering, or not running.
+- Root-cause result for the current reconnect/backoff account state:
+  - Previous Phase 101 logs showed `SliderSolver imported (slidex)`, so the current blocker is not missing `dengyie/slidex`.
+  - Xianyu still returned `FAIL_SYS_USER_VALIDATE` / `captcha_max_retries_exceeded` for affected accounts, so code can expose and avoid worsening the state, but cannot guarantee clearing official risk-control.
 - Verification:
-  - `venv\Scripts\python.exe -m pytest -p no:cacheprovider tests/smoke/test_xianyu_token_refresh_request.py -q` => 5 passed.
-  - `venv\Scripts\python.exe -m pytest -p no:cacheprovider tests/smoke/test_xianyu_token_refresh_request.py tests/smoke/test_accounts.py -q --maxfail=1` => 24 passed.
-  - `venv\Scripts\python.exe -m compileall -q XianyuAutoAsync.py tests\smoke\test_xianyu_token_refresh_request.py` => passed.
+  - `venv\Scripts\python.exe -m pytest -p no:cacheprovider tests/smoke/test_accounts.py -q -k runtime` => 8 passed.
+  - `venv\Scripts\python.exe -m pytest -p no:cacheprovider tests/smoke/test_accounts.py -q` => 20 passed.
+  - `venv\Scripts\python.exe -m compileall -q reply_server.py tests\smoke\test_accounts.py` => passed.
+  - `node --check static/js/app-accounts.js` => passed.
+  - `node --check static/js/app-dashboard.js` => passed.
   - `git diff --check` => passed.
-  - import checks in venv and host Python return `_load_token_refresh_slider_runtime()[2] == "slidex"`.
-- Runtime status:
-  - local admin UI is reachable at `http://127.0.0.1:8090/admin`.
-  - current process tree has a venv launcher parent and a child process displayed as the base conda interpreter; package imports in logs come from the project venv path.
 - Production review status:
-  - phase-gate review found no P0/P1 blockers in the Phase 101 increment.
-  - security risk: no new auth or permission surface.
-  - stability risk: reduced by pinning the correct slider package and dependency compatibility bounds.
-  - quality score: 96/100; pass status: passed.
+  - Phase-gate review found and fixed one medium frontend attribute-escaping risk in the new runtime badge.
+  - No remaining P0/P1 blockers in the Phase 102 increment.
+  - Security risk: no new authorization surface; reduced probing risk by making auto monitoring local-snapshot only.
+  - Stability risk: reduced by avoiding repeated official keepalive/token/history probes from monitoring.
+  - Quality score: 95/100; pass status: conditionally passed due only to external Xianyu manual verification.
 - Backlog / manual:
-  - Backlog: continue evaluating the next unrelated owner/scoped route cluster in a future milestone.
-  - Manual-required: real Xianyu account risk-control outcome still requires a successful live platform validation or re-login; code cannot guarantee clearing `FAIL_SYS_USER_VALIDATE`.
-  - keep ignoring unrelated untracked workspace files unless the user explicitly asks to manage them.
+  - Backlog: SSE/WebSocket status push, full monitoring center, broader UI modularization, and unrelated owner/scoped route clusters remain future milestones.
+  - Manual-required: revalidate real Xianyu account after live scan/slider/re-login clears `FAIL_SYS_USER_VALIDATE`.
+  - Keep ignoring unrelated untracked workspace files unless the user explicitly asks to manage them.

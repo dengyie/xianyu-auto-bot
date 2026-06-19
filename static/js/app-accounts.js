@@ -113,6 +113,86 @@ function buildAboutStatusBadge(type, value) {
     return `<span class="about-status-badge is-${variant}">${escapeHtml(text)}</span>`;
 }
 
+function escapeHtmlAttribute(text) {
+    return escapeHtml(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function buildAboutMonitoringNotice(runtimeStatus) {
+    const modeText = runtimeStatus?.monitoring_mode === 'local_snapshot'
+        ? '本地状态刷新，不触发闲鱼探活'
+        : '运行态快照';
+    const safetyText = runtimeStatus?.external_probe_performed === false
+        ? '未执行外部探测'
+        : '未知探测状态';
+    return `
+        <div class="account-diagnostics-status-note-bar is-info">
+            <div class="account-diagnostics-status-note-title">${escapeHtml(modeText)}</div>
+            <div class="account-diagnostics-status-note-text">${escapeHtml(safetyText)} · ${escapeHtml(runtimeStatus?.monitoring_description || '仅读取服务本地内存和数据库状态')}</div>
+        </div>
+    `;
+}
+
+function buildAboutRiskControlNotice(runtimeStatus) {
+    if (!runtimeStatus?.risk_control_summary && !runtimeStatus?.risk_control_detail) {
+        return '';
+    }
+    const tone = runtimeStatus?.operator_action_required ? 'warning' : 'info';
+    const title = runtimeStatus?.operator_action_required ? '需要人工处理账号验证' : '最近刷新/风控状态';
+    const detail = [runtimeStatus.risk_control_summary, runtimeStatus.risk_control_detail]
+        .filter(Boolean)
+        .join(' · ');
+    return `
+        <div class="account-diagnostics-status-note-bar is-${tone}">
+            <div class="account-diagnostics-status-note-title">${escapeHtml(title)}</div>
+            <div class="account-diagnostics-status-note-text">${escapeHtml(detail)}</div>
+        </div>
+    `;
+}
+
+function getAccountRuntimeBadge(runtimeStatus) {
+    const status = runtimeStatus || {};
+    const tokenStatus = String(status.risk_control_status || status.token_refresh_status || '').trim();
+    const connectionState = String(status.connection_state || '').trim();
+    if (status.operator_action_required || tokenStatus === 'captcha_max_retries_exceeded' || tokenStatus === 'password_login_backoff_wait') {
+        return {
+            label: '风控中',
+            className: 'bg-warning text-dark',
+            title: status.risk_control_summary || status.risk_control_detail || tokenStatus,
+        };
+    }
+    if (connectionState === 'connecting' || connectionState === 'reconnecting') {
+        return {
+            label: '重连中',
+            className: 'bg-info text-dark',
+            title: status.message_stream_note || status.connection_state,
+        };
+    }
+    if (status.running && status.ws_ready && status.session_ready && status.message_stream_ready) {
+        return {
+            label: '运行中',
+            className: 'bg-success',
+            title: status.message_stream_note || '本地运行态显示链路就绪',
+        };
+    }
+    if (status.running) {
+        return {
+            label: '恢复中',
+            className: 'bg-secondary',
+            title: status.message_stream_note || status.connection_state || '本地运行态尚未完全就绪',
+        };
+    }
+    return {
+        label: '未运行',
+        className: 'bg-secondary',
+        title: '本地没有运行中的账号实例',
+    };
+}
+
+function renderAccountRuntimeBadge(runtimeStatus) {
+    const badge = getAccountRuntimeBadge(runtimeStatus);
+    return `<span class="badge ${badge.className}" title="${escapeHtmlAttribute(badge.title || '')}">${escapeHtml(badge.label)}</span>`;
+}
+
 function buildAboutMetaCard({ label, value, supporting = '' }) {
     return `
         <div class="account-diagnostics-summary-item">
@@ -339,6 +419,8 @@ function renderAboutRuntimeStatus(runtimeStatus) {
                 <div class="account-diagnostics-status-note-title">${escapeHtml(overview.title)}</div>
                 <div class="account-diagnostics-status-note-text">${escapeHtml(overview.note)}</div>
             </div>
+            ${buildAboutMonitoringNotice(runtimeStatus)}
+            ${buildAboutRiskControlNotice(runtimeStatus)}
             <div class="account-diagnostics-status-body">
                 <div class="account-diagnostics-status-primary">
                     <div class="account-diagnostics-status-grid">
@@ -700,6 +782,22 @@ function initAboutDiagnosticsEvents() {
             loadAboutConversationHistory();
         }
     });
+    document.addEventListener('visibilitychange', () => {
+        if (aboutRuntimeRetryTimer) {
+            clearTimeout(aboutRuntimeRetryTimer);
+            aboutRuntimeRetryTimer = null;
+        }
+        if (document.visibilityState !== 'visible') {
+            return;
+        }
+        if (!document.getElementById('accounts-section')?.classList.contains('active')) {
+            return;
+        }
+        const accountId = getAboutSelectedAccountId();
+        if (accountId) {
+            loadAboutRuntimeStatus(accountId);
+        }
+    });
 
     aboutDiagnosticsInitialized = true;
 }
@@ -786,6 +884,7 @@ async function loadCookies() {
         // 使用数据库中的实际状态，默认为启用
         const isEnabled = cookie.enabled === undefined ? true : cookie.enabled;
         const statusNoteBadge = renderStatusNoteBadge(cookie.status_note, 'account-status-note-badge');
+        const runtimeBadge = renderAccountRuntimeBadge(cookie.runtime_status);
 
         console.log(`账号 ${cookie.id} 状态: enabled=${cookie.enabled}, isEnabled=${isEnabled}`); // 调试信息
 
@@ -833,6 +932,7 @@ async function loadCookies() {
             <span class="status-badge ${isEnabled ? 'enabled' : 'disabled'}" title="${isEnabled ? '账号已启用' : '账号已禁用'}">
                 <i class="bi bi-${isEnabled ? 'check-circle-fill' : 'x-circle-fill'}"></i>
             </span>
+            ${runtimeBadge}
             ${statusNoteBadge}
             </div>
         </td>
@@ -2206,4 +2306,3 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     });
 });
-

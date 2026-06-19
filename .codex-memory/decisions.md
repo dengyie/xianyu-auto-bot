@@ -1,5 +1,15 @@
 # Decisions
 
+## 2026-06-19 - Phase 102 monitoring must remain local snapshot only
+- Decision: Account runtime auto-monitoring may poll `/cookies/{cid}/runtime-status`, but must not trigger session keepalive, token refresh, history fetch, QR login, browser automation, or any Xianyu official request.
+- Rationale: The affected accounts are already in official risk-control states such as `FAIL_SYS_USER_VALIDATE`; continuous probing would increase operational risk and could worsen backoff or validation requirements.
+- Impact: Operators now get near-real-time local connection/token/keepalive/message-flow/risk summaries, while active recovery remains an explicit manual action.
+
+## 2026-06-19 - Phase 102 should expose risk-control as operator state
+- Decision: Normalize known token/risk statuses into Chinese runtime summary fields (`risk_control_summary`, `risk_control_detail`, `operator_action_required`) instead of hiding them in logs.
+- Rationale: Users need to distinguish code/runtime failure from official account validation requirements without reading raw logs.
+- Impact: The account page can show "风控中" and manual-action guidance while tests prove the endpoint remains read-only.
+
 ## 2026-06-19 - Phase 101 should pin the GitHub slidex package
 - Decision: Declare `slidex` from `https://github.com/dengyie/slidex` at commit `d4d372ba7554795bed8cb71c31b4d481366db99f` instead of relying on the unrelated PyPI `slidex` package name.
 - Rationale: The token-refresh runtime imports `SlidexConfig` and `SliderSolver`; the GitHub project provides those symbols while PyPI `slidex==0.1.1` is a different slide/presentation package.

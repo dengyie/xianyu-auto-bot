@@ -112,6 +112,93 @@ class TestAccounts:
         assert resp.status_code == 200
         assert resp.json() == []
 
+    def test_runtime_status_is_read_only_monitoring_snapshot(self, client, auth, monkeypatch):
+        cookie_id = "runtime_monitor_read_only_cookie"
+        reply_server.db_manager.save_cookie(cookie_id, "unb=runtime; token=local", user_id=1)
+
+        class ProbeForbiddenManager:
+            cookies = {cookie_id: "unb=runtime; token=local"}
+            tasks = {cookie_id: object()}
+
+            def get_cookie_status(self, requested_cookie_id):
+                assert requested_cookie_id == cookie_id
+                return True
+
+            def update_cookie(self, *args, **kwargs):
+                raise AssertionError("runtime status must not update cookies")
+
+            def add_cookie(self, *args, **kwargs):
+                raise AssertionError("runtime status must not start account tasks")
+
+        class FakeConnectionState:
+            value = "reconnecting"
+
+        class FakeXianyuLive:
+            connection_state = FakeConnectionState()
+            ws = None
+            session = SimpleNamespace(closed=False)
+            current_token = None
+            last_token_refresh_status = "captcha_max_retries_exceeded"
+            last_token_refresh_error_message = "FAIL_SYS_USER_VALIDATE"
+            last_session_keepalive_status = None
+            last_session_keepalive_error_message = None
+            last_heartbeat_response = 0
+            last_heartbeat_time = 0
+            last_token_refresh_time = 0
+            last_session_keepalive_time = 0
+            last_non_heartbeat_message_time = 0
+            last_sync_package_time = 0
+            last_user_chat_time = 0
+            last_stream_watchdog_reconnect_time = 0
+            last_message_received_time = 0
+            last_successful_connection = 0
+            last_state_change_time = time.time()
+            heartbeat_interval = 15
+            heartbeat_timeout = 30
+            token_refresh_interval = 72000
+            token_retry_interval = 180
+            session_keepalive_interval = 600
+            session_keepalive_retry_interval = 180
+            stream_watchdog_grace_period = 60
+            message_stream_watchdog_timeout = 1800
+            cookie_refresh_enabled = True
+
+            @classmethod
+            def get_instance(cls, requested_cookie_id):
+                assert requested_cookie_id == cookie_id
+                return cls()
+
+            @classmethod
+            def get_auth_recovery_lock_state(cls, requested_cookie_id):
+                assert requested_cookie_id == cookie_id
+                return {"owner": "token_refresh"}
+
+            @classmethod
+            def is_manual_refresh_active(cls, requested_cookie_id, allow_handoff_recovery=False):
+                assert requested_cookie_id == cookie_id
+                return False
+
+            async def perform_session_keepalive(self):
+                raise AssertionError("runtime status must not perform keepalive")
+
+            async def refresh_token(self):
+                raise AssertionError("runtime status must not refresh token")
+
+        monkeypatch.setattr(reply_server.cookie_manager, "manager", ProbeForbiddenManager())
+        monkeypatch.setattr("XianyuAutoAsync.XianyuLive", FakeXianyuLive)
+
+        resp = client.get(f"/cookies/{cookie_id}/runtime-status", headers=auth)
+
+        assert resp.status_code == 200
+        runtime_status = resp.json()["runtime_status"]
+        assert runtime_status["monitoring_safe"] is True
+        assert runtime_status["monitoring_mode"] == "local_snapshot"
+        assert runtime_status["external_probe_performed"] is False
+        assert runtime_status["risk_control_status"] == "captcha_max_retries_exceeded"
+        assert "闲鱼仍要求账号验证" in runtime_status["risk_control_summary"]
+        assert "FAIL_SYS_USER_VALIDATE" in runtime_status["risk_control_detail"]
+        assert runtime_status["operator_action_required"] is True
+
     def test_manual_cookie_import_requires_body(self, client, auth):
         """POST /manual-cookie-import without required fields returns 422."""
         resp = client.post("/manual-cookie-import", json={}, headers=auth)
