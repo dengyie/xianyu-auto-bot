@@ -88,6 +88,10 @@ def test_user_backup_import_rebinds_owned_resources_and_skips_system_settings(cl
                 ["id", "name", "type", "config", "enabled", "user_id"],
                 [[301, "imported channel", "webhook", json.dumps({"url": "https://example.test"}), 1, 999]],
             ),
+            "keywords": _backup_table(
+                ["cookie_id", "keyword", "reply", "item_id"],
+                [["imported_cookie", "imported-keyword", "reply", ""]],
+            ),
             "system_settings": _backup_table(
                 ["key", "value", "description"],
                 [["phase75_user_import_probe", "after", "should not import for user restore"]],
@@ -109,7 +113,39 @@ def test_user_backup_import_rebinds_owned_resources_and_skips_system_settings(cl
     assert db_manager.get_all_delivery_rules(999) == []
     assert [channel["id"] for channel in db_manager.get_notification_channels(2)] == [301]
     assert db_manager.get_notification_channels(999) == []
+    assert db_manager.get_keywords_with_item_id("imported_cookie") == [("imported-keyword", "reply", "")]
     assert db_manager.get_system_setting("phase75_user_import_probe") == "before"
+
+
+def test_user_backup_import_rejects_foreign_cookie_scoped_rows(client, auth, user_auth):
+    from db_manager import db_manager
+
+    client.post("/cookies", headers=auth, json={"id": "victim_cookie", "value": "unb=victim"})
+    backup_data = {
+        "version": "1.0",
+        "timestamp": 1,
+        "user_id": 999,
+        "data": {
+            "keywords": _backup_table(
+                ["cookie_id", "keyword", "reply", "item_id"],
+                [["victim_cookie", "foreign-keyword", "pwned", ""]],
+            ),
+            "default_replies": _backup_table(
+                ["cookie_id", "enabled", "reply_content", "reply_once"],
+                [["victim_cookie", 1, "foreign default", 0]],
+            ),
+        },
+    }
+
+    imported = client.post(
+        "/backup/import",
+        headers=user_auth,
+        files={"file": ("backup.json", json.dumps(backup_data), "application/json")},
+    )
+
+    assert imported.status_code == 200
+    assert db_manager.get_keywords_with_item_id("victim_cookie") == []
+    assert db_manager.get_default_reply("victim_cookie") is None
 
 
 def test_backup_import_preserves_validation_status_codes(client, user_auth):

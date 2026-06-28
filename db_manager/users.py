@@ -142,6 +142,20 @@ class DBUsersMixin:
                     'message_notifications', 'item_info', 'ai_reply_settings',
                     'ai_conversations'
                 }
+                cookie_scoped_tables = {
+                    'keywords', 'cookie_status', 'default_replies', 'message_notifications',
+                    'item_info', 'ai_reply_settings', 'ai_conversations'
+                }
+                allowed_cookie_ids = set()
+                if user_id is not None:
+                    cookies_table = data.get('cookies') or {}
+                    cookie_columns = cookies_table.get('columns') or []
+                    if 'id' in cookie_columns:
+                        id_index = cookie_columns.index('id')
+                        for row in cookies_table.get('rows') or []:
+                            if len(row) > id_index and row[id_index] not in (None, ''):
+                                allowed_cookie_ids.add(str(row[id_index]))
+
                 for table_name, table_data in data.items():
                     if user_id is not None and table_name not in user_import_tables:
                         continue
@@ -157,6 +171,27 @@ class DBUsersMixin:
 
                     if not rows:
                         continue
+
+                    if user_id is not None and table_name in cookie_scoped_tables:
+                        if 'cookie_id' not in columns:
+                            logger.warning(f"跳过缺少cookie_id列的用户备份表: {table_name}")
+                            continue
+                        cookie_id_index = columns.index('cookie_id')
+                        filtered_rows = []
+                        skipped_count = 0
+                        for row in rows:
+                            row_cookie_id = str(row[cookie_id_index]) if len(row) > cookie_id_index else ''
+                            if row_cookie_id in allowed_cookie_ids:
+                                filtered_rows.append(row)
+                            else:
+                                skipped_count += 1
+                        if skipped_count:
+                            logger.warning(
+                                f"用户备份导入跳过 {table_name} 中 {skipped_count} 条未归属当前导入Cookie的记录"
+                            )
+                        rows = filtered_rows
+                        if not rows:
+                            continue
 
                     # 用户级导入必须把资源重新绑定到当前用户，不能信任备份里的 user_id。
                     if user_id is not None and table_name in {
