@@ -836,3 +836,5 @@ stdout.txt
 
 # Smoke tests should be tracked
 !tests/smoke/test_*.py
+!tests/unit/
+!tests/unit/test_*.py
