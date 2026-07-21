@@ -86,3 +86,17 @@ def test_deployment_scripts_do_not_publish_default_password():
     for script_name in ("docker-deploy.sh", "docker-deploy.bat"):
         script = (project_root / script_name).read_text(encoding="utf-8-sig")
         assert "admin123" not in script
+
+
+def test_compose_passes_required_security_configuration():
+    project_root = Path(__file__).resolve().parents[2]
+    compose = (project_root / "docker-compose.yml").read_text(encoding="utf-8")
+
+    for variable in (
+        "ADMIN_PASSWORD",
+        "XIANYU_REPLY_API_KEY",
+        "CAPTCHA_CONTROL_API_KEY",
+        "SEND_MESSAGE_API_KEY",
+        "SECRET_ENCRYPTION_KEY",
+    ):
+        assert f"{variable}=${{{variable}:-}}" in compose
