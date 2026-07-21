@@ -23,6 +23,8 @@ services:
       # - ./custom_config.yml:/app/global_config.yml:ro
       # 可选：备份目录
       - ./backups:/app/backups:rw
+      # 上传图片持久化，并与运行时 UID/GID 保持一致
+      - ./static/uploads:/app/static/uploads:rw
       # Development only: mount source with docker-compose.override.yml when needed.
       # - .:/app:rw
     environment:
