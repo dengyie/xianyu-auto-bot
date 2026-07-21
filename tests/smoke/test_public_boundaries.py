@@ -100,3 +100,9 @@ def test_compose_passes_required_security_configuration():
         "SECRET_ENCRYPTION_KEY",
     ):
         assert f"{variable}=${{{variable}:-}}" in compose
+
+
+def test_docker_build_context_includes_dependency_lock():
+    project_root = Path(__file__).resolve().parents[2]
+    dockerignore = (project_root / ".dockerignore").read_text(encoding="utf-8")
+    assert "!requirements.lock" in dockerignore

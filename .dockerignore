@@ -146,6 +146,7 @@ credentials/
 *.pid
 *.sock
 *.lock
+!requirements.lock
 *.port
 
 # 性能分析文件
