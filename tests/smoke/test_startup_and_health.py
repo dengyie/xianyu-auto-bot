@@ -31,6 +31,14 @@ def test_reply_server_imports_from_arbitrary_working_directory(tmp_path):
     assert not (tmp_path / "realtime.log").exists()
 
 
+def test_file_log_collector_places_new_realtime_log_under_logs(tmp_path):
+    from file_log_collector import FileLogCollector
+
+    collector = FileLogCollector(root=tmp_path)
+
+    assert collector.log_file == str(tmp_path / "logs" / "realtime.log")
+
+
 def test_health_check_does_not_block_for_cpu_sampling(client):
     started_at = time.perf_counter()
 
