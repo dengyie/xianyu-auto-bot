@@ -102,6 +102,13 @@ def test_compose_passes_required_security_configuration():
         assert f"{variable}=${{{variable}:-}}" in compose
 
 
+def test_compose_persists_upload_directory_for_runtime_uid():
+    project_root = Path(__file__).resolve().parents[2]
+    compose = (project_root / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "- ./static/uploads:/app/static/uploads:rw" in compose
+
+
 def test_docker_build_context_includes_dependency_lock():
     project_root = Path(__file__).resolve().parents[2]
     dockerignore = (project_root / ".dockerignore").read_text(encoding="utf-8")
