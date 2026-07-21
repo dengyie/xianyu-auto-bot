@@ -36,6 +36,7 @@ RUN apt-get -o Acquire::Retries=5 update && \
         tzdata \
         curl \
         ca-certificates \
+        git \
         # 图像处理依赖
         libjpeg-dev \
         libpng-dev \

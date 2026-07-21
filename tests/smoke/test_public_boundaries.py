@@ -106,3 +106,17 @@ def test_docker_build_context_includes_dependency_lock():
     project_root = Path(__file__).resolve().parents[2]
     dockerignore = (project_root / ".dockerignore").read_text(encoding="utf-8")
     assert "!requirements.lock" in dockerignore
+
+
+def test_docker_image_installs_git_for_vcs_dependency():
+    project_root = Path(__file__).resolve().parents[2]
+    dockerfile = (project_root / "Dockerfile").read_text(encoding="utf-8")
+    system_dependencies = dockerfile.split(
+        "apt-get -o Acquire::Retries=5 install -y --no-install-recommends",
+        maxsplit=1,
+    )[1].split("&& apt-get clean", maxsplit=1)[0]
+
+    assert any(
+        line.strip().startswith("git ")
+        for line in system_dependencies.splitlines()
+    )
