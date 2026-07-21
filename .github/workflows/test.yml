@@ -1,0 +1,64 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DB_PATH: ':memory:'
+      SQL_LOG_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.28'
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Verify dependency lock
+        run: |
+          uv pip compile requirements.txt \
+            --python-version 3.11 \
+            --python-platform x86_64-unknown-linux-gnu \
+            --generate-hashes \
+            --no-emit-package slidex \
+            --output-file requirements.lock
+          git diff --exit-code -- requirements.lock
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system --require-hashes -r requirements.lock
+          uv pip install --system --no-deps "slidex @ git+https://github.com/dengyie/slidex.git@d4d372ba7554795bed8cb71c31b4d481366db99f"
+
+      - name: Prepare runtime directories
+        run: mkdir -p logs data backups static/uploads/images
+
+      - name: Run test suite
+        run: pytest -q --junitxml=test-results.xml
+
+      - name: Compile Python sources
+        run: python -m compileall -q -f .
+
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+
+      - name: Upload test report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-results
+          path: |
+            test-results.xml
+            logs/
+          if-no-files-found: ignore

@@ -85,9 +85,10 @@ zstandard>=0.22.0
 #
 # Python版本要求: 3.11+
 #
-# 安装命令:
+# 安装命令（生产、CI 和镜像使用 requirements.lock）:
 # pip install --upgrade pip
-# pip install -r requirements.txt
+# pip install --require-hashes -r requirements.lock
+# 重新生成: uv pip compile requirements.txt --python-version 3.11 --python-platform x86_64-unknown-linux-gnu --generate-hashes --no-emit-package slidex --output-file requirements.lock
 # playwright install chromium
 # playwright install-deps chromium  # Linux系统需要
 #

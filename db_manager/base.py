@@ -7,6 +7,7 @@ import random
 import string
 import re
 import sys
+from pathlib import Path
 import aiohttp
 import io
 import base64
@@ -18,6 +19,35 @@ from cryptography.fernet import Fernet, InvalidToken
 from loguru import logger
 
 from .security import generate_initial_admin_password, hash_user_password
+
+
+def validate_backup_database(path: Path) -> None:
+    """Validate an uploaded SQLite backup before it can replace the live DB."""
+    path = Path(path)
+    if not path.is_file():
+        raise ValueError("备份文件不存在")
+
+    connection = None
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        integrity = connection.execute("PRAGMA integrity_check").fetchone()
+        if not integrity or str(integrity[0]).lower() != "ok":
+            raise ValueError("备份数据库完整性校验失败")
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        required_tables = {"users", "cookies"}
+        missing = required_tables - tables
+        if missing:
+            raise ValueError("备份数据库缺少必要表")
+    except sqlite3.Error as exc:
+        raise ValueError("无效的数据库文件") from exc
+    finally:
+        if connection is not None:
+            connection.close()
 
 
 class DBBase:
@@ -1939,6 +1969,12 @@ Cookie数量: {cookie_count}
         if self.conn:
             self.conn.close()
             self.conn = None
+
+    def reinitialize(self):
+        """Reopen this manager after an atomic database file replacement."""
+        with self.lock:
+            self.close()
+            self.init_db()
     def get_connection(self):
         """获取数据库连接，如果已关闭则重新连接"""
         if self.conn is None:

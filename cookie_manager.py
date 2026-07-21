@@ -57,6 +57,47 @@ class CookieManager:
         logger.info(f"数据重新加载完成: Cookie {old_cookies_count} -> {new_cookies_count}, 关键字组 {old_keywords_count} -> {new_keywords_count}")
         return True
 
+    async def _pause_for_maintenance(self):
+        tasks = list(self.tasks.values())
+        self.tasks.clear()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def pause_for_maintenance(self):
+        """Stop account tasks while the database file is being replaced."""
+        current_loop = asyncio.get_running_loop()
+        if current_loop is self.loop:
+            await self._pause_for_maintenance()
+            return
+        future = asyncio.run_coroutine_threadsafe(
+            self._pause_for_maintenance(), self.loop
+        )
+        await asyncio.wrap_future(future)
+
+    async def _resume_after_maintenance(self):
+        for cookie_id, cookie_value in self.get_enabled_cookies().items():
+            if cookie_id in self.tasks:
+                continue
+            details = db_manager.get_cookie_details(cookie_id)
+            user_id = details.get("user_id") if details else None
+            self.tasks[cookie_id] = self.loop.create_task(
+                self._run_xianyu(cookie_id, cookie_value, user_id)
+            )
+
+    async def resume_after_maintenance(self):
+        """Restart enabled account tasks after runtime state is reloaded."""
+        current_loop = asyncio.get_running_loop()
+        if current_loop is self.loop:
+            await self._resume_after_maintenance()
+            return
+        future = asyncio.run_coroutine_threadsafe(
+            self._resume_after_maintenance(), self.loop
+        )
+        await asyncio.wrap_future(future)
+
     # ------------------------ 内部协程 ------------------------
     async def _run_xianyu(self, cookie_id: str, cookie_value: str, user_id: int = None):
         """在事件循环中启动 XianyuLive.main"""
@@ -432,4 +473,4 @@ class CookieManager:
 
 
 # 在 Start.py 中会把此变量赋值为具体实例
-manager: Optional[CookieManager] = None 
+manager: Optional[CookieManager] = None

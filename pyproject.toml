@@ -1,0 +1,8 @@
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+timeout = 30
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.pytest.ini_options.markers]
+smoke = "Smoke tests for critical path coverage"

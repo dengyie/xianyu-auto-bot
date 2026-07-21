@@ -296,6 +296,8 @@ build/
 !CONTRIBUTING.md
 !SECURITY.md
 !LICENSE.md
+!docs/
+!docs/**/*.md
 
 # 临时配置文件
 *.local.yml
@@ -310,7 +312,7 @@ config.*.yml
 .editorconfig
 .flake8
 .pylintrc
-pyproject.toml
+# pyproject.toml is tracked so pytest/packaging settings are reproducible.
 setup.cfg
 tox.ini
 

@@ -87,10 +87,11 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 RUN node --version && npm --version
 ENV NODE_PATH=/usr/lib/node_modules
 
-# 复制requirements.txt并安装Python依赖
-COPY requirements.txt .
+# 使用经过解析和哈希校验的生产依赖锁文件
+COPY requirements.txt requirements.lock ./
 RUN pip install --no-cache-dir --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple&& \
-    pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+    pip install --no-cache-dir --require-hashes -r requirements.lock -i https://pypi.tuna.tsinghua.edu.cn/simple && \
+    pip install --no-cache-dir --no-deps "slidex @ git+https://github.com/dengyie/slidex.git@d4d372ba7554795bed8cb71c31b4d481366db99f"
 
 # 复制项目文件
 COPY . .

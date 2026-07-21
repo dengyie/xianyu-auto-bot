@@ -15,10 +15,11 @@ from pathlib import Path
 class FileLogCollector:
     """基于文件监控的日志收集器"""
     
-    def __init__(self, max_logs: int = 2000):
+    def __init__(self, max_logs: int = 2000, root: Optional[Path] = None):
         self.max_logs = max_logs
         self.logs = deque(maxlen=max_logs)
         self.lock = threading.Lock()
+        self.root = (root or Path(__file__).resolve().parent).resolve()
         
         # 日志文件路径
         self.log_file = None
@@ -31,21 +32,21 @@ class FileLogCollector:
         """设置文件监控"""
         # 查找日志文件
         possible_files = [
-            "xianyu.log",
-            "app.log", 
-            "system.log",
-            "logs/xianyu.log",
-            "logs/app.log"
+            self.root / "xianyu.log",
+            self.root / "app.log",
+            self.root / "system.log",
+            self.root / "logs" / "xianyu.log",
+            self.root / "logs" / "app.log",
         ]
         
         for file_path in possible_files:
-            if os.path.exists(file_path):
-                self.log_file = file_path
+            if file_path.exists():
+                self.log_file = str(file_path)
                 break
         
         if not self.log_file:
             # 如果没有找到现有文件，创建一个新的
-            self.log_file = "realtime.log"
+            self.log_file = str(self.root / "realtime.log")
             
         # 设置loguru输出到文件
         self.setup_loguru_file_output()
@@ -60,7 +61,7 @@ class FileLogCollector:
             from loguru import logger
             
             # 确保logs目录存在
-            logs_dir = Path("logs")
+            logs_dir = self.root / "logs"
             logs_dir.mkdir(parents=True, exist_ok=True)
             
             # 添加实时日志文件输出（用于Web界面实时监控）
@@ -76,7 +77,7 @@ class FileLogCollector:
             
             # 添加按日期轮转的日志文件输出到logs目录
             logger.add(
-                "logs/xianyu_{time:YYYY-MM-DD}.log",
+                str(logs_dir / "xianyu_{time:YYYY-MM-DD}.log"),
                 format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
                 level="INFO",
                 rotation="00:00",  # 每天午夜轮转
@@ -212,21 +213,21 @@ _file_collector = None
 _file_collector_lock = threading.Lock()
 
 
-def get_file_log_collector() -> FileLogCollector:
+def get_file_log_collector(root: Optional[Path] = None) -> FileLogCollector:
     """获取全局文件日志收集器实例"""
     global _file_collector
     
     if _file_collector is None:
         with _file_collector_lock:
             if _file_collector is None:
-                _file_collector = FileLogCollector(max_logs=2000)
+                _file_collector = FileLogCollector(max_logs=2000, root=root)
     
     return _file_collector
 
 
-def setup_file_logging():
+def setup_file_logging(root: Optional[Path] = None):
     """设置文件日志系统"""
-    collector = get_file_log_collector()
+    collector = get_file_log_collector(root=root)
     return collector
 
 

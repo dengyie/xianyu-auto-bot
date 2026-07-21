@@ -76,6 +76,19 @@ class TestAuth:
         resp = client.get("/api/orders")
         assert resp.status_code == 401
 
+    def test_verify_and_logout_preserve_auth_contract(self, client, admin_token):
+        headers = {"Authorization": f"Bearer {admin_token}"}
+
+        verified = client.get("/verify", headers=headers)
+        logged_out = client.post("/logout", headers=headers)
+        verified_after_logout = client.get("/verify", headers=headers)
+
+        assert verified.status_code == 200
+        assert verified.json()["authenticated"] is True
+        assert verified.json()["username"] == "admin"
+        assert logged_out.json() == {"message": "已登出"}
+        assert verified_after_logout.json() == {"authenticated": False}
+
     def test_change_password_correct_current(self, client, admin_token):
         """POST /change-admin-password with correct current password succeeds."""
         resp = client.post(

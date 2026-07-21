@@ -3,12 +3,13 @@
 提供 WebSocket 和 HTTP 接口用于远程操作滑块验证
 """
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 from typing import Optional, List
 import asyncio
 import os
+import secrets
 from loguru import logger
 
 from slidex.remote import captcha_controller
@@ -16,6 +17,44 @@ from slidex.remote import captcha_controller
 
 # 创建路由器
 router = APIRouter(prefix="/api/captcha", tags=["captcha"])
+
+
+def _configured_control_key() -> str:
+    return (os.getenv("CAPTCHA_CONTROL_API_KEY") or "").strip()
+
+
+def _extract_bearer_value(value: str) -> str:
+    if value and value.lower().startswith("bearer "):
+        return value.split(" ", 1)[1].strip()
+    return ""
+
+
+def require_captcha_control_key(request: Request) -> None:
+    """Fail closed unless the remote-control API key matches."""
+    configured_key = _configured_control_key()
+    if not configured_key:
+        raise HTTPException(status_code=503, detail="远程验证码控制未配置")
+    provided_key = (
+        request.headers.get("X-Captcha-Control-Key", "").strip()
+        or _extract_bearer_value(request.headers.get("Authorization", ""))
+    )
+    if not provided_key or not secrets.compare_digest(provided_key, configured_key):
+        raise HTTPException(status_code=401, detail="远程验证码控制认证失败")
+
+
+async def _authorize_websocket(websocket: WebSocket) -> bool:
+    configured_key = _configured_control_key()
+    provided_key = (
+        websocket.headers.get("X-Captcha-Control-Key", "").strip()
+        or _extract_bearer_value(websocket.headers.get("Authorization", ""))
+    )
+    if not configured_key:
+        await websocket.close(code=1013, reason="captcha control is not configured")
+        return False
+    if not provided_key or not secrets.compare_digest(provided_key, configured_key):
+        await websocket.close(code=4401, reason="captcha control authentication failed")
+        return False
+    return True
 
 
 class MouseEvent(BaseModel):
@@ -49,6 +88,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     """
     WebSocket 连接用于实时传输截图和接收鼠标事件
     """
+    if not await _authorize_websocket(websocket):
+        return
     await websocket.accept()
     logger.info(f"🔌 WebSocket 连接建立: {session_id}")
     
@@ -169,7 +210,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 # =============================================================================
 
 @router.get("/sessions")
-async def get_active_sessions():
+async def get_active_sessions(_: None = Depends(require_captcha_control_key)):
     """获取所有活跃的验证会话"""
     sessions = []
     for session_id, data in captcha_controller.active_sessions.items():
@@ -186,7 +227,7 @@ async def get_active_sessions():
 
 
 @router.get("/session/{session_id}")
-async def get_session_info(session_id: str):
+async def get_session_info(session_id: str, _: None = Depends(require_captcha_control_key)):
     """获取指定会话的信息"""
     if session_id not in captcha_controller.active_sessions:
         raise HTTPException(status_code=404, detail="会话不存在")
@@ -203,7 +244,7 @@ async def get_session_info(session_id: str):
 
 
 @router.get("/screenshot/{session_id}")
-async def get_screenshot(session_id: str):
+async def get_screenshot(session_id: str, _: None = Depends(require_captcha_control_key)):
     """获取最新截图"""
     screenshot = await captcha_controller.update_screenshot(session_id)
     
@@ -214,7 +255,7 @@ async def get_screenshot(session_id: str):
 
 
 @router.post("/mouse_event")
-async def handle_mouse_event(event: MouseEvent):
+async def handle_mouse_event(event: MouseEvent, _: None = Depends(require_captcha_control_key)):
     """处理鼠标事件（HTTP方式，不推荐，建议使用WebSocket）"""
     success = await captcha_controller.handle_mouse_event(
         event.session_id,
@@ -236,7 +277,7 @@ async def handle_mouse_event(event: MouseEvent):
 
 
 @router.post("/check_completion")
-async def check_completion(request: SessionCheckRequest):
+async def check_completion(request: SessionCheckRequest, _: None = Depends(require_captcha_control_key)):
     """检查验证是否完成"""
     completed = await captcha_controller.check_completion(request.session_id)
     
@@ -248,7 +289,7 @@ async def check_completion(request: SessionCheckRequest):
 
 
 @router.post("/trajectory")
-async def submit_trajectory(request: TrajectorySubmitRequest):
+async def submit_trajectory(request: TrajectorySubmitRequest, _: None = Depends(require_captcha_control_key)):
     try:
         from slidex._trajectory_pool import SliderTrajectoryPool
         trajectory_pool = SliderTrajectoryPool()
@@ -262,7 +303,7 @@ async def submit_trajectory(request: TrajectorySubmitRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/session/{session_id}")
-async def close_session(session_id: str):
+async def close_session(session_id: str, _: None = Depends(require_captcha_control_key)):
     """关闭会话"""
     await captcha_controller.close_session(session_id)
     return {'success': True}
@@ -273,7 +314,7 @@ async def close_session(session_id: str):
 # =============================================================================
 
 @router.get("/status/{session_id}")
-async def get_captcha_status(session_id: str):
+async def get_captcha_status(session_id: str, _: None = Depends(require_captcha_control_key)):
     """
     获取验证状态
     用于前端轮询检查验证是否完成
@@ -300,7 +341,7 @@ async def get_captcha_status(session_id: str):
 
 
 @router.get("/control", response_class=HTMLResponse)
-async def captcha_control_page():
+async def captcha_control_page(_: None = Depends(require_captcha_control_key)):
     """返回滑块控制页面"""
     html_file = "captcha_control.html"
     
@@ -324,7 +365,7 @@ async def captcha_control_page():
 
 
 @router.get("/control/{session_id}", response_class=HTMLResponse)
-async def captcha_control_page_with_session(session_id: str):
+async def captcha_control_page_with_session(session_id: str, _: None = Depends(require_captcha_control_key)):
     """返回带会话ID的滑块控制页面"""
     html_file = "captcha_control.html"
     
@@ -339,4 +380,3 @@ async def captcha_control_page_with_session(session_id: str):
             return HTMLResponse(content=html_content)
     else:
         raise HTTPException(status_code=404, detail="前端页面不存在")
-

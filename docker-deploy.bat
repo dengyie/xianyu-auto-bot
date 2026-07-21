@@ -192,9 +192,9 @@ if /i "%COMPOSE_FILE%"=="docker-compose-cn.yml" set "WEB_PORT=8000"
 echo 📱 访问地址:
 echo    HTTP: http://localhost:%WEB_PORT%
 echo.
-echo 🔐 默认登录信息:
+echo 🔐 登录信息:
 echo    用户名: admin
-echo    密码:   admin123
+echo    密码:   请查看首次启动日志，或通过 ADMIN_PASSWORD 显式配置
 echo.
 echo 📊 管理命令:
 echo    查看状态: %~nx0 status

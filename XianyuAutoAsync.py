@@ -14079,10 +14079,13 @@ class XianyuLive:
                 "send_message": send_message,
                 "chat_id": chat_id
             }
+            internal_api_key = (os.getenv("XIANYU_REPLY_API_KEY") or "").strip()
+            request_headers = {"X-Internal-API-Key": internal_api_key} if internal_api_key else {}
 
             async with self.session.post(
                 api_config.get('url', 'http://localhost:8080/xianyu/reply'),
                 json=payload,
+                headers=request_headers,
                 timeout=timeout
             ) as response:
                 result = await response.json()

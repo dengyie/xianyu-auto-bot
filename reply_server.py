@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form, Request
+from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form, Request, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -25,6 +25,7 @@ import asyncio
 import concurrent.futures
 import queue
 from collections import defaultdict
+from contextlib import asynccontextmanager, suppress
 
 import cookie_manager
 from db_manager import db_manager
@@ -55,22 +56,47 @@ from utils.notification_dispatcher import (
 )
 from chat_event_hub import chat_event_hub, publish_chat_message
 from order_event_hub import order_event_hub, publish_order_update_event
+from app.api.routers.auth import create_auth_router
+from app.application.auth.sessions import SessionService
+from app.application.orders.delivery import (
+    ForbiddenOrder,
+    ManualDeliveryContextLoader,
+    MissingOrderAccount,
+    OrderNotFound,
+)
+from app.domain.accounts.ownership import (
+    AccountForbidden,
+    AccountOwnershipPolicy,
+    MissingAccountId,
+)
 
 from loguru import logger
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def ensure_runtime_directories(root: Path) -> None:
+    """Create runtime-owned directories relative to the project, never the CWD."""
+    for directory in (
+        root / "logs",
+        root / "data",
+        root / "backups",
+        root / "static" / "uploads" / "images",
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+
+
+ensure_runtime_directories(PROJECT_ROOT)
 
 # ==================== ?????? ====================
 import logging as _logging
 _analytics_fmt = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level} | {extra[user]} | {extra[action]} | {message}"
-_analytics_handler = _logging.FileHandler("logs/analytics.log", encoding="utf-8")
-_analytics_handler.setFormatter(_logging.Formatter("{asctime}.%(msecs)03d | %(levelname)s | %(user)s | %(action)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
 # Remove loguru-style format, use standard logging for analytics
 import logging as _analytics_logging
 _analytics_logger = _analytics_logging.getLogger("analytics")
 _analytics_logger.setLevel(_analytics_logging.INFO)
 _analytics_logger.propagate = False
-# Ensure logs/ dir exists
-os.makedirs(os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs"), exist_ok=True)
-_afh = _analytics_logging.FileHandler(os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "analytics.log"), encoding="utf-8")
+_afh = _analytics_logging.FileHandler(PROJECT_ROOT / "logs" / "analytics.log", encoding="utf-8")
 _afh.setFormatter(_analytics_logging.Formatter("%(asctime)s | %(levelname)s | %(user)s | %(action)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
 _analytics_logger.addHandler(_afh)
 
@@ -146,6 +172,7 @@ SESSION_TOKENS = {}  # 存储会话token: {token: {'user_id': int, 'username': s
 
 DOWNLOAD_TOKENS = {}  # 下载一次性token: {token_str: {user_id, file_id, exp}}
 TOKEN_EXPIRE_TIME = 24 * 60 * 60  # token过期时间：24小时
+session_service = SessionService(SESSION_TOKENS, TOKEN_EXPIRE_TIME)
 
 # HTTP Bearer认证
 security = HTTPBearer(auto_error=False)
@@ -1082,12 +1109,7 @@ def generate_token() -> str:
 
 def _remove_session_tokens_for_user(user_id: int) -> int:
     """Remove all in-memory session tokens for a user after permission changes."""
-    removed = 0
-    for token, token_data in list(SESSION_TOKENS.items()):
-        if token_data.get('user_id') == user_id:
-            del SESSION_TOKENS[token]
-            removed += 1
-    return removed
+    return session_service.revoke_user(user_id)
 
 
 def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[Dict[str, Any]]:
@@ -1095,30 +1117,7 @@ def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(s
     if not credentials:
         return None
 
-    token = credentials.credentials
-    if token not in SESSION_TOKENS:
-        return None
-
-    token_data = SESSION_TOKENS[token]
-
-    # 检查token是否过期
-    if time.time() - token_data['timestamp'] > TOKEN_EXPIRE_TIME:
-        del SESSION_TOKENS[token]
-        return None
-
-    user = db_manager.get_user_by_id(token_data.get('user_id'))
-    if not user or not user.get('is_active', True):
-        del SESSION_TOKENS[token]
-        return None
-
-    refreshed_token_data = {
-        **token_data,
-        'user_id': user['id'],
-        'username': user['username'],
-        'is_admin': user.get('is_admin', False),
-    }
-    SESSION_TOKENS[token] = refreshed_token_data
-    return refreshed_token_data
+    return session_service.verify(credentials.credentials, db_manager.get_user_by_id)
 
 
 def verify_admin_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Dict[str, Any]:
@@ -1293,12 +1292,42 @@ class ResponseModel(BaseModel):
     data: ResponseData
 
 
+@asynccontextmanager
+async def app_lifespan(app: FastAPI):
+    ensure_runtime_directories(PROJECT_ROOT)
+    setup_file_logging(root=PROJECT_ROOT)
+    logger.info("Web服务器启动，文件日志收集器已初始化")
+    scheduled_task = asyncio.create_task(
+        scheduled_task_checker(),
+        name="scheduled-task-checker",
+    )
+    app.state.scheduled_task = scheduled_task
+    logger.info("定时任务调度器已启动")
+    try:
+        yield
+    finally:
+        scheduled_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await scheduled_task
+
+
 app = FastAPI(
     title="Xianyu Management API",
     version="1.0.0",
     description="闲鱼管理系统API",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=app_lifespan,
+)
+app.state.maintenance_lock = asyncio.Lock()
+app.state.maintenance_mode = False
+app.include_router(
+    create_auth_router(
+        session_service=session_service,
+        verify_dependency=verify_token,
+        security=security,
+        admin_username=ADMIN_USERNAME,
+    )
 )
 
 # 注册刮刮乐远程控制路由
@@ -1308,23 +1337,14 @@ if CAPTCHA_ROUTER_AVAILABLE:
 else:
     logger.warning("⚠️ 刮刮乐远程控制路由未注册")
 
-# 初始化文件日志收集器
-setup_file_logging()
-
-# 添加一条测试日志
-from loguru import logger
-logger.info("Web服务器启动，文件日志收集器已初始化")
-
-
-# 启动定时任务调度器
-@app.on_event("startup")
-async def start_scheduled_task_checker():
-    """应用启动时开启定时任务检查协程"""
-    asyncio.create_task(scheduled_task_checker())
-    logger.info("定时任务调度器已启动")
-
-
 # 添加请求日志中间件
+@app.middleware("http")
+async def reject_during_database_maintenance(request: Request, call_next):
+    if request.url.path != "/health/live" and getattr(app.state, "maintenance_mode", False):
+        return JSONResponse(status_code=503, content={"detail": "系统正在执行数据库维护"})
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def log_requests(request, call_next):
     start_time = time.time()
@@ -1396,7 +1416,14 @@ if not os.path.exists(uploads_dir):
     logger.info(f"创建图片上传目录: {uploads_dir}")
 
 # 健康检查端点
+@app.get('/health/live')
+async def liveness_check():
+    """Constant-time process liveness check, including during maintenance."""
+    return {"status": "alive", "timestamp": time.time()}
+
+
 @app.get('/health')
+@app.get('/health/ready')
 async def health_check():
     """健康检查端点，用于Docker健康检查和负载均衡器"""
     try:
@@ -1413,7 +1440,7 @@ async def health_check():
 
         # 获取系统状态
         import psutil
-        cpu_percent = psutil.cpu_percent(interval=1)
+        cpu_percent = psutil.cpu_percent(interval=None)
         memory_info = psutil.virtual_memory()
 
         status = {
@@ -1743,14 +1770,7 @@ async def login(login_request: LoginRequest, request: Request):
                 # 获取is_admin状态
                 user_is_admin = user.get('is_admin', False)
 
-                # 生成token
-                token = generate_token()
-                SESSION_TOKENS[token] = {
-                    'user_id': user['id'],
-                    'username': user['username'],
-                    'is_admin': user_is_admin,
-                    'timestamp': time.time()
-                }
+                token = session_service.issue(user)
                 audit_event(
                     category="auth",
                     action="login",
@@ -1821,14 +1841,7 @@ async def login(login_request: LoginRequest, request: Request):
             # 获取is_admin状态
             user_is_admin = user.get('is_admin', False)
 
-            # 生成token
-            token = generate_token()
-            SESSION_TOKENS[token] = {
-                'user_id': user['id'],
-                'username': user['username'],
-                'is_admin': user_is_admin,
-                'timestamp': time.time()
-            }
+            token = session_service.issue(user)
 
             if user_is_admin:
                 logger.info(f"【{user['username']}#{user['id']}】邮箱登录成功（管理员）(IP: {client_ip})")
@@ -1895,14 +1908,7 @@ async def login(login_request: LoginRequest, request: Request):
         # 获取is_admin状态
         user_is_admin = user.get('is_admin', False)
 
-        # 生成token
-        token = generate_token()
-        SESSION_TOKENS[token] = {
-            'user_id': user['id'],
-            'username': user['username'],
-            'is_admin': user_is_admin,
-            'timestamp': time.time()
-        }
+        token = session_service.issue(user)
 
         if user_is_admin:
             logger.info(f"【{user['username']}#{user['id']}】验证码登录成功（管理员）(IP: {client_ip})")
@@ -1923,27 +1929,6 @@ async def login(login_request: LoginRequest, request: Request):
             success=False,
             message="请提供有效的登录信息"
         )
-
-
-# 验证token接口
-@app.get('/verify')
-async def verify(user_info: Optional[Dict[str, Any]] = Depends(verify_token)):
-    if user_info:
-        return {
-            "authenticated": True,
-            "user_id": user_info['user_id'],
-            "username": user_info['username'],
-            "is_admin": user_info.get('is_admin', False) or user_info['username'] == ADMIN_USERNAME
-        }
-    return {"authenticated": False}
-
-
-# 登出接口
-@app.post('/logout')
-async def logout(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
-    if credentials and credentials.credentials in SESSION_TOKENS:
-        del SESSION_TOKENS[credentials.credentials]
-    return {"message": "已登出"}
 
 
 # 销售额数据查询接口
@@ -2540,6 +2525,7 @@ async def register(request: RegisterRequest):
 
 # /send-message API key must be explicitly configured.
 API_SECRET_ENV = "SEND_MESSAGE_API_KEY"
+XIANYU_REPLY_API_KEY_ENV = "XIANYU_REPLY_API_KEY"
 
 class SendMessageRequest(BaseModel):
     api_key: str
@@ -2575,6 +2561,18 @@ def verify_api_key(api_key: str) -> bool:
         return False
 
 
+def require_xianyu_reply_api_key(
+    internal_api_key: Optional[str] = Header(default=None, alias="X-Internal-API-Key"),
+) -> None:
+    """Authenticate the internal automatic-reply callback."""
+    configured_key = (os.getenv(XIANYU_REPLY_API_KEY_ENV) or "").strip()
+    if not configured_key:
+        logger.error("xianyu reply API key is not configured")
+        raise HTTPException(status_code=503, detail="内部回复服务未配置")
+    if not internal_api_key or not secrets.compare_digest(internal_api_key, configured_key):
+        raise HTTPException(status_code=401, detail="内部服务认证失败")
+
+
 @app.post('/send-message', response_model=SendMessageResponse)
 async def send_message_api(request: SendMessageRequest):
     """发送消息API接口（使用秘钥验证）"""
@@ -2599,14 +2597,6 @@ async def send_message_api(request: SendMessageRequest):
             return SendMessageResponse(
                 success=False,
                 message="API秘钥不能为空"
-            )
-
-        # 特殊测试秘钥处理
-        if cleaned_api_key == "zhinina_test_key":
-            logger.info("使用测试秘钥，直接返回成功")
-            return SendMessageResponse(
-                success=True,
-                message="接口验证成功"
             )
 
         # 验证API秘钥
@@ -2701,7 +2691,10 @@ async def send_message_api(request: SendMessageRequest):
 
 
 @app.post("/xianyu/reply", response_model=ResponseModel)
-async def xianyu_reply(req: RequestModel):
+async def xianyu_reply(
+    req: RequestModel,
+    _: None = Depends(require_xianyu_reply_api_key),
+):
     msg_template = match_reply(req.cookie_id, req.send_message)
     is_default_reply = False
 
@@ -3458,14 +3451,14 @@ def _get_user_cookies_map(current_user: Dict[str, Any]) -> Dict[str, str]:
 
 
 def _ensure_cookie_access(cid: str, current_user: Dict[str, Any]) -> str:
-    cleaned_cid = str(cid or '').strip()
-    if not cleaned_cid:
+    try:
+        return AccountOwnershipPolicy(db_manager).require_owned_account(
+            current_user['user_id'], cid
+        )
+    except MissingAccountId:
         raise HTTPException(status_code=400, detail="缺少Cookie ID")
-
-    user_cookies = _get_user_cookies_map(current_user)
-    if cleaned_cid not in user_cookies:
+    except AccountForbidden:
         raise HTTPException(status_code=403, detail="无权限操作该Cookie")
-    return cleaned_cid
 
 
 def _normalize_runtime_timestamp(value: Any) -> Optional[float]:
@@ -10070,7 +10063,7 @@ def update_ai_reply_settings(cookie_id: str, settings: AIReplySettings, current_
             raise HTTPException(status_code=500, detail='CookieManager 未就绪')
 
         # 保存设置
-        settings_dict = settings.dict()
+        settings_dict = settings.model_dump()
         success = db_manager.save_ai_reply_settings(cookie_id, settings_dict)
 
         if success:
@@ -11288,112 +11281,108 @@ def download_database_backup(admin_user: Dict[str, Any] = Depends(require_admin)
 @app.post('/admin/backup/upload')
 async def upload_database_backup(admin_user: Dict[str, Any] = Depends(require_admin),
                                 backup_file: UploadFile = File(...)):
-    """上传并恢复数据库备份文件（管理员专用）"""
-    import os
+    """Validate and atomically restore a database backup."""
     import shutil
-    import sqlite3
-    from datetime import datetime
+    from db_manager.base import validate_backup_database
+
+    filename = backup_file.filename or ""
+    if Path(filename).suffix.lower() != ".db":
+        raise HTTPException(status_code=400, detail="只支持.db格式的数据库文件")
+
+    current_db_path = Path(str(db_manager.db_path)).resolve()
+    if str(db_manager.db_path) == ":memory:":
+        raise HTTPException(status_code=400, detail="内存数据库不支持文件恢复")
+    current_db_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_file_path = current_db_path.parent / f".restore-{uuid.uuid4().hex}.db"
+    rollback_stage_path = current_db_path.parent / f".rollback-{uuid.uuid4().hex}.db"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    backup_current_path = current_db_path.parent / f"xianyu_data_backup_{timestamp}.db"
+    max_size = 100 * 1024 * 1024
+    total_size = 0
 
     try:
-        log_with_user('info', f"开始上传数据库备份: {backup_file.filename}", admin_user)
-
-        # 验证文件类型
-        if not backup_file.filename.endswith('.db'):
-            log_with_user('warning', f"无效的备份文件类型: {backup_file.filename}", admin_user)
-            raise HTTPException(status_code=400, detail="只支持.db格式的数据库文件")
-
-        # 验证文件大小（限制100MB）
-        content = await backup_file.read()
-        if len(content) > 100 * 1024 * 1024:  # 100MB
-            log_with_user('warning', f"备份文件过大: {len(content)} bytes", admin_user)
-            raise HTTPException(status_code=400, detail="备份文件大小不能超过100MB")
-
-        # 验证是否为有效的SQLite数据库文件
-        temp_file_path = f"temp_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+        with temp_file_path.open("wb") as temp_file:
+            while chunk := await backup_file.read(1024 * 1024):
+                total_size += len(chunk)
+                if total_size > max_size:
+                    raise HTTPException(status_code=400, detail="备份文件大小不能超过100MB")
+                temp_file.write(chunk)
 
         try:
-            # 保存临时文件
-            with open(temp_file_path, 'wb') as temp_file:
-                temp_file.write(content)
+            validate_backup_database(temp_file_path)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="无效或不完整的数据库文件")
 
-            # 验证数据库文件完整性
-            conn = sqlite3.connect(temp_file_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-            tables = cursor.fetchall()
-            conn.close()
+        maintenance_lock = app.state.maintenance_lock
+        if maintenance_lock.locked():
+            raise HTTPException(status_code=503, detail="数据库维护正在进行")
 
-            # 检查是否包含必要的表
-            table_names = [table[0] for table in tables]
-            required_tables = ['users', 'cookies']  # 最基本的表
+        async with maintenance_lock:
+            app.state.maintenance_mode = True
+            runtime_manager = cookie_manager.manager
+            paused = False
+            try:
+                if runtime_manager is not None and hasattr(runtime_manager, "pause_for_maintenance"):
+                    await runtime_manager.pause_for_maintenance()
+                    paused = True
 
-            missing_tables = [table for table in required_tables if table not in table_names]
-            if missing_tables:
-                log_with_user('warning', f"备份文件缺少必要的表: {missing_tables}", admin_user)
-                raise HTTPException(status_code=400, detail=f"备份文件不完整，缺少表: {', '.join(missing_tables)}")
+                with db_manager.lock:
+                    db_manager.close()
+                    if not current_db_path.exists():
+                        raise RuntimeError("live database does not exist")
+                    shutil.copy2(current_db_path, backup_current_path)
+                    os.replace(temp_file_path, current_db_path)
+                    db_manager.reinitialize()
 
-            log_with_user('info', f"备份文件验证通过，包含 {len(table_names)} 个表", admin_user)
+                test_users = db_manager.get_all_users()
+                if runtime_manager is not None and hasattr(runtime_manager, "reload_from_db"):
+                    runtime_manager.reload_from_db()
 
-        except sqlite3.Error as e:
-            log_with_user('error', f"备份文件验证失败: {str(e)}", admin_user)
-            if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
-            raise HTTPException(status_code=400, detail="无效的数据库文件")
+                if paused and runtime_manager is not None and hasattr(runtime_manager, "resume_after_maintenance"):
+                    await runtime_manager.resume_after_maintenance()
+                    paused = False
 
-        # 备份当前数据库
-        from db_manager import db_manager
-        current_db_path = db_manager.db_path
-
-        # 生成备份文件路径（与原数据库在同一目录）
-        db_dir = os.path.dirname(current_db_path)
-        backup_filename = f"xianyu_data_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
-        backup_current_path = os.path.join(db_dir, backup_filename)
-
-        if os.path.exists(current_db_path):
-            shutil.copy2(current_db_path, backup_current_path)
-            log_with_user('info', f"当前数据库已备份为: {backup_current_path}", admin_user)
-
-        # 关闭当前数据库连接
-        if hasattr(db_manager, 'conn') and db_manager.conn:
-            db_manager.conn.close()
-            log_with_user('info', "已关闭当前数据库连接", admin_user)
-
-        # 替换数据库文件
-        shutil.move(temp_file_path, current_db_path)
-        log_with_user('info', f"数据库文件已替换: {current_db_path}", admin_user)
-
-        # 重新初始化数据库连接（使用原有的db_path）
-        db_manager.__init__(db_manager.db_path)
-        log_with_user('info', "数据库连接已重新初始化", admin_user)
-
-        # 验证新数据库
-        try:
-            test_users = db_manager.get_all_users()
-            log_with_user('info', f"数据库恢复成功，包含 {len(test_users)} 个用户", admin_user)
-        except Exception as e:
-            log_with_user('error', f"数据库恢复后验证失败: {str(e)}", admin_user)
-            # 如果验证失败，尝试恢复原数据库
-            if os.path.exists(backup_current_path):
-                shutil.copy2(backup_current_path, current_db_path)
-                db_manager.__init__()
-                log_with_user('info', "已恢复原数据库", admin_user)
-            raise HTTPException(status_code=500, detail="数据库恢复失败，已回滚到原数据库")
-
-        return {
-            "success": True,
-            "message": "数据库恢复成功",
-            "backup_file": backup_current_path,
-            "user_count": len(test_users)
-        }
-
+                SESSION_TOKENS.clear()
+                DOWNLOAD_TOKENS.clear()
+                log_with_user('info', f"数据库恢复成功，包含 {len(test_users)} 个用户", admin_user)
+                return {
+                    "success": True,
+                    "message": "数据库恢复成功，所有旧会话已失效",
+                    "user_count": len(test_users),
+                }
+            except Exception as restore_error:
+                logger.error(f"数据库恢复失败，开始回滚: {type(restore_error).__name__}")
+                try:
+                    with db_manager.lock:
+                        db_manager.close()
+                        if backup_current_path.exists():
+                            shutil.copy2(backup_current_path, rollback_stage_path)
+                            os.replace(rollback_stage_path, current_db_path)
+                        db_manager.reinitialize()
+                    if runtime_manager is not None and hasattr(runtime_manager, "reload_from_db"):
+                        runtime_manager.reload_from_db()
+                except Exception as rollback_error:
+                    logger.critical(f"数据库回滚失败: {type(rollback_error).__name__}")
+                    raise HTTPException(status_code=500, detail="数据库恢复与回滚均失败")
+                raise HTTPException(status_code=500, detail="数据库恢复失败，原数据库已恢复")
+            finally:
+                if paused and runtime_manager is not None and hasattr(runtime_manager, "resume_after_maintenance"):
+                    try:
+                        await runtime_manager.resume_after_maintenance()
+                    except Exception as resume_error:
+                        logger.critical(f"账号任务恢复失败: {type(resume_error).__name__}")
+                app.state.maintenance_mode = False
     except HTTPException:
         raise
-    except Exception as e:
-        log_with_user('error', f"上传数据库备份失败: {str(e)}", admin_user)
-        # 清理临时文件
-        if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        logger.error(f"上传数据库备份失败: {type(exc).__name__}")
+        raise HTTPException(status_code=500, detail="数据库恢复失败")
+    finally:
+        for cleanup_path in (temp_file_path, rollback_stage_path):
+            try:
+                cleanup_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 @app.get('/admin/backup/list')
 def list_backup_files(admin_user: Dict[str, Any] = Depends(require_admin)):
@@ -12511,19 +12500,19 @@ async def manual_deliver_order(order_id: str, current_user: Dict[str, Any] = Dep
         user_id = current_user['user_id']
         log_with_user('info', f"手动发货请求: 订单 {order_id}", current_user)
 
-        # 获取订单信息
-        order = db_manager.get_order_by_id(order_id)
-        if not order:
+        try:
+            delivery_context = ManualDeliveryContextLoader(db_manager).load(
+                order_id, user_id
+            )
+        except OrderNotFound:
             return {"success": False, "delivered": False, "message": "订单不存在"}
-
-        # 验证订单属于当前用户
-        cookie_id = order.get('cookie_id')
-        if not cookie_id:
+        except MissingOrderAccount:
             return {"success": False, "delivered": False, "message": "订单缺少账号信息"}
-
-        cookie_info = db_manager.get_cookie_details(cookie_id)
-        if not cookie_info or cookie_info.get('user_id') != user_id:
+        except ForbiddenOrder:
             return {"success": False, "delivered": False, "message": "无权操作此订单"}
+
+        order = delivery_context.order
+        cookie_id = delivery_context.cookie_id
 
         # 获取 XianyuLive 实例
         xianyu_instance = cookie_manager.manager.get_xianyu_instance(cookie_id) if cookie_manager.manager else None
