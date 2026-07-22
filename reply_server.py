@@ -2751,6 +2751,11 @@ class ManualCookieImportRequest(BaseModel):
     show_browser: bool = False
 
 
+class QRLoginSubmitCookiesRequest(BaseModel):
+    """扫码风控验证后，用户侧成功 Cookie 回传（哪边成功用哪边）。"""
+    cookies: str
+
+
 class CookieStatusIn(BaseModel):
     enabled: bool
 
@@ -6213,6 +6218,118 @@ async def check_qr_code_status(session_id: str, current_user: Dict[str, Any] = D
     except Exception as e:
         log_with_user('error', f"检查扫码登录状态异常: {str(e)}", current_user)
         return {'status': 'error', 'message': str(e)}
+
+
+@app.post("/qr-login/submit-cookies/{session_id}")
+async def submit_qr_login_cookies(
+    session_id: str,
+    request: QRLoginSubmitCookiesRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """用户侧人脸/验证成功后回传 Cookie，以用户成功为准完成扫码登录。
+
+    闲鱼不会回调我们。用户在手机/本机浏览器完成验证后，成功 Cookie
+    落在用户侧浏览器；此接口把该 Cookie 写回当前扫码会话并走原有收口。
+    """
+    try:
+        session = qr_login_manager.sessions.get(session_id)
+        if not session:
+            return {'success': False, 'status': 'not_found', 'message': '会话不存在或已过期'}
+        if session.user_id is not None and session.user_id != current_user['user_id']:
+            return {'success': False, 'status': 'forbidden', 'message': '无权限访问该会话'}
+
+        apply_result = qr_login_manager.apply_external_cookies(
+            session_id,
+            request.cookies,
+            source='user',
+        )
+        if not apply_result.get('success'):
+            log_with_user(
+                'warning',
+                f"用户侧Cookie提交失败: {session_id}, {apply_result.get('message')}",
+                current_user,
+            )
+            return apply_result
+
+        log_with_user(
+            'info',
+            f"用户侧Cookie提交成功: {session_id}, unb={apply_result.get('unb')}",
+            current_user,
+        )
+
+        # 若尚未进入后台账号落地处理，立即触发（与 /qr-login/check 成功路径一致）
+        already = qr_check_processed.get(session_id) or {}
+        if already.get('processed') and already.get('account_info'):
+            return {
+                'success': True,
+                'status': 'success',
+                'message': '已使用用户侧Cookie完成登录，账号已就绪',
+                'unb': apply_result.get('unb'),
+                'account_info': already.get('account_info'),
+                'already_processed': True,
+            }
+
+        if already.get('processing'):
+            return {
+                'success': True,
+                'status': 'confirmed',
+                'message': 'Cookie已接收，正在写入账号...',
+                'unb': apply_result.get('unb'),
+            }
+
+        cookies_info = qr_login_manager.get_session_cookies(session_id)
+        if not cookies_info:
+            return {
+                'success': True,
+                'status': 'success',
+                'message': apply_result.get('message') or '会话已标记成功，请继续轮询',
+                'unb': apply_result.get('unb'),
+            }
+
+        qr_check_processed[session_id] = {
+            'processed': False,
+            'processing': True,
+            'timestamp': time.time(),
+        }
+
+        async def _process_user_cookies_background():
+            try:
+                account_info = await process_qr_login_cookies(
+                    cookies_info['cookies'],
+                    cookies_info['unb'],
+                    current_user,
+                )
+                log_with_user(
+                    'info',
+                    f"用户侧Cookie账号落地完成: {session_id}, 账号: {account_info.get('account_id', 'unknown')}",
+                    current_user,
+                )
+                qr_check_processed[session_id] = {
+                    'processed': True,
+                    'processing': False,
+                    'timestamp': time.time(),
+                    'account_info': account_info,
+                }
+            except Exception as bg_e:
+                log_with_user('error', f"用户侧Cookie后台落地失败: {bg_e}", current_user)
+                qr_check_processed[session_id] = {
+                    'processed': True,
+                    'processing': False,
+                    'timestamp': time.time(),
+                    'error': str(bg_e),
+                }
+
+        asyncio.create_task(_process_user_cookies_background())
+        return {
+            'success': True,
+            'status': 'confirmed',
+            'message': '已使用用户侧成功Cookie，正在写入账号...',
+            'unb': apply_result.get('unb'),
+        }
+
+    except Exception as e:
+        log_with_user('error', f"提交用户侧Cookie异常: {str(e)}", current_user)
+        return {'success': False, 'status': 'error', 'message': f'提交失败: {str(e)}'}
 
 
 # ========================= 轻量扫码登录(qr_login_lite) =========================

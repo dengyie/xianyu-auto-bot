@@ -1419,7 +1419,9 @@ async function checkQRCodeStatus() {
 function showVerificationRequired(data) {
     const screenshotPath = data.screenshot_path || '';
     const verificationUrl = data.verification_url || '';
-    const renderKey = `${screenshotPath}|${verificationUrl}`;
+    const endedElsewhere = !!data.verification_ended_elsewhere;
+    const serverMessage = data.message || '';
+    const renderKey = `${screenshotPath}|${verificationUrl}|${endedElsewhere}|${serverMessage}`;
     if (qrCodeVerificationState.renderKey === renderKey && renderKey) {
     return;
     }
@@ -1429,6 +1431,28 @@ function showVerificationRequired(data) {
     document.getElementById('qrCodeContainer').style.display = 'none';
     document.getElementById('qrCodeImage').style.display = 'none';
 
+    const userCookiePanel = `
+        <div class="mt-4 text-start border rounded p-3 bg-light">
+          <h6 class="mb-2">
+            <i class="bi bi-key me-1"></i>
+            已在手机/浏览器完成验证？以你的成功为准
+          </h6>
+          <p class="small text-muted mb-2">
+            若人脸是在你本机浏览器或手机完成的，成功 Cookie 在你那边。
+            请从已登录的 goofish/闲鱼 页面导出 Cookie（需含 <code>unb</code> 与
+            <code>cookie2</code>/<code>sgcookie</code> 等），粘贴后提交，系统按用户成功收口。
+          </p>
+          <textarea id="qrUserCookieInput" class="form-control font-monospace mb-2" rows="4"
+            placeholder="unb=...; cookie2=...; sgcookie=...; _tb_token_=... 或 JSON"></textarea>
+          <div class="d-flex gap-2 align-items-center">
+            <button type="button" class="btn btn-primary btn-sm" id="qrSubmitUserCookieBtn">
+              <i class="bi bi-check2-circle me-1"></i>提交成功侧 Cookie
+            </button>
+            <small id="qrUserCookieHint" class="text-muted"></small>
+          </div>
+        </div>
+    `;
+
     let verificationHtml = `
         <div class="text-center">
         <div class="mb-4">
@@ -1437,17 +1461,18 @@ function showVerificationRequired(data) {
         <h5 class="text-warning mb-3">账号需要闲鱼验证</h5>
         <div class="alert alert-warning border-0 mb-4">
             <i class="bi bi-info-circle me-2"></i>
-            <strong>检测到账号存在风控，系统已在服务端保持原始会话并等待验证完成</strong>
+            <strong>${serverMessage || '检测到账号存在风控，系统已在服务端保持原始会话并等待验证完成'}</strong>
         </div>
         <div class="alert alert-info border-0">
             <i class="bi bi-lightbulb me-2"></i>
             <small>
             <strong>验证步骤：</strong><br>
-            1. 使用手机闲鱼 APP 扫描下方二维码并完成验证<br>
-            2. 保持当前弹窗打开，系统会自动继续登录流程<br>
-            3. 如果二维码暂未出现，请稍等几秒，页面会自动刷新显示
+            1. 优先用手机闲鱼 APP 扫描服务端截图二维码并完成验证<br>
+            2. 保持当前弹窗打开，系统会自动继续登录<br>
+            3. 若你已在其它浏览器完成验证：粘贴该浏览器 Cookie 提交（以你成功为准）
             </small>
         </div>
+        ${userCookiePanel}
         </div>
     `;
 
@@ -1460,21 +1485,22 @@ function showVerificationRequired(data) {
         <h5 class="text-warning mb-3">账号需要闲鱼验证</h5>
         <div class="alert alert-warning border-0 mb-4">
             <i class="bi bi-info-circle me-2"></i>
-            <strong>检测到账号存在风控，系统已在服务端保持原始会话并生成验证二维码</strong>
+            <strong>${serverMessage || '检测到账号存在风控，系统已在服务端保持原始会话并生成验证二维码'}</strong>
         </div>
         <div class="mb-4">
-            <p class="text-muted mb-3">请使用手机闲鱼 APP 扫描下方二维码完成验证：</p>
+            <p class="text-muted mb-3">优先使用手机闲鱼 APP 扫描下方<strong>服务端</strong>二维码完成验证：</p>
             <img src="${normalizeStaticAssetPath(screenshotPath)}?t=${Date.now()}" alt="闲鱼验证二维码" class="img-fluid rounded border" style="max-width: 360px; width: 100%; height: auto;">
         </div>
         <div class="alert alert-info border-0">
             <i class="bi bi-lightbulb me-2"></i>
             <small>
             <strong>验证步骤：</strong><br>
-            1. 使用手机闲鱼 APP 扫描上方二维码并完成验证<br>
-            2. 保持当前弹窗打开，系统会自动继续登录流程<br>
-            3. 如果二维码失效，请关闭弹窗后重新发起扫码登录
+            1. 扫描上方二维码并完成验证（人脸落在服务端会话，可自动回调）<br>
+            2. 保持当前弹窗打开，系统会自动继续登录<br>
+            3. 若你已在其它浏览器完成验证：下方粘贴该浏览器 Cookie 提交
             </small>
         </div>
+        ${userCookiePanel}
         </div>
     `;
     } else if (verificationUrl) {
@@ -1486,10 +1512,10 @@ function showVerificationRequired(data) {
         <h5 class="text-warning mb-3">账号需要闲鱼验证</h5>
         <div class="alert alert-warning border-0 mb-4">
             <i class="bi bi-info-circle me-2"></i>
-            <strong>系统正在准备验证二维码，当前先保留一个兜底链接</strong>
+            <strong>${serverMessage || '系统正在准备验证二维码，当前先保留一个兜底链接'}</strong>
         </div>
         <div class="mb-4">
-            <p class="text-muted mb-3">二维码通常会自动出现；如果长时间未出现，可尝试使用兜底入口：</p>
+            <p class="text-muted mb-3">二维码通常会自动出现。若你用兜底链接在本机完成了验证，请把该浏览器 Cookie 贴回来：</p>
             <a href="${verificationUrl}" target="_blank" class="btn btn-outline-warning">
             <i class="bi bi-box-arrow-up-right me-2"></i>
             打开兜底验证页面
@@ -1498,9 +1524,10 @@ function showVerificationRequired(data) {
         <div class="alert alert-info border-0">
             <i class="bi bi-lightbulb me-2"></i>
             <small>
-            系统仍会继续尝试在当前会话中生成二维码并自动完成后续登录。
+            兜底页在你浏览器完成验证时，成功 Cookie 在你那边；请用下方表单提交，以你的成功为准。
             </small>
         </div>
+        ${userCookiePanel}
         </div>
     `;
     }
@@ -1516,10 +1543,79 @@ function showVerificationRequired(data) {
     verificationContainer.innerHTML = verificationHtml;
     verificationContainer.style.display = 'block';
 
+    const submitBtn = document.getElementById('qrSubmitUserCookieBtn');
+    if (submitBtn && !submitBtn.dataset.bound) {
+        submitBtn.dataset.bound = '1';
+        submitBtn.addEventListener('click', submitQrUserCookies);
+    }
+
     // 显示Toast提示
     if (!qrCodeVerificationState.toastShown) {
-    showToast('账号需要闲鱼验证，请使用当前页面展示的二维码完成验证', 'warning');
+    const toastMsg = endedElsewhere
+        ? '服务端验证页已结束；若你已在手机完成人脸，请粘贴成功侧 Cookie'
+        : '账号需要闲鱼验证：优先扫服务端二维码，或粘贴你侧成功 Cookie';
+    showToast(toastMsg, 'warning');
     qrCodeVerificationState.toastShown = true;
+    }
+}
+
+async function submitQrUserCookies() {
+    const sessionId = qrCodeSessionId || qrCodeVerificationState.activeSessionId;
+    const input = document.getElementById('qrUserCookieInput');
+    const hint = document.getElementById('qrUserCookieHint');
+    const btn = document.getElementById('qrSubmitUserCookieBtn');
+    const cookieText = (input && input.value || '').trim();
+    if (!sessionId) {
+        showToast('会话已失效，请重新发起扫码登录', 'danger');
+        return;
+    }
+    if (!cookieText) {
+        showToast('请先粘贴成功侧浏览器 Cookie', 'warning');
+        return;
+    }
+
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>提交中...';
+    }
+    if (hint) hint.textContent = '正在以用户成功为准写入...';
+
+    try {
+        const response = await fetch(`${apiBase}/qr-login/submit-cookies/${sessionId}`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${authToken}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ cookies: cookieText }),
+        });
+        const result = await response.json().catch(() => ({}));
+
+        if (!result.success) {
+            const msg = result.message || '提交失败';
+            if (hint) hint.textContent = msg;
+            showToast(msg, 'danger');
+            return;
+        }
+
+        if (hint) hint.textContent = result.message || '已接收，等待账号落地...';
+        showToast(result.message || '已使用你的成功 Cookie，继续登录中', 'success');
+        document.getElementById('statusText').textContent = '已收到用户侧Cookie，正在完成登录...';
+        document.getElementById('statusSpinner').style.display = 'inline-block';
+
+        // 触发/继续原有轮询，复用 check 成功收口
+        if (typeof checkQRCodeStatus === 'function') {
+            checkQRCodeStatus();
+        }
+    } catch (err) {
+        console.error('提交用户侧Cookie失败:', err);
+        if (hint) hint.textContent = '网络错误，请重试';
+        showToast('提交 Cookie 失败: ' + (err.message || err), 'danger');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-check2-circle me-1"></i>提交成功侧 Cookie';
+        }
     }
 }
 

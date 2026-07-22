@@ -66,7 +66,10 @@ class QRLoginSession:
         self.verification_url = None  # 风控验证URL
         self.screenshot_path = None  # 风控验证截图
         self.verification_task = None  # 风控验证页面保持任务
-        self.success_source = None  # 登录成功来源: api/browser
+        self.success_source = None  # 登录成功来源: api/browser/user
+        # 服务端验证页已变成「流程结束」——通常表示用户在其它浏览器完成了人脸
+        self.verification_ended_elsewhere = False
+        self.user_hint = None
 
     def is_expired(self) -> bool:
         """检查是否过期"""
@@ -132,11 +135,37 @@ class QRLoginManager:
 
     def _normalize_cookie_dict(self, cookies: Any) -> Dict[str, str]:
         """将不同形式的Cookie数据统一转换为字典"""
+        if cookies is None:
+            return {}
+
+        if isinstance(cookies, str):
+            text = cookies.replace("﻿", "").strip()
+            if not text:
+                return {}
+            # 兼容 JSON 对象字符串：{"unb":"...","cookie2":"..."}
+            if text[0] in "{[":
+                try:
+                    parsed = json.loads(text)
+                    return self._normalize_cookie_dict(parsed)
+                except Exception:
+                    pass
+            normalized = {}
+            for item in text.split(";"):
+                item = item.strip()
+                if not item or "=" not in item:
+                    continue
+                name, value = item.split("=", 1)
+                name = name.strip()
+                value = value.strip()
+                if name and value:
+                    normalized[str(name)] = str(value)
+            return normalized
+
         if isinstance(cookies, dict) or hasattr(cookies, 'items'):
             return {
                 str(name): str(value)
                 for name, value in cookies.items()
-                if name and value is not None
+                if name and value is not None and str(value) != ""
             }
 
         normalized = {}
@@ -145,7 +174,7 @@ class QRLoginManager:
                 continue
             name = cookie.get('name')
             value = cookie.get('value')
-            if name and value is not None:
+            if name and value is not None and str(value) != "":
                 normalized[str(name)] = str(value)
         return normalized
 
@@ -220,18 +249,58 @@ class QRLoginManager:
         cookies = await context.cookies()
         return self._normalize_cookie_dict(cookies)
 
+    async def _detect_verification_ended_elsewhere(self, session: QRLoginSession, page) -> bool:
+        """检测服务端验证页是否已变成「流程结束」（常见于用户在其它浏览器完成人脸）。"""
+        try:
+            text = await page.evaluate("() => (document.body && document.body.innerText) || ''")
+        except Exception:
+            text = ""
+        text = str(text or "")
+        ended_markers = (
+            "身份校验流程已经结束",
+            "校验流程已经结束",
+            "请关闭页面",
+            "验证已完成",
+            "验证完成，请关闭",
+        )
+        if any(marker in text for marker in ended_markers):
+            if not session.verification_ended_elsewhere:
+                session.verification_ended_elsewhere = True
+                session.user_hint = (
+                    "服务端验证页显示流程已结束：说明人脸多半已在你的手机/浏览器完成。"
+                    "请把成功侧浏览器的 Cookie 粘贴回系统，以用户成功为准完成登录。"
+                )
+                logger.warning(
+                    f"扫码登录验证页已结束（疑似用户侧完成）: {session.session_id}, URL: {page.url}"
+                )
+            return True
+        return False
+
     async def _probe_browser_login_success(self, session: QRLoginSession, page, context) -> bool:
-        """在浏览器侧兜底判断验证是否已经完成"""
+        """在浏览器侧兜底判断验证是否已经完成。
+
+        原则：哪边先拿到完整登录 Cookie，就以那边为准。
+        URL 跳转只是辅助信号，不能否定已到手的 Cookie。
+        """
         current_url = page.url
         cookie_dict = await self._context_cookie_dict(context)
         cookies_ready = self._has_completed_login_cookies(cookie_dict)
         url_ready = self._is_logged_in_url(current_url)
+        await self._detect_verification_ended_elsewhere(session, page)
 
         if cookies_ready and url_ready:
             logger.info(
                 f"扫码登录浏览器侧检测成功（当前页）: {session.session_id}, URL: {current_url}"
             )
             return self._mark_session_success(session, cookie_dict, 'browser', require_complete_cookies=True)
+
+        # 服务端上下文里已经有完整登录 Cookie：以 Cookie 为准，不必死等 URL
+        if cookies_ready:
+            logger.info(
+                f"扫码登录浏览器侧已持有完整Cookie，按Cookie成功收口: {session.session_id}, URL: {current_url}"
+            )
+            if self._mark_session_success(session, cookie_dict, 'browser', require_complete_cookies=True):
+                return True
 
         if not cookies_ready:
             return False
@@ -247,12 +316,23 @@ class QRLoginManager:
             im_root = await probe_page.query_selector('.rc-virtual-list-holder-inner')
             has_im_root = im_root is not None
 
-            if self._is_logged_in_url(probe_url):
+            if self._has_completed_login_cookies(probe_cookie_dict) and (
+                self._is_logged_in_url(probe_url) or has_im_root
+            ):
                 logger.info(
                     f"扫码登录浏览器侧探测成功: {session.session_id}, "
                     f"probe_url: {probe_url}, has_im_root: {has_im_root}"
                 )
                 return self._mark_session_success(session, probe_cookie_dict, 'browser', require_complete_cookies=True)
+
+            # 探测后若 Cookie 已完整，同样以 Cookie 为准
+            if self._has_completed_login_cookies(probe_cookie_dict):
+                logger.info(
+                    f"扫码登录浏览器探测后Cookie完整，按Cookie成功收口: {session.session_id}"
+                )
+                return self._mark_session_success(
+                    session, probe_cookie_dict, 'browser', require_complete_cookies=True
+                )
         except Exception as e:
             logger.debug(f"扫码登录浏览器侧探测未确认成功: {session.session_id}, 错误: {e}")
         finally:
@@ -263,6 +343,67 @@ class QRLoginManager:
                     pass
 
         return False
+
+    def apply_external_cookies(self, session_id: str, cookies: Any, source: str = 'user') -> Dict[str, Any]:
+        """用「用户侧成功」拿到的 Cookie 收口会话。
+
+        用户在手机/本机浏览器完成人脸后，成功 Cookie 落在用户浏览器。
+        闲鱼不会回调我们，因此允许把用户侧 Cookie 提交回来，以用户成功为准。
+        """
+        session = self.sessions.get(session_id)
+        if not session:
+            return {'success': False, 'status': 'not_found', 'message': '会话不存在或已过期'}
+
+        if session.status == 'success' and session.unb and self._has_completed_login_cookies(session.cookies):
+            return {
+                'success': True,
+                'status': 'success',
+                'message': '会话已是登录成功状态',
+                'already_success': True,
+            }
+
+        if session.status not in {
+            'verification_required', 'scanned', 'waiting', 'processing', 'success'
+        }:
+            return {
+                'success': False,
+                'status': session.status,
+                'message': f'当前会话状态不允许提交Cookie: {session.status}',
+            }
+
+        cookie_dict = self._normalize_cookie_dict(cookies)
+        if not cookie_dict:
+            return {'success': False, 'status': session.status, 'message': 'Cookie为空或格式无法识别'}
+
+        if not self._has_completed_login_cookies(cookie_dict):
+            missing = []
+            if not cookie_dict.get('unb'):
+                missing.append('unb')
+            if not any(cookie_dict.get(k) for k in ('cookie2', 'havana_lgc2_77', '_tb_token_', 'sgcookie')):
+                missing.append('cookie2/havana_lgc2_77/_tb_token_/sgcookie 之一')
+            return {
+                'success': False,
+                'status': session.status,
+                'message': f'Cookie不完整，缺少: {", ".join(missing)}。请从已登录成功的 goofish/闲鱼 浏览器导出完整Cookie。',
+            }
+
+        if self._mark_session_success(session, cookie_dict, source, require_complete_cookies=True):
+            session.user_hint = None
+            logger.info(
+                f"扫码登录已按用户侧Cookie成功收口: {session_id}, source={source}, UNB={session.unb}"
+            )
+            return {
+                'success': True,
+                'status': 'success',
+                'message': '已使用用户侧成功Cookie完成登录',
+                'unb': session.unb,
+            }
+
+        return {
+            'success': False,
+            'status': session.status,
+            'message': 'Cookie已解析，但未能标记会话成功',
+        }
 
     async def _launch_verification_page(self, session_id: str):
         """在服务端打开验证页面并截取二维码，保持原始会话存活"""
@@ -715,12 +856,25 @@ class QRLoginManager:
         if session.status == 'verification_required':
             result['verification_url'] = session.verification_url
             result['screenshot_path'] = session.screenshot_path
-            result['message'] = '账号被风控，需要扫码验证' if session.screenshot_path else '账号被风控，正在准备验证二维码'
+            result['verification_ended_elsewhere'] = bool(session.verification_ended_elsewhere)
+            result['accept_user_cookies'] = True
+            if session.user_hint:
+                result['message'] = session.user_hint
+            elif session.verification_ended_elsewhere:
+                result['message'] = (
+                    '服务端验证页已结束。若你已在手机完成人脸，请粘贴成功侧浏览器Cookie完成登录'
+                )
+            else:
+                result['message'] = (
+                    '账号被风控：优先扫服务端截图二维码；'
+                    '若你已在其它浏览器完成验证，可直接粘贴该浏览器Cookie以用户成功为准'
+                ) if session.screenshot_path else '账号被风控，正在准备验证二维码'
 
         # 如果登录成功，返回Cookie信息
         if session.status == 'success' and session.cookies and session.unb:
             result['cookies'] = self._cookie_marshal(session.cookies)
             result['unb'] = session.unb
+            result['success_source'] = session.success_source
 
         return result
 
