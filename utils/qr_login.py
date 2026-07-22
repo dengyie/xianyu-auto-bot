@@ -107,7 +107,13 @@ class QRLoginManager:
         return "; ".join([f"{k}={v}" for k, v in cookies.items()])
 
     def _build_browser_cookies(self, target_url: str, cookies: Dict[str, str]) -> list[Dict[str, Any]]:
-        """将API会话中的Cookie转换为Playwright可用格式"""
+        """将API会话中的Cookie转换为Playwright可用格式。
+
+        Playwright 要求 cookie 使用 url，或 domain+path 二选一。
+        同时传 url 与 path 会直接报错：
+        "Cookie should have either url or path"，导致风控验证页无法打开，
+        人脸/扫码验证完成后也无法回写登录态。
+        """
         browser_cookies = []
         parsed = urlparse(target_url or self.host)
         target_origin = f"{parsed.scheme or 'https'}://{parsed.netloc or 'passport.goofish.com'}"
@@ -116,10 +122,10 @@ class QRLoginManager:
             if not name or value is None:
                 continue
             browser_cookies.append({
-                'name': name,
+                'name': str(name),
                 'value': str(value),
+                # 只用 url；path 由 Playwright 从 url 推导
                 'url': target_origin,
-                'path': '/',
             })
 
         return browser_cookies
