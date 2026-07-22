@@ -66,3 +66,40 @@ def test_get_session_status_accepts_user_cookies_flag():
     assert status["accept_user_cookies"] is True
     assert status["verification_ended_elsewhere"] is True
     assert "粘贴" in status["message"]
+
+
+def test_apply_external_cookies_rejects_expired_session():
+    manager = QRLoginManager()
+    session = _session(manager, status="verification_required")
+    session.created_time = 0  # force is_expired()
+
+    result = manager.apply_external_cookies(
+        session.session_id,
+        "unb=1; cookie2=2",
+        source="user",
+    )
+    assert result["success"] is False
+    assert result["status"] == "expired"
+    assert session.status == "expired"
+
+
+def test_apply_external_cookies_already_success_is_idempotent():
+    manager = QRLoginManager()
+    session = _session(manager)
+    first = manager.apply_external_cookies(
+        session.session_id,
+        "unb=111; cookie2=aaa",
+        source="user",
+    )
+    assert first["success"] is True
+
+    second = manager.apply_external_cookies(
+        session.session_id,
+        "unb=222; cookie2=bbb",
+        source="user",
+    )
+    assert second["success"] is True
+    assert second.get("already_success") is True
+    # 已成功会话不被后提交 Cookie 覆盖
+    assert session.unb == "111"
+    assert session.cookies["cookie2"] == "aaa"

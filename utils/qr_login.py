@@ -256,14 +256,16 @@ class QRLoginManager:
         except Exception:
             text = ""
         text = str(text or "")
+        # 避免单独匹配「请关闭页面」等泛化文案，降低误报
         ended_markers = (
             "身份校验流程已经结束",
             "校验流程已经结束",
-            "请关闭页面",
-            "验证已完成",
+            "验证已完成，请关闭",
             "验证完成，请关闭",
         )
-        if any(marker in text for marker in ended_markers):
+        if any(marker in text for marker in ended_markers) or (
+            "身份校验" in text and "已经结束" in text
+        ):
             if not session.verification_ended_elsewhere:
                 session.verification_ended_elsewhere = True
                 session.user_hint = (
@@ -299,12 +301,9 @@ class QRLoginManager:
             logger.info(
                 f"扫码登录浏览器侧已持有完整Cookie，按Cookie成功收口: {session.session_id}, URL: {current_url}"
             )
-            if self._mark_session_success(session, cookie_dict, 'browser', require_complete_cookies=True):
-                return True
+            return self._mark_session_success(session, cookie_dict, 'browser', require_complete_cookies=True)
 
-        if not cookies_ready:
-            return False
-
+        # Cookie 尚不完整时，再探测 /im —— 部分风控页要跳转后才落全量登录 Cookie
         probe_page = None
         try:
             probe_page = await context.new_page()
@@ -316,19 +315,10 @@ class QRLoginManager:
             im_root = await probe_page.query_selector('.rc-virtual-list-holder-inner')
             has_im_root = im_root is not None
 
-            if self._has_completed_login_cookies(probe_cookie_dict) and (
-                self._is_logged_in_url(probe_url) or has_im_root
-            ):
+            if self._has_completed_login_cookies(probe_cookie_dict):
                 logger.info(
                     f"扫码登录浏览器侧探测成功: {session.session_id}, "
                     f"probe_url: {probe_url}, has_im_root: {has_im_root}"
-                )
-                return self._mark_session_success(session, probe_cookie_dict, 'browser', require_complete_cookies=True)
-
-            # 探测后若 Cookie 已完整，同样以 Cookie 为准
-            if self._has_completed_login_cookies(probe_cookie_dict):
-                logger.info(
-                    f"扫码登录浏览器探测后Cookie完整，按Cookie成功收口: {session.session_id}"
                 )
                 return self._mark_session_success(
                     session, probe_cookie_dict, 'browser', require_complete_cookies=True
@@ -354,12 +344,21 @@ class QRLoginManager:
         if not session:
             return {'success': False, 'status': 'not_found', 'message': '会话不存在或已过期'}
 
+        if session.is_expired() and session.status not in {'success'}:
+            session.status = 'expired'
+            return {
+                'success': False,
+                'status': 'expired',
+                'message': '会话已过期，请重新发起扫码登录后再提交Cookie',
+            }
+
         if session.status == 'success' and session.unb and self._has_completed_login_cookies(session.cookies):
             return {
                 'success': True,
                 'status': 'success',
                 'message': '会话已是登录成功状态',
                 'already_success': True,
+                'unb': session.unb,
             }
 
         if session.status not in {

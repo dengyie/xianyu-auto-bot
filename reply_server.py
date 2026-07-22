@@ -6238,94 +6238,104 @@ async def submit_qr_login_cookies(
         if session.user_id is not None and session.user_id != current_user['user_id']:
             return {'success': False, 'status': 'forbidden', 'message': '无权限访问该会话'}
 
-        apply_result = qr_login_manager.apply_external_cookies(
-            session_id,
-            request.cookies,
-            source='user',
-        )
-        if not apply_result.get('success'):
+        cookie_text = str(request.cookies or '').replace('﻿', '').strip()
+        if not cookie_text:
+            return {'success': False, 'status': 'invalid', 'message': 'Cookie不能为空'}
+        if len(cookie_text) > 200_000:
+            return {'success': False, 'status': 'invalid', 'message': 'Cookie过长，请只粘贴闲鱼相关Cookie'}
+
+        # 与 /qr-login/check 共用锁，避免双开 process_qr_login_cookies
+        session_lock = qr_check_locks[session_id]
+        async with session_lock:
+            apply_result = qr_login_manager.apply_external_cookies(
+                session_id,
+                cookie_text,
+                source='user',
+            )
+            if not apply_result.get('success'):
+                log_with_user(
+                    'warning',
+                    f"用户侧Cookie提交失败: {session_id}, {apply_result.get('message')}",
+                    current_user,
+                )
+                return apply_result
+
             log_with_user(
-                'warning',
-                f"用户侧Cookie提交失败: {session_id}, {apply_result.get('message')}",
+                'info',
+                f"用户侧Cookie提交成功: {session_id}, unb={apply_result.get('unb')}",
                 current_user,
             )
-            return apply_result
 
-        log_with_user(
-            'info',
-            f"用户侧Cookie提交成功: {session_id}, unb={apply_result.get('unb')}",
-            current_user,
-        )
+            # 若尚未进入后台账号落地处理，立即触发（与 /qr-login/check 成功路径一致）
+            already = qr_check_processed.get(session_id) or {}
+            if already.get('processed') and already.get('account_info') and not already.get('error'):
+                return {
+                    'success': True,
+                    'status': 'success',
+                    'message': '已使用用户侧Cookie完成登录，账号已就绪',
+                    'unb': apply_result.get('unb'),
+                    'account_info': already.get('account_info'),
+                    'already_processed': True,
+                }
 
-        # 若尚未进入后台账号落地处理，立即触发（与 /qr-login/check 成功路径一致）
-        already = qr_check_processed.get(session_id) or {}
-        if already.get('processed') and already.get('account_info'):
-            return {
-                'success': True,
-                'status': 'success',
-                'message': '已使用用户侧Cookie完成登录，账号已就绪',
-                'unb': apply_result.get('unb'),
-                'account_info': already.get('account_info'),
-                'already_processed': True,
+            if already.get('processing') and not already.get('processed'):
+                return {
+                    'success': True,
+                    'status': 'confirmed',
+                    'message': 'Cookie已接收，正在写入账号...',
+                    'unb': apply_result.get('unb'),
+                }
+
+            # processed+error 或尚未落地：用当前会话 Cookie 重新/首次落地
+            cookies_info = qr_login_manager.get_session_cookies(session_id)
+            if not cookies_info:
+                return {
+                    'success': True,
+                    'status': 'success',
+                    'message': apply_result.get('message') or '会话已标记成功，请继续轮询',
+                    'unb': apply_result.get('unb'),
+                }
+
+            qr_check_processed[session_id] = {
+                'processed': False,
+                'processing': True,
+                'timestamp': time.time(),
             }
 
-        if already.get('processing'):
+            async def _process_user_cookies_background():
+                try:
+                    account_info = await process_qr_login_cookies(
+                        cookies_info['cookies'],
+                        cookies_info['unb'],
+                        current_user,
+                    )
+                    log_with_user(
+                        'info',
+                        f"用户侧Cookie账号落地完成: {session_id}, 账号: {account_info.get('account_id', 'unknown')}",
+                        current_user,
+                    )
+                    qr_check_processed[session_id] = {
+                        'processed': True,
+                        'processing': False,
+                        'timestamp': time.time(),
+                        'account_info': account_info,
+                    }
+                except Exception as bg_e:
+                    log_with_user('error', f"用户侧Cookie后台落地失败: {bg_e}", current_user)
+                    qr_check_processed[session_id] = {
+                        'processed': True,
+                        'processing': False,
+                        'timestamp': time.time(),
+                        'error': str(bg_e),
+                    }
+
+            asyncio.create_task(_process_user_cookies_background())
             return {
                 'success': True,
                 'status': 'confirmed',
-                'message': 'Cookie已接收，正在写入账号...',
+                'message': '已使用用户侧成功Cookie，正在写入账号...',
                 'unb': apply_result.get('unb'),
             }
-
-        cookies_info = qr_login_manager.get_session_cookies(session_id)
-        if not cookies_info:
-            return {
-                'success': True,
-                'status': 'success',
-                'message': apply_result.get('message') or '会话已标记成功，请继续轮询',
-                'unb': apply_result.get('unb'),
-            }
-
-        qr_check_processed[session_id] = {
-            'processed': False,
-            'processing': True,
-            'timestamp': time.time(),
-        }
-
-        async def _process_user_cookies_background():
-            try:
-                account_info = await process_qr_login_cookies(
-                    cookies_info['cookies'],
-                    cookies_info['unb'],
-                    current_user,
-                )
-                log_with_user(
-                    'info',
-                    f"用户侧Cookie账号落地完成: {session_id}, 账号: {account_info.get('account_id', 'unknown')}",
-                    current_user,
-                )
-                qr_check_processed[session_id] = {
-                    'processed': True,
-                    'processing': False,
-                    'timestamp': time.time(),
-                    'account_info': account_info,
-                }
-            except Exception as bg_e:
-                log_with_user('error', f"用户侧Cookie后台落地失败: {bg_e}", current_user)
-                qr_check_processed[session_id] = {
-                    'processed': True,
-                    'processing': False,
-                    'timestamp': time.time(),
-                    'error': str(bg_e),
-                }
-
-        asyncio.create_task(_process_user_cookies_background())
-        return {
-            'success': True,
-            'status': 'confirmed',
-            'message': '已使用用户侧成功Cookie，正在写入账号...',
-            'unb': apply_result.get('unb'),
-        }
 
     except Exception as e:
         log_with_user('error', f"提交用户侧Cookie异常: {str(e)}", current_user)

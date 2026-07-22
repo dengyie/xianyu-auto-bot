@@ -1415,21 +1415,58 @@ async function checkQRCodeStatus() {
     }
 }
 
+function escapeHtml(text) {
+    return String(text ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 // 显示需要验证的提示
 function showVerificationRequired(data) {
     const screenshotPath = data.screenshot_path || '';
     const verificationUrl = data.verification_url || '';
     const endedElsewhere = !!data.verification_ended_elsewhere;
     const serverMessage = data.message || '';
-    const renderKey = `${screenshotPath}|${verificationUrl}|${endedElsewhere}|${serverMessage}`;
-    if (qrCodeVerificationState.renderKey === renderKey && renderKey) {
-    return;
-    }
-    qrCodeVerificationState.renderKey = renderKey;
+    // 结构级 renderKey：不含动态 message，避免轮询时整页重绘清空用户已粘贴 Cookie
+    const structureKey = `${screenshotPath}|${verificationUrl}|${endedElsewhere ? '1' : '0'}`;
+    const existingInput = document.getElementById('qrUserCookieInput');
+    const preservedCookieText = existingInput ? existingInput.value : '';
+    const preservedHint = (document.getElementById('qrUserCookieHint') || {}).textContent || '';
+    const sameStructure = qrCodeVerificationState.renderKey === structureKey && structureKey;
 
     // 隐藏二维码区域
     document.getElementById('qrCodeContainer').style.display = 'none';
     document.getElementById('qrCodeImage').style.display = 'none';
+
+    // 创建验证提示容器
+    let verificationContainer = document.getElementById('verificationContainer');
+    if (!verificationContainer) {
+        verificationContainer = document.createElement('div');
+        verificationContainer.id = 'verificationContainer';
+        document.querySelector('#qrCodeLoginModal .modal-body').appendChild(verificationContainer);
+    }
+
+    if (sameStructure) {
+        // 只更新提示文案，不重建表单
+        const msgEl = verificationContainer.querySelector('[data-role="verification-message"]');
+        if (msgEl && serverMessage) {
+            msgEl.textContent = serverMessage;
+        }
+        verificationContainer.style.display = 'block';
+        return;
+    }
+
+    qrCodeVerificationState.renderKey = structureKey;
+    const safeMessage = escapeHtml(
+        serverMessage || '检测到账号存在风控，系统已在服务端保持原始会话并等待验证完成'
+    );
+    const safeVerificationUrl = escapeHtml(verificationUrl);
+    const safeScreenshotSrc = escapeHtml(
+        screenshotPath ? `${normalizeStaticAssetPath(screenshotPath)}?t=${Date.now()}` : ''
+    );
 
     const userCookiePanel = `
         <div class="mt-4 text-start border rounded p-3 bg-light">
@@ -1461,7 +1498,7 @@ function showVerificationRequired(data) {
         <h5 class="text-warning mb-3">账号需要闲鱼验证</h5>
         <div class="alert alert-warning border-0 mb-4">
             <i class="bi bi-info-circle me-2"></i>
-            <strong>${serverMessage || '检测到账号存在风控，系统已在服务端保持原始会话并等待验证完成'}</strong>
+            <strong data-role="verification-message">${safeMessage}</strong>
         </div>
         <div class="alert alert-info border-0">
             <i class="bi bi-lightbulb me-2"></i>
@@ -1485,11 +1522,11 @@ function showVerificationRequired(data) {
         <h5 class="text-warning mb-3">账号需要闲鱼验证</h5>
         <div class="alert alert-warning border-0 mb-4">
             <i class="bi bi-info-circle me-2"></i>
-            <strong>${serverMessage || '检测到账号存在风控，系统已在服务端保持原始会话并生成验证二维码'}</strong>
+            <strong data-role="verification-message">${escapeHtml(serverMessage || '检测到账号存在风控，系统已在服务端保持原始会话并生成验证二维码')}</strong>
         </div>
         <div class="mb-4">
             <p class="text-muted mb-3">优先使用手机闲鱼 APP 扫描下方<strong>服务端</strong>二维码完成验证：</p>
-            <img src="${normalizeStaticAssetPath(screenshotPath)}?t=${Date.now()}" alt="闲鱼验证二维码" class="img-fluid rounded border" style="max-width: 360px; width: 100%; height: auto;">
+            <img src="${safeScreenshotSrc}" alt="闲鱼验证二维码" class="img-fluid rounded border" style="max-width: 360px; width: 100%; height: auto;">
         </div>
         <div class="alert alert-info border-0">
             <i class="bi bi-lightbulb me-2"></i>
@@ -1512,11 +1549,11 @@ function showVerificationRequired(data) {
         <h5 class="text-warning mb-3">账号需要闲鱼验证</h5>
         <div class="alert alert-warning border-0 mb-4">
             <i class="bi bi-info-circle me-2"></i>
-            <strong>${serverMessage || '系统正在准备验证二维码，当前先保留一个兜底链接'}</strong>
+            <strong data-role="verification-message">${escapeHtml(serverMessage || '系统正在准备验证二维码，当前先保留一个兜底链接')}</strong>
         </div>
         <div class="mb-4">
             <p class="text-muted mb-3">二维码通常会自动出现。若你用兜底链接在本机完成了验证，请把该浏览器 Cookie 贴回来：</p>
-            <a href="${verificationUrl}" target="_blank" class="btn btn-outline-warning">
+            <a href="${safeVerificationUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-outline-warning">
             <i class="bi bi-box-arrow-up-right me-2"></i>
             打开兜底验证页面
             </a>
@@ -1532,20 +1569,20 @@ function showVerificationRequired(data) {
     `;
     }
 
-    // 创建验证提示容器
-    let verificationContainer = document.getElementById('verificationContainer');
-    if (!verificationContainer) {
-        verificationContainer = document.createElement('div');
-        verificationContainer.id = 'verificationContainer';
-        document.querySelector('#qrCodeLoginModal .modal-body').appendChild(verificationContainer);
-    }
-
     verificationContainer.innerHTML = verificationHtml;
     verificationContainer.style.display = 'block';
 
+    const inputEl = document.getElementById('qrUserCookieInput');
+    if (inputEl && preservedCookieText) {
+        inputEl.value = preservedCookieText;
+    }
+    const hintEl = document.getElementById('qrUserCookieHint');
+    if (hintEl && preservedHint) {
+        hintEl.textContent = preservedHint;
+    }
+
     const submitBtn = document.getElementById('qrSubmitUserCookieBtn');
-    if (submitBtn && !submitBtn.dataset.bound) {
-        submitBtn.dataset.bound = '1';
+    if (submitBtn) {
         submitBtn.addEventListener('click', submitQrUserCookies);
     }
 
@@ -1573,8 +1610,12 @@ async function submitQrUserCookies() {
         showToast('请先粘贴成功侧浏览器 Cookie', 'warning');
         return;
     }
+    if (btn && btn.dataset.submitting === '1') {
+        return;
+    }
 
     if (btn) {
+        btn.dataset.submitting = '1';
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>提交中...';
     }
@@ -1591,6 +1632,13 @@ async function submitQrUserCookies() {
         });
         const result = await response.json().catch(() => ({}));
 
+        if (!response.ok && !result.message) {
+            const msg = `提交失败（HTTP ${response.status}）`;
+            if (hint) hint.textContent = msg;
+            showToast(msg, 'danger');
+            return;
+        }
+
         if (!result.success) {
             const msg = result.message || '提交失败';
             if (hint) hint.textContent = msg;
@@ -1603,7 +1651,15 @@ async function submitQrUserCookies() {
         document.getElementById('statusText').textContent = '已收到用户侧Cookie，正在完成登录...';
         document.getElementById('statusSpinner').style.display = 'inline-block';
 
-        // 触发/继续原有轮询，复用 check 成功收口
+        // 若服务端已同步返回 account_info，直接走成功 UI
+        if (result.account_info) {
+            qrCodeVerificationState.completed = true;
+            clearQRCodeCheck();
+            handleQRCodeSuccess(result);
+            return;
+        }
+
+        // 否则继续原有轮询，复用 check 成功收口
         if (typeof checkQRCodeStatus === 'function') {
             checkQRCodeStatus();
         }
@@ -1613,6 +1669,7 @@ async function submitQrUserCookies() {
         showToast('提交 Cookie 失败: ' + (err.message || err), 'danger');
     } finally {
         if (btn) {
+            btn.dataset.submitting = '0';
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-check2-circle me-1"></i>提交成功侧 Cookie';
         }
