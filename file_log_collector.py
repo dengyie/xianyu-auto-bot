@@ -45,8 +45,12 @@ class FileLogCollector:
                 break
         
         if not self.log_file:
-            # 如果没有找到现有文件，创建一个新的
-            self.log_file = str(self.root / "logs" / "realtime.log")
+            # 兼容旧版本的根目录日志，但不重新选择不可写的遗留文件。
+            legacy_log_file = self.root / "realtime.log"
+            if legacy_log_file.is_file() and os.access(legacy_log_file, os.W_OK):
+                self.log_file = str(legacy_log_file)
+            else:
+                self.log_file = str(self.root / "logs" / "realtime.log")
             
         # 设置loguru输出到文件
         self.setup_loguru_file_output()

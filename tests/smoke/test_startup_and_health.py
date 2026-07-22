@@ -39,6 +39,29 @@ def test_file_log_collector_places_new_realtime_log_under_logs(tmp_path):
     assert collector.log_file == str(tmp_path / "logs" / "realtime.log")
 
 
+def test_file_log_collector_reuses_writable_legacy_realtime_log(tmp_path):
+    from file_log_collector import FileLogCollector
+
+    legacy_log = tmp_path / "realtime.log"
+    legacy_log.write_text("legacy log\n", encoding="utf-8")
+
+    collector = FileLogCollector(root=tmp_path)
+
+    assert collector.log_file == str(legacy_log)
+
+
+def test_file_log_collector_ignores_unwritable_legacy_realtime_log(tmp_path):
+    from file_log_collector import FileLogCollector
+
+    legacy_log = tmp_path / "realtime.log"
+    legacy_log.write_text("legacy log\n", encoding="utf-8")
+    legacy_log.chmod(0o444)
+
+    collector = FileLogCollector(root=tmp_path)
+
+    assert collector.log_file == str(tmp_path / "logs" / "realtime.log")
+
+
 def test_health_check_does_not_block_for_cpu_sampling(client):
     started_at = time.perf_counter()
 
