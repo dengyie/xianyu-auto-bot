@@ -3279,61 +3279,27 @@ class XianyuLive:
             return None
 
     async def _call_comment_api(self, order_id: str, comment: str) -> dict:
-        """调用好评接口"""
-        import aiohttp
-        
+        """调用本地闲鱼评价接口（不再外发 Cookie 到第三方 auto_comment_api_url）。"""
         try:
-            # 好评接口地址：从系统设置读取；未配置则拒绝调用，避免向未知第三方泄露 Cookie
-            comment_api_url = (db_manager.get_system_setting('auto_comment_api_url') or '').strip()
-            if not comment_api_url:
-                logger.warning(f"【{self.cookie_id}】未配置 auto_comment_api_url，跳过自动好评接口调用")
-                return {
-                    "success": False,
-                    "message": "未配置自动好评 API 地址，请在系统设置中填写后再启用此功能"
-                }
+            from utils.rate_service import RateService
 
-            # 获取当前账号的cookie
-            cookie_str = self.cookies_str
-            
-            payload = {
-                "cookie_str": cookie_str,
-                "order_id": order_id,
-                "comment": comment
-            }
-            
-            headers = {
-                "accept": "application/json",
-                "Content-Type": "application/json"
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(comment_api_url, json=payload, headers=headers, timeout=30) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        return {
-                            "success": result.get("status") == "success",
-                            "message": result.get("message", "好评成功")
-                        }
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"【{self.cookie_id}】好评接口返回错误: status={response.status}, body={error_text}")
-                        return {
-                            "success": False,
-                            "message": f"接口返回错误: {response.status}"
-                        }
-                        
+            rate_service = RateService(self.cookies_str, account_id=self.cookie_id)
+            result = await rate_service.rate_buyer(order_id, comment)
+
+            # RateService 可能在令牌过期时合并 Set-Cookie 并保存到 DB；同步当前实例内存 Cookie。
+            refreshed_cookie = getattr(rate_service, 'cookie_string', None)
+            if refreshed_cookie and refreshed_cookie != self.cookies_str:
+                self.cookies_str = refreshed_cookie
+                self.cookies = trans_cookies(refreshed_cookie)
+                logger.info(f"【{self.cookie_id}】自动评价后已同步刷新 Cookie 到当前实例")
+
+            return result
         except asyncio.TimeoutError:
             logger.error(f"【{self.cookie_id}】好评接口请求超时")
-            return {
-                "success": False,
-                "message": "请求超时"
-            }
+            return {"success": False, "message": "请求超时"}
         except Exception as e:
             logger.error(f"【{self.cookie_id}】调用好评接口异常: {self._safe_str(e)}")
-            return {
-                "success": False,
-                "message": str(e)
-            }
+            return {"success": False, "message": str(e)}
 
     def can_auto_delivery(self, order_id: str) -> bool:
         """检查是否可以进行自动发货（防重复发货）- 基于订单ID"""
