@@ -24,6 +24,11 @@ jobs:
           enable-cache: true
           python-version: '3.11'
 
+      # execjs / xianyu_utils 在 import 期需要 Node 运行时
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Create virtual environment
         run: |
           uv venv .venv --python 3.11
@@ -46,12 +51,17 @@ jobs:
           uv pip install --python .venv/bin/python --no-deps \
             "slidex @ git+https://github.com/dengyie/slidex.git@d4d372ba7554795bed8cb71c31b4d481366db99f"
           python -c "import sys; print(sys.executable); assert sys.version_info[:2] == (3, 11), sys.version"
+          node --version
+          python -c "import execjs; print('js_runtime=', execjs.get().name)"
 
       - name: Prepare runtime directories
-        run: mkdir -p logs data backups static/uploads/images
+        run: mkdir -p logs data backups static/uploads/images trajectory_history
 
       - name: Run test suite
-        run: pytest -q --junitxml=test-results.xml
+        # 硬超时防止无日志卡死；失败时保留 junit 便于定位
+        run: |
+          set -o pipefail
+          timeout --signal=KILL 480 python -m pytest -q --tb=line --durations=25 --junitxml=test-results.xml
 
       - name: Compile Python sources
         run: python -m compileall -q -f .
