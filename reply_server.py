@@ -38,6 +38,7 @@ from utils.xianyu_utils import trans_cookies
 from utils.image_utils import image_manager
 from utils.audit_logger import record_audit_event, status_from_http_status_code
 from utils.blacklist_service import blacklist_service
+from utils.auto_rate_task import auto_rate_task_loop
 from utils.client_ip import get_client_ip
 from utils.time_utils import (
     LOCAL_TIMEZONE,
@@ -1333,6 +1334,12 @@ async def app_lifespan(app: FastAPI):
     )
     app.state.scheduled_task = scheduled_task
     logger.info("定时任务调度器已启动")
+    auto_rate_task = asyncio.create_task(
+        auto_rate_task_loop(),
+        name="auto-rate-task-loop",
+    )
+    app.state.auto_rate_task = auto_rate_task
+    logger.info("自动补评价任务已启动")
     qr_cleanup_task = asyncio.create_task(
         _qr_check_cleanup_loop(),
         name="qr-check-cleanup-loop",
@@ -1344,6 +1351,9 @@ async def app_lifespan(app: FastAPI):
         scheduled_task.cancel()
         with suppress(asyncio.CancelledError):
             await scheduled_task
+        auto_rate_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await auto_rate_task
         qr_cleanup_task.cancel()
         with suppress(asyncio.CancelledError):
             await qr_cleanup_task

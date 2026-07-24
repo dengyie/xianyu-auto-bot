@@ -1101,6 +1101,8 @@ Cookie数量: {cookie_count}
 
             # 历史版本可能缺少订单平台时间字段，不能再依赖旧版本号分支触发
             self._ensure_orders_platform_time_columns(cursor)
+            self._ensure_orders_auto_comment_columns(cursor)
+            self._ensure_scheduled_rate_logs_table(cursor)
 
             # 迁移notification_templates表以支持新的模板类型
             self._migrate_notification_templates(cursor)
@@ -1165,6 +1167,54 @@ Cookie数量: {cookie_count}
             except sqlite3.OperationalError:
                 self._execute_sql(cursor, f"ALTER TABLE orders ADD COLUMN {order_time_column} TIMESTAMP")
                 logger.info(f"为orders表添加平台时间字段({order_time_column})")
+
+    def _ensure_orders_auto_comment_columns(self, cursor):
+        """确保 orders 表存在自动评价状态字段。"""
+        column_defs = {
+            "is_rated": "INTEGER DEFAULT 0",
+            "rated_at": "TIMESTAMP",
+            "rate_error": "TEXT",
+        }
+        for column_name, column_def in column_defs.items():
+            try:
+                self._execute_sql(cursor, f"SELECT {column_name} FROM orders LIMIT 1")
+            except Exception:
+                try:
+                    self._execute_sql(cursor, f"ALTER TABLE orders ADD COLUMN {column_name} {column_def}")
+                    logger.info(f"为orders表添加自动评价字段({column_name})")
+                except Exception as e:
+                    logger.warning(f"添加orders自动评价字段失败 {column_name}: {e}")
+        try:
+            self._execute_sql(
+                cursor,
+                "CREATE INDEX IF NOT EXISTS idx_orders_auto_comment ON orders(cookie_id, order_status, is_rated, updated_at)",
+            )
+        except Exception as e:
+            logger.warning(f"创建 orders 自动评价索引失败: {e}")
+
+    def _ensure_scheduled_rate_logs_table(self, cursor):
+        """创建自动评价执行日志表。"""
+        self._execute_sql(cursor, '''
+        CREATE TABLE IF NOT EXISTS scheduled_rate_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id TEXT NOT NULL,
+            cookie_id TEXT NOT NULL,
+            order_id TEXT,
+            item_id TEXT,
+            buyer_id TEXT,
+            buyer_nick TEXT,
+            comment TEXT,
+            status TEXT NOT NULL,
+            message TEXT,
+            raw_response TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (cookie_id) REFERENCES cookies(id) ON DELETE CASCADE
+        )
+        ''')
+        self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_scheduled_rate_logs_cookie_time ON scheduled_rate_logs(cookie_id, created_at DESC)")
+        self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_scheduled_rate_logs_batch ON scheduled_rate_logs(batch_id)")
+        self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_scheduled_rate_logs_order ON scheduled_rate_logs(order_id)")
+
     def _update_cards_table_constraints(self, cursor):
         """更新cards表的CHECK约束以支持image和yifan_api类型"""
         try:
@@ -1531,6 +1581,8 @@ Cookie数量: {cookie_count}
                     logger.info("为orders表添加双规格字段(spec_name_2, spec_value_2)")
 
                 self._ensure_orders_platform_time_columns(cursor)
+                self._ensure_orders_auto_comment_columns(cursor)
+                self._ensure_scheduled_rate_logs_table(cursor)
 
                 # 为item_info表添加多规格字段（如果不存在）
                 try:

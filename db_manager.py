@@ -1080,6 +1080,8 @@ Cookie数量: {cookie_count}
 
             # 历史版本可能缺少订单平台时间字段，不能再依赖旧版本号分支触发
             self._ensure_orders_platform_time_columns(cursor)
+            self._ensure_orders_auto_comment_columns(cursor)
+            self._ensure_scheduled_rate_logs_table(cursor)
 
             # 迁移notification_templates表以支持新的模板类型
             self._migrate_notification_templates(cursor)
@@ -1145,6 +1147,53 @@ Cookie数量: {cookie_count}
             except sqlite3.OperationalError:
                 self._execute_sql(cursor, f"ALTER TABLE orders ADD COLUMN {order_time_column} TIMESTAMP")
                 logger.info(f"为orders表添加平台时间字段({order_time_column})")
+
+    def _ensure_orders_auto_comment_columns(self, cursor):
+        """确保 orders 表存在自动评价状态字段。"""
+        column_defs = {
+            "is_rated": "INTEGER DEFAULT 0",
+            "rated_at": "TIMESTAMP",
+            "rate_error": "TEXT",
+        }
+        for column_name, column_def in column_defs.items():
+            try:
+                self._execute_sql(cursor, f"SELECT {column_name} FROM orders LIMIT 1")
+            except Exception:
+                try:
+                    self._execute_sql(cursor, f"ALTER TABLE orders ADD COLUMN {column_name} {column_def}")
+                    logger.info(f"为orders表添加自动评价字段({column_name})")
+                except Exception as e:
+                    logger.warning(f"添加orders自动评价字段失败 {column_name}: {e}")
+        try:
+            self._execute_sql(
+                cursor,
+                "CREATE INDEX IF NOT EXISTS idx_orders_auto_comment ON orders(cookie_id, order_status, is_rated, updated_at)",
+            )
+        except Exception as e:
+            logger.warning(f"创建 orders 自动评价索引失败: {e}")
+
+    def _ensure_scheduled_rate_logs_table(self, cursor):
+        """创建自动评价执行日志表。"""
+        self._execute_sql(cursor, '''
+        CREATE TABLE IF NOT EXISTS scheduled_rate_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id TEXT NOT NULL,
+            cookie_id TEXT NOT NULL,
+            order_id TEXT,
+            item_id TEXT,
+            buyer_id TEXT,
+            buyer_nick TEXT,
+            comment TEXT,
+            status TEXT NOT NULL,
+            message TEXT,
+            raw_response TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (cookie_id) REFERENCES cookies(id) ON DELETE CASCADE
+        )
+        ''')
+        self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_scheduled_rate_logs_cookie_time ON scheduled_rate_logs(cookie_id, created_at DESC)")
+        self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_scheduled_rate_logs_batch ON scheduled_rate_logs(batch_id)")
+        self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_scheduled_rate_logs_order ON scheduled_rate_logs(order_id)")
 
     def _update_cards_table_constraints(self, cursor):
         """更新cards表的CHECK约束以支持image和yifan_api类型"""
@@ -1533,6 +1582,8 @@ Cookie数量: {cookie_count}
                     logger.info("为orders表添加双规格字段(spec_name_2, spec_value_2)")
 
                 self._ensure_orders_platform_time_columns(cursor)
+                self._ensure_orders_auto_comment_columns(cursor)
+                self._ensure_scheduled_rate_logs_table(cursor)
 
                 # 为item_info表添加多规格字段（如果不存在）
                 try:
@@ -7607,7 +7658,8 @@ Cookie数量: {cookie_count}
                 SELECT order_id, item_id, buyer_id, buyer_nick, sid, spec_name, spec_value,
                        spec_name_2, spec_value_2, quantity, amount, bargain_flow_detected, bargain_success_detected,
                        order_status, pre_refund_status, cookie_id, platform_created_at, platform_paid_at,
-                       platform_completed_at, created_at, updated_at
+                       platform_completed_at, created_at, updated_at,
+                       COALESCE(is_rated, 0), rated_at, rate_error
                 FROM orders WHERE order_id = ?
                 ''', (order_id,))
 
@@ -7634,13 +7686,171 @@ Cookie数量: {cookie_count}
                         'platform_paid_at': row[17],
                         'platform_completed_at': row[18],
                         'created_at': row[19],
-                        'updated_at': row[20]
+                        'updated_at': row[20],
+                        'is_rated': bool(row[21]),
+                        'rated_at': row[22],
+                        'rate_error': row[23],
                     }
                 return None
 
             except Exception as e:
                 logger.error(f"获取订单信息失败: {order_id} - {e}")
                 return None
+
+    def mark_order_rated(self, order_id: str, is_rated: bool = True, error_message: str = None) -> bool:
+        """更新订单评价状态。"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                if is_rated:
+                    cursor.execute('''
+                    UPDATE orders
+                    SET is_rated = 1, rated_at = CURRENT_TIMESTAMP, rate_error = NULL, updated_at = CURRENT_TIMESTAMP
+                    WHERE order_id = ?
+                    ''', (order_id,))
+                else:
+                    cursor.execute('''
+                    UPDATE orders
+                    SET rate_error = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE order_id = ?
+                    ''', (str(error_message or '')[:1000], order_id))
+                self.conn.commit()
+                return cursor.rowcount > 0
+            except Exception as e:
+                logger.error(f"更新订单评价状态失败: order_id={order_id}, error={e}")
+                self.conn.rollback()
+                return False
+
+    def add_scheduled_rate_log(self, batch_id: str, cookie_id: str, order_id: str = None,
+                               item_id: str = None, buyer_id: str = None, buyer_nick: str = None,
+                               comment: str = None, status: str = 'failed', message: str = None,
+                               raw_response: Any = None) -> Optional[int]:
+        """写入自动评价执行日志。"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                if raw_response is None:
+                    raw_text = None
+                elif isinstance(raw_response, str):
+                    raw_text = raw_response
+                else:
+                    raw_text = json.dumps(raw_response, ensure_ascii=False, default=str)
+                cursor.execute('''
+                INSERT INTO scheduled_rate_logs (
+                    batch_id, cookie_id, order_id, item_id, buyer_id, buyer_nick,
+                    comment, status, message, raw_response
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    batch_id, cookie_id, order_id, item_id, buyer_id, buyer_nick,
+                    comment, status, message, raw_text
+                ))
+                log_id = cursor.lastrowid
+                self.conn.commit()
+                return log_id
+            except Exception as e:
+                logger.error(f"写入自动评价日志失败: {e}")
+                self.conn.rollback()
+                return None
+
+    def get_scheduled_rate_logs(self, user_id: int = None, cookie_id: str = None,
+                                limit: int = 100, offset: int = 0) -> List[Dict]:
+        """查询自动评价日志。"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                conditions = []
+                params = []
+                if user_id is not None:
+                    conditions.append("c.user_id = ?")
+                    params.append(user_id)
+                if cookie_id:
+                    conditions.append("l.cookie_id = ?")
+                    params.append(cookie_id)
+                where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+                params.extend([max(1, min(int(limit or 100), 500)), max(0, int(offset or 0))])
+                cursor.execute(f'''
+                SELECT l.id, l.batch_id, l.cookie_id, l.order_id, l.item_id, l.buyer_id,
+                       l.buyer_nick, l.comment, l.status, l.message, l.raw_response, l.created_at
+                FROM scheduled_rate_logs l
+                LEFT JOIN cookies c ON c.id = l.cookie_id
+                {where_sql}
+                ORDER BY l.created_at DESC, l.id DESC
+                LIMIT ? OFFSET ?
+                ''', params)
+                logs = []
+                for row in cursor.fetchall():
+                    logs.append({
+                        'id': row[0],
+                        'batch_id': row[1],
+                        'cookie_id': row[2],
+                        'order_id': row[3],
+                        'item_id': row[4],
+                        'buyer_id': row[5],
+                        'buyer_nick': row[6],
+                        'comment': row[7],
+                        'status': row[8],
+                        'message': row[9],
+                        'raw_response': row[10],
+                        'created_at': row[11],
+                    })
+                return logs
+            except Exception as e:
+                logger.error(f"查询自动评价日志失败: {e}")
+                return []
+
+    def get_pending_auto_comment_orders(self, cookie_id: str, limit: int = 5,
+                                        days: int = 10, cooldown_minutes: int = 30) -> List[Dict]:
+        """获取待自动补评价订单。"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                SELECT o.order_id, o.item_id, o.buyer_id, o.buyer_nick, o.sid,
+                       o.order_status, o.cookie_id, o.platform_completed_at, o.created_at, o.updated_at,
+                       o.is_rated, o.rated_at, o.rate_error
+                FROM orders o
+                WHERE o.cookie_id = ?
+                  AND o.order_status = 'completed'
+                  AND COALESCE(o.is_rated, 0) = 0
+                  AND datetime(COALESCE(o.platform_completed_at, o.updated_at, o.created_at)) >= datetime('now', ?)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM scheduled_rate_logs l
+                      WHERE l.order_id = o.order_id
+                        AND l.status IN ('failed', 'cookie_expired')
+                        AND datetime(l.created_at) >= datetime('now', ?)
+                  )
+                ORDER BY datetime(COALESCE(o.platform_completed_at, o.updated_at, o.created_at)) DESC
+                LIMIT ?
+                ''', (
+                    cookie_id,
+                    f'-{max(1, int(days or 10))} days',
+                    f'-{max(1, int(cooldown_minutes or 30))} minutes',
+                    max(1, min(int(limit or 5), 50)),
+                ))
+                orders = []
+                for row in cursor.fetchall():
+                    buyer_nick = self._sanitize_order_buyer_nick(row[3])
+                    if not buyer_nick:
+                        buyer_nick = self._lookup_buyer_nick_from_chat_messages(cookie_id, row[4], row[2])
+                    orders.append({
+                        'order_id': row[0],
+                        'item_id': row[1],
+                        'buyer_id': row[2],
+                        'buyer_nick': buyer_nick,
+                        'sid': row[4],
+                        'order_status': row[5],
+                        'cookie_id': row[6],
+                        'platform_completed_at': row[7],
+                        'created_at': row[8],
+                        'updated_at': row[9],
+                        'is_rated': bool(row[10]),
+                        'rated_at': row[11],
+                        'rate_error': row[12],
+                    })
+                return orders
+            except Exception as e:
+                logger.error(f"查询待自动评价订单失败: cookie_id={cookie_id}, error={e}")
+                return []
 
     def get_order_pre_refund_status(self, order_id: str) -> str:
         """获取订单退款前状态，用于退款撤销时跨重启回退。"""
