@@ -6149,9 +6149,17 @@ async def check_qr_code_status(session_id: str, current_user: Dict[str, Any] = D
                 return {'status': 'forbidden', 'message': '无权限访问该会话'}
 
             status_info = qr_login_manager.get_session_status(session_id)
-            log_with_user('info', f"获取会话状态1111111: {status_info}", current_user)
+            log_with_user(
+                'info',
+                f"获取会话状态: session={session_id}, status={status_info.get('status')}",
+                current_user,
+            )
             if status_info['status'] == 'success':
-                log_with_user('info', f"获取会话状态22222222: {status_info}", current_user)
+                log_with_user(
+                    'info',
+                    f"会话已成功: session={session_id}, unb_present={bool(status_info.get('unb'))}",
+                    current_user,
+                )
 
                 # 检查是否已经在后台处理中
                 if session_id in qr_check_processed and qr_check_processed[session_id].get('processing'):
@@ -6166,7 +6174,16 @@ async def check_qr_code_status(session_id: str, current_user: Dict[str, Any] = D
 
                 # 获取 Cookie 信息
                 cookies_info = qr_login_manager.get_session_cookies(session_id)
-                log_with_user('info', f"获取会话Cookie: {cookies_info}", current_user)
+                # 安全：只记录 Cookie key 名，绝不落 value（含 unb/cookie2/_tb_token_ 等劫持素材）
+                if cookies_info:
+                    _cookie_keys = sorted((cookies_info.get('cookies') or {}).keys()) if isinstance(cookies_info.get('cookies'), dict) else 'redacted'
+                    log_with_user(
+                        'info',
+                        f"获取会话Cookie: session={session_id}, unb_present={bool(cookies_info.get('unb'))}, keys={_cookie_keys}",
+                        current_user,
+                    )
+                else:
+                    log_with_user('info', f"获取会话Cookie: session={session_id}, empty", current_user)
 
                 if cookies_info:
                     # 异步处理 Cookie（不阻塞当前请求）
