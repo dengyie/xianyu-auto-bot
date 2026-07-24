@@ -950,21 +950,50 @@ QR_LITE_SESSION_TTL = 600  # 10 分钟未完结即清理
 # 不再需要单独的密码初始化，由数据库初始化时处理
 
 
-def cleanup_qr_check_records():
-    """清理过期的扫码检查记录"""
+QR_CHECK_RECORD_TTL = 3600  # 扫码检查记录存活上限（秒）
+# 保护清理逻辑的互斥锁，避免并发 check 请求同时遍历/删除字典
+_qr_check_cleanup_lock = asyncio.Lock()
+
+
+async def cleanup_qr_check_records():
+    """清理过期的扫码检查记录。
+
+    使用全局锁串行化：防止并发 check 请求同时遍历+删除字典
+    (RuntimeError: dictionary changed size during iteration)，也防止
+    两个请求同时 del 同一个 session 的 lock 后又各自新建出并发不互斥的锁。
+    跳过 processing=True 的记录——后台 Cookie 处理任务仍持有该 session 的锁。
+    """
     current_time = time.time()
-    expired_sessions = []
 
-    for session_id, record in qr_check_processed.items():
-        # 清理超过1小时的记录
-        if current_time - record['timestamp'] > 3600:
-            expired_sessions.append(session_id)
+    async with _qr_check_cleanup_lock:
+        # 先快照再判定，避免边遍历边删
+        snapshot = list(qr_check_processed.items())
+        expired_sessions = []
+        for session_id, record in snapshot:
+            if record.get('processing'):
+                continue
+            if current_time - record.get('timestamp', 0) > QR_CHECK_RECORD_TTL:
+                expired_sessions.append(session_id)
 
-    for session_id in expired_sessions:
-        if session_id in qr_check_processed:
-            del qr_check_processed[session_id]
-        if session_id in qr_check_locks:
-            del qr_check_locks[session_id]
+        for session_id in expired_sessions:
+            qr_check_processed.pop(session_id, None)
+            # defaultdict 访问会副作用创建新 lock，所以只在确已存在时删
+            if session_id in qr_check_locks:
+                del qr_check_locks[session_id]
+
+
+async def _qr_check_cleanup_loop(interval: int = 300):
+    """后台定期清理扫码检查记录，保证即使客户端停止轮询也能回收内存。
+
+    与请求路径触发互补：请求路径只在有新 check 请求时清理；客户端登录
+    完成或放弃后再不轮询时，记录会一直滞留直到下次轮询——本循环兜底。
+    """
+    while True:
+        try:
+            await cleanup_qr_check_records()
+        except Exception as e:  # noqa: BLE001 守护循环绝不能因单次异常退出
+            logger.warning(f"扫码检查记录后台清理异常: {e}")
+        await asyncio.sleep(interval)
 
 
 def _qr_runtime_handoff_error(account_info: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -1303,12 +1332,20 @@ async def app_lifespan(app: FastAPI):
     )
     app.state.scheduled_task = scheduled_task
     logger.info("定时任务调度器已启动")
+    qr_cleanup_task = asyncio.create_task(
+        _qr_check_cleanup_loop(),
+        name="qr-check-cleanup-loop",
+    )
+    app.state.qr_cleanup_task = qr_cleanup_task
     try:
         yield
     finally:
         scheduled_task.cancel()
         with suppress(asyncio.CancelledError):
             await scheduled_task
+        qr_cleanup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await qr_cleanup_task
 
 
 app = FastAPI(
@@ -6076,7 +6113,7 @@ async def check_qr_code_status(session_id: str, current_user: Dict[str, Any] = D
     """检查扫码登录状态"""
     try:
         # 清理过期记录
-        cleanup_qr_check_records()
+        await cleanup_qr_check_records()
 
         # 检查是否已经处理过
         if session_id in qr_check_processed:
