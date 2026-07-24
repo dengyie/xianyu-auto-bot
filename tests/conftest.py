@@ -10,6 +10,9 @@ if PROJECT_ROOT not in sys.path:
 
 os.environ["DB_PATH"] = ":memory:"
 os.environ.setdefault("SQL_LOG_ENABLED", "false")
+# 测试默认禁止真实浏览器兜底（DrissionPage/Chromium）；CI 无浏览器时会卡死到硬超时
+os.environ.setdefault("XY_SLIDER_DRISSION_FALLBACK", "false")
+os.environ.setdefault("XY_SLIDER_REMOTE_ENABLED", "false")
 
 import reply_server
 

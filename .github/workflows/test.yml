@@ -15,6 +15,9 @@ jobs:
     env:
       DB_PATH: ':memory:'
       SQL_LOG_ENABLED: 'false'
+      # 禁止 DrissionPage/远程滑块拉真浏览器；pytest-timeout 杀不掉 Chromium 连接线程
+      XY_SLIDER_DRISSION_FALLBACK: 'false'
+      XY_SLIDER_REMOTE_ENABLED: 'false'
     steps:
       - uses: actions/checkout@v4
 

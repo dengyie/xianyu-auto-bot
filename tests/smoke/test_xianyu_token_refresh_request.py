@@ -150,7 +150,10 @@ class TestXianyuTokenRefreshRequest:
         assert fake_response.json_content_type is None
 
     @pytest.mark.asyncio
-    async def test_handle_captcha_verification_marks_slider_scene_as_token_refresh(self):
+    async def test_handle_captcha_verification_wires_slider_into_orchestrator(self):
+        """生产路径走 run_slider_async_with_fallback；测试必须 mock 编排层，禁止真浏览器。"""
+        from utils.slider_orchestrator import SliderVerificationResult
+
         created_sliders = []
 
         class _FakeSlider:
@@ -159,12 +162,12 @@ class TestXianyuTokenRefreshRequest:
                 self.cookies_str = cookies_str
                 self.headless = headless
                 self.proxy = proxy
-                self.risk_trigger_scene = None
+                self.user_id = cookie_id
+                self.initial_cookies = cookies_str
                 created_sliders.append(self)
 
             async def solve(self, verification_url):
-                self.verification_url = verification_url
-                return True, {"cna": "test_cna", "_m_h5_tk": "test_tk", "cookie2": "test_cookie2"}
+                raise AssertionError("orchestrator mock should short-circuit before solve()")
 
         live = XianyuLive.__new__(XianyuLive)
         live.cookie_id = "token_refresh_captcha_scene_test"
@@ -173,24 +176,54 @@ class TestXianyuTokenRefreshRequest:
         live.connection_state = ConnectionState.DISCONNECTED
         live.ws = None
         live._safe_str = lambda exc: str(exc)
+        live.last_slider_captcha_engine = None
+        live.last_slider_result_message = None
 
         async def fake_send_notification(*_args, **_kwargs):
             return None
 
         live.send_token_refresh_notification = fake_send_notification
 
+        orchestrator_result = SliderVerificationResult(
+            success=False,
+            cookies=None,
+            engine="playwright",
+            x5_cookies={},
+            message="mocked primary failure without browser",
+        )
+
+        async def fake_orchestrator(slider, url, **kwargs):
+            assert slider is created_sliders[0]
+            assert "punish" in url
+            assert kwargs.get("engine") == "playwright"
+            return orchestrator_result
+
         with mock.patch("XianyuAutoAsync.db_manager.get_cookie_details", return_value={}), \
              mock.patch("XianyuAutoAsync.log_captcha_event"), \
-             mock.patch.object(XianyuAutoAsync, "_load_token_refresh_slider_runtime", return_value=(XianyuAutoAsync._LegacySliderConfig, _FakeSlider, "test")):
+             mock.patch.object(
+                 XianyuAutoAsync,
+                 "_load_token_refresh_slider_runtime",
+                 return_value=(XianyuAutoAsync._LegacySliderConfig, _FakeSlider, "test"),
+             ), \
+             mock.patch(
+                 "utils.slider_orchestrator.run_slider_async_with_fallback",
+                 side_effect=fake_orchestrator,
+             ):
             result = await live._handle_captcha_verification(
                 {"data": {"url": "https://example.com/punish?action=captcha"}}
             )
 
         assert result is None
         assert len(created_sliders) == 1
+        assert created_sliders[0].cookie_id == "token_refresh_captcha_scene_test"
+        assert live.last_slider_captcha_engine == "playwright"
+        assert "mocked primary failure" in (live.last_slider_result_message or "")
 
     @pytest.mark.asyncio
-    async def test_handle_captcha_verification_enables_account_persistent_profile_for_token_refresh(self):
+    async def test_handle_captcha_verification_merges_strict_success_cookies(self):
+        """严格成功（含 x5sec）时合并 cookie 并返回字符串，仍不启动真浏览器。"""
+        from utils.slider_orchestrator import SliderVerificationResult
+
         created_sliders = []
 
         class _FakeSlider:
@@ -199,32 +232,86 @@ class TestXianyuTokenRefreshRequest:
                 self.cookies_str = cookies_str
                 self.headless = headless
                 self.proxy = proxy
-                self.risk_trigger_scene = None
+                self.user_id = cookie_id
+                self.initial_cookies = cookies_str
                 created_sliders.append(self)
 
             async def solve(self, verification_url):
-                self.verification_url = verification_url
-                return True, {"cna": "test_cna", "_m_h5_tk": "test_tk", "cookie2": "test_cookie2"}
+                raise AssertionError("orchestrator mock should short-circuit before solve()")
 
         live = XianyuLive.__new__(XianyuLive)
         live.cookie_id = "token_refresh_persistent_profile_test"
-        live.cookies_str = "_m_h5_tk=test_token_12345; cookie2=dummy_cookie2"
+        live.cookies_str = "unb=u1; sgcookie=sg1; cookie2=dummy_cookie2; _m_h5_tk=test_token_12345; _m_h5_tk_enc=enc1; t=t1; cna=cna1"
+        live.cookies = {
+            "unb": "u1",
+            "sgcookie": "sg1",
+            "cookie2": "dummy_cookie2",
+            "_m_h5_tk": "test_token_12345",
+            "_m_h5_tk_enc": "enc1",
+            "t": "t1",
+            "cna": "cna1",
+        }
         live.proxy_config = {}
         live.connection_state = ConnectionState.DISCONNECTED
         live.ws = None
         live._safe_str = lambda exc: str(exc)
+        live.last_slider_captcha_engine = None
+        live.last_slider_result_message = None
 
         async def fake_send_notification(*_args, **_kwargs):
             return None
 
+        async def fake_update_config_cookies():
+            return None
+
         live.send_token_refresh_notification = fake_send_notification
+        live.update_config_cookies = fake_update_config_cookies
+        live._set_runtime_cookie_state = mock.Mock()
+        live._mark_slider_success_recovery = mock.Mock()
+        live._mark_pending_slider_success_notice = mock.Mock()
+        live._log_cookie_merge_summary = mock.Mock()
+
+        orchestrator_result = SliderVerificationResult(
+            success=True,
+            cookies={
+                "unb": "u1",
+                "sgcookie": "sg1",
+                "cookie2": "new_cookie2",
+                "_m_h5_tk": "new_tk",
+                "_m_h5_tk_enc": "enc1",
+                "t": "t1",
+                "cna": "cna1",
+                "x5sec": "ticket",
+            },
+            engine="playwright",
+            x5_cookies={"x5sec": "ticket"},
+            message="ok",
+        )
+
+        async def fake_orchestrator(slider, url, **_kwargs):
+            assert slider is created_sliders[0]
+            assert url.endswith("action=captcha")
+            return orchestrator_result
 
         with mock.patch("XianyuAutoAsync.db_manager.get_cookie_details", return_value={}), \
              mock.patch("XianyuAutoAsync.log_captcha_event"), \
-             mock.patch.object(XianyuAutoAsync, "_load_token_refresh_slider_runtime", return_value=(XianyuAutoAsync._LegacySliderConfig, _FakeSlider, "test")):
+             mock.patch.object(XianyuLive, "clear_password_login_failure_backoff", return_value=None), \
+             mock.patch.object(
+                 XianyuAutoAsync,
+                 "_load_token_refresh_slider_runtime",
+                 return_value=(XianyuAutoAsync._LegacySliderConfig, _FakeSlider, "test"),
+             ), \
+             mock.patch(
+                 "utils.slider_orchestrator.run_slider_async_with_fallback",
+                 side_effect=fake_orchestrator,
+             ):
             result = await live._handle_captcha_verification(
                 {"data": {"url": "https://example.com/punish?action=captcha"}}
             )
 
-        assert result is None
+        assert result is not None
+        assert "x5sec=ticket" in result
+        assert "cookie2=new_cookie2" in result
         assert len(created_sliders) == 1
+        assert live.last_slider_captcha_engine == "playwright"
+        live._mark_pending_slider_success_notice.assert_called_once_with("token_refresh")
