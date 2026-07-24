@@ -1103,6 +1103,7 @@ Cookie数量: {cookie_count}
             self._ensure_orders_platform_time_columns(cursor)
             self._ensure_orders_auto_comment_columns(cursor)
             self._ensure_scheduled_rate_logs_table(cursor)
+            self._ensure_scheduled_task_logs_table(cursor)
 
             # 迁移notification_templates表以支持新的模板类型
             self._migrate_notification_templates(cursor)
@@ -1214,6 +1215,31 @@ Cookie数量: {cookie_count}
         self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_scheduled_rate_logs_cookie_time ON scheduled_rate_logs(cookie_id, created_at DESC)")
         self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_scheduled_rate_logs_batch ON scheduled_rate_logs(batch_id)")
         self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_scheduled_rate_logs_order ON scheduled_rate_logs(order_id)")
+
+    def _ensure_scheduled_task_logs_table(self, cursor):
+        """创建通用任务执行日志表。"""
+        self._execute_sql(cursor, '''
+        CREATE TABLE IF NOT EXISTS scheduled_task_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id TEXT NOT NULL,
+            task_type TEXT NOT NULL,
+            cookie_id TEXT NOT NULL,
+            object_id TEXT,
+            order_id TEXT,
+            item_id TEXT,
+            buyer_id TEXT,
+            buyer_nick TEXT,
+            status TEXT NOT NULL,
+            message TEXT,
+            raw_response TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (cookie_id) REFERENCES cookies(id) ON DELETE CASCADE
+        )
+        ''')
+        self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_type_time ON scheduled_task_logs(task_type, created_at DESC)")
+        self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_cookie_time ON scheduled_task_logs(cookie_id, created_at DESC)")
+        self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_batch ON scheduled_task_logs(batch_id)")
+
 
     def _update_cards_table_constraints(self, cursor):
         """更新cards表的CHECK约束以支持image和yifan_api类型"""
@@ -1583,6 +1609,7 @@ Cookie数量: {cookie_count}
                 self._ensure_orders_platform_time_columns(cursor)
                 self._ensure_orders_auto_comment_columns(cursor)
                 self._ensure_scheduled_rate_logs_table(cursor)
+                self._ensure_scheduled_task_logs_table(cursor)
 
                 # 为item_info表添加多规格字段（如果不存在）
                 try:

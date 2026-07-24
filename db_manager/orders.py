@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import datetime
 from loguru import logger
 from typing import Any, Dict, List, Optional
@@ -1520,6 +1521,93 @@ class DBOrdersMixin:
                 return orders
             except Exception as e:
                 logger.error(f"查询待自动评价订单失败: cookie_id={cookie_id}, error={e}")
+                return []
+
+    def add_scheduled_task_log(self, batch_id: str = None, task_type: str = 'other_task',
+                               cookie_id: str = None, object_id: str = None,
+                               order_id: str = None, item_id: str = None,
+                               buyer_id: str = None, buyer_nick: str = None,
+                               status: str = 'failed', message: str = None,
+                               raw_response: Any = None) -> Optional[int]:
+        """写入通用任务执行日志。"""
+        safe_task_type = str(task_type or 'other_task').strip() or 'other_task'
+        safe_batch_id = str(batch_id or f"{safe_task_type}_{int(time.time() * 1000)}")
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                if raw_response is None:
+                    raw_text = None
+                elif isinstance(raw_response, str):
+                    raw_text = raw_response
+                else:
+                    raw_text = json.dumps(raw_response, ensure_ascii=False, default=str)
+                cursor.execute('''
+                INSERT INTO scheduled_task_logs (
+                    batch_id, task_type, cookie_id, object_id, order_id, item_id,
+                    buyer_id, buyer_nick, status, message, raw_response
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    safe_batch_id, safe_task_type, cookie_id, object_id, order_id, item_id,
+                    buyer_id, buyer_nick, status, message, raw_text
+                ))
+                log_id = cursor.lastrowid
+                self.conn.commit()
+                return log_id
+            except Exception as e:
+                logger.error(f"写入通用任务日志失败: {e}")
+                self.conn.rollback()
+                return None
+
+    def get_scheduled_task_logs(self, user_id: int = None, cookie_id: str = None,
+                                task_type: str = None, limit: int = 100,
+                                offset: int = 0) -> List[Dict]:
+        """查询通用任务日志。"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                conditions = []
+                params = []
+                if user_id is not None:
+                    conditions.append("c.user_id = ?")
+                    params.append(user_id)
+                if cookie_id:
+                    conditions.append("l.cookie_id = ?")
+                    params.append(cookie_id)
+                if task_type and task_type != 'all':
+                    conditions.append("l.task_type = ?")
+                    params.append(task_type)
+                where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+                params.extend([max(1, min(int(limit or 100), 500)), max(0, int(offset or 0))])
+                cursor.execute(f'''
+                SELECT l.id, l.batch_id, l.task_type, l.cookie_id, l.object_id,
+                       l.order_id, l.item_id, l.buyer_id, l.buyer_nick,
+                       l.status, l.message, l.raw_response, l.created_at
+                FROM scheduled_task_logs l
+                LEFT JOIN cookies c ON c.id = l.cookie_id
+                {where_sql}
+                ORDER BY l.created_at DESC, l.id DESC
+                LIMIT ? OFFSET ?
+                ''', params)
+                logs = []
+                for row in cursor.fetchall():
+                    logs.append({
+                        'id': row[0],
+                        'batch_id': row[1],
+                        'task_type': row[2],
+                        'cookie_id': row[3],
+                        'object_id': row[4],
+                        'order_id': row[5],
+                        'item_id': row[6],
+                        'buyer_id': row[7],
+                        'buyer_nick': row[8],
+                        'status': row[9],
+                        'message': row[10],
+                        'raw_response': row[11],
+                        'created_at': row[12],
+                    })
+                return logs
+            except Exception as e:
+                logger.error(f"查询通用任务日志失败: {e}")
                 return []
 
     def get_order_pre_refund_status(self, order_id: str) -> str:

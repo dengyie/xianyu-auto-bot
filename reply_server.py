@@ -3537,6 +3537,151 @@ def _ensure_cookie_access(cid: str, current_user: Dict[str, Any]) -> str:
         raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
 
+
+TASK_LOG_TYPE_LABELS = {
+    'auto_comment': '自动评价',
+    'item_polish': '商品擦亮',
+    'login_renew': '登录续期',
+    'cookie_refresh': 'Cookie刷新',
+    'other_task': '其他任务',
+}
+
+
+def _normalize_task_log_limit(limit: int) -> int:
+    try:
+        return max(1, min(int(limit or 100), 500))
+    except Exception:
+        return 100
+
+
+def _normalize_task_log_offset(offset: int) -> int:
+    try:
+        return max(0, int(offset or 0))
+    except Exception:
+        return 0
+
+
+def _get_task_log_cookie_scope(current_user: Dict[str, Any], cookie_id: str = None) -> List[str]:
+    if cookie_id:
+        return [_ensure_cookie_access(cookie_id, current_user)]
+    return list(_get_user_cookies_map(current_user).keys())
+
+
+def _task_log_created_at_sort_value(log: Dict[str, Any]) -> float:
+    value = log.get('created_at') or log.get('updated_at') or ''
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        text = str(value or '').strip()
+        if not text:
+            return 0.0
+        normalized = text.replace('T', ' ')[:19]
+        return datetime.strptime(normalized, '%Y-%m-%d %H:%M:%S').timestamp()
+    except Exception:
+        return 0.0
+
+
+def _normalize_task_log_row(log: Dict[str, Any], task_type: str, task_label: str = None) -> Dict[str, Any]:
+    normalized = dict(log or {})
+    normalized['task_type'] = task_type
+    normalized['task_label'] = task_label or TASK_LOG_TYPE_LABELS.get(task_type, task_type)
+    normalized.setdefault('object_id', normalized.get('order_id') or normalized.get('item_id') or normalized.get('session_id') or '')
+    normalized.setdefault('status', 'failed')
+    normalized.setdefault('message', '')
+    normalized.setdefault('created_at', normalized.get('updated_at') or '')
+    return normalized
+
+
+def _map_risk_log_to_task_type(log: Dict[str, Any]) -> str:
+    event_type = str(log.get('event_type') or '').strip().lower()
+    trigger_scene = str(log.get('trigger_scene') or '').strip().lower()
+    result_code = str(log.get('result_code') or '').strip().lower()
+    text = ' '.join(str(log.get(key) or '') for key in (
+        'event_description', 'event_description_display', 'processing_result',
+        'processing_result_display', 'error_message', 'error_message_display'
+    )).lower()
+
+    if (
+        event_type in {'cookie_refresh', 'token_expired'}
+        or trigger_scene in {
+            'auto_cookie_refresh', 'manual_cookie_refresh', 'manual_password_refresh',
+            'manual_qr_refresh', 'qr_login', 'token_refresh',
+        }
+        or 'cookie_refresh' in result_code
+        or 'token_refresh' in result_code
+        or 'cookie刷新' in text
+        or 'token刷新' in text
+    ):
+        return 'cookie_refresh'
+
+    if (
+        trigger_scene in {'password_login', 'login_renew', 'session_keepalive'}
+        or event_type in {'password_login', 'password_error', 'face_verify', 'sms_verify', 'qr_verify'}
+        or 'password_login' in result_code
+        or '登录' in text
+        or '保活' in text
+    ):
+        return 'login_renew'
+
+    return 'other_task'
+
+
+def _normalize_risk_task_status(log: Dict[str, Any]) -> str:
+    status = str(log.get('processing_status') or '').strip().lower()
+    result_code = str(log.get('result_code') or '').strip().lower()
+    combined = ' '.join(str(log.get(key) or '') for key in (
+        'processing_result', 'processing_result_display', 'error_message', 'error_message_display'
+    )).lower()
+
+    if status == 'success' or 'success' in result_code or '成功' in combined:
+        return 'success'
+    if status == 'processing':
+        return 'processing'
+    if 'expired' in result_code or '过期' in combined or 'session_expired' in combined:
+        return 'cookie_expired'
+    if status == 'failed' or 'failed' in result_code or '失败' in combined or '异常' in combined:
+        return 'failed'
+    return status or 'failed'
+
+
+def _risk_log_to_task_log(log: Dict[str, Any]) -> Dict[str, Any]:
+    task_type = _map_risk_log_to_task_type(log)
+    message_parts = [
+        log.get('event_description_display') or log.get('event_description'),
+        log.get('processing_result_display') or log.get('processing_result'),
+        log.get('error_message_display') or log.get('error_message'),
+    ]
+    message = ' / '.join(str(part).strip() for part in message_parts if str(part or '').strip())
+    return _normalize_task_log_row({
+        'id': f"risk-{log.get('id')}",
+        'batch_id': log.get('session_id') or log.get('result_code') or f"risk_{log.get('id')}",
+        'cookie_id': log.get('cookie_id'),
+        'object_id': log.get('session_id') or log.get('result_code') or log.get('event_type'),
+        'status': _normalize_risk_task_status(log),
+        'message': message or '-',
+        'raw_response': log,
+        'created_at': log.get('updated_at') or log.get('created_at'),
+    }, task_type)
+
+
+def _load_risk_task_logs(current_user: Dict[str, Any], task_type: str = 'all', cookie_id: str = None,
+                         limit: int = 100) -> List[Dict[str, Any]]:
+    cookie_ids = _get_task_log_cookie_scope(current_user, cookie_id)
+    logs: List[Dict[str, Any]] = []
+    for scoped_cookie_id in cookie_ids:
+        risk_logs = db_manager.get_risk_control_logs(
+            cookie_id=scoped_cookie_id,
+            limit=max(20, min(limit, 500)),
+            offset=0,
+        )
+        for risk_log in risk_logs:
+            task_log = _risk_log_to_task_log(risk_log)
+            if task_type == 'all' or task_log.get('task_type') == task_type:
+                logs.append(task_log)
+    return logs
+
+
+
 def _normalize_runtime_timestamp(value: Any) -> Optional[float]:
     try:
         timestamp = float(value)
@@ -10578,6 +10723,101 @@ def test_ai_reply(cookie_id: str, test_data: dict, current_user: Dict[str, Any] 
 
 
 # ==================== 日志管理API ====================
+
+
+@app.get('/api/task-logs')
+def get_task_logs(
+    task_type: str = 'all',
+    cookie_id: str = None,
+    limit: int = 100,
+    offset: int = 0,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """查询系统日志页的统一任务日志。"""
+    try:
+        safe_limit = _normalize_task_log_limit(limit)
+        safe_offset = _normalize_task_log_offset(offset)
+        requested_type = str(task_type or 'all').strip() or 'all'
+        if requested_type not in {'all', *TASK_LOG_TYPE_LABELS.keys()}:
+            requested_type = 'all'
+
+        scoped_cookie_id = None
+        if cookie_id:
+            scoped_cookie_id = _ensure_cookie_access(cookie_id, current_user)
+
+        logs: List[Dict[str, Any]] = []
+
+        if requested_type in {'all', 'auto_comment'}:
+            logs.extend(
+                _normalize_task_log_row(log, 'auto_comment')
+                for log in db_manager.get_scheduled_rate_logs(
+                    user_id=current_user['user_id'],
+                    cookie_id=scoped_cookie_id,
+                    limit=safe_limit,
+                    offset=0,
+                )
+            )
+
+        # 本地未接入求小红花，跳过 auto_red_flower 源
+
+        generic_types = {'item_polish', 'login_renew', 'cookie_refresh', 'other_task'}
+        if requested_type == 'all':
+            generic_task_type = None
+        elif requested_type in generic_types:
+            generic_task_type = requested_type
+        else:
+            generic_task_type = '__skip__'
+
+        if generic_task_type != '__skip__':
+            generic_logs = db_manager.get_scheduled_task_logs(
+                user_id=current_user['user_id'],
+                cookie_id=scoped_cookie_id,
+                task_type=generic_task_type,
+                limit=safe_limit,
+                offset=0,
+            )
+            logs.extend(
+                _normalize_task_log_row(log, log.get('task_type') or 'other_task')
+                for log in generic_logs
+            )
+
+        if requested_type in {'all', 'login_renew', 'cookie_refresh', 'other_task'}:
+            logs.extend(_load_risk_task_logs(current_user, requested_type, scoped_cookie_id, safe_limit))
+
+        logs.sort(key=_task_log_created_at_sort_value, reverse=True)
+        page = logs[safe_offset:safe_offset + safe_limit]
+        return {"success": True, "data": page, "total": len(logs)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_with_user('error', f"查询统一任务日志失败: {str(e)}", current_user)
+        raise HTTPException(status_code=500, detail=f"查询统一任务日志失败: {str(e)}")
+
+
+@app.get('/api/auto-comment/logs')
+def get_auto_comment_logs(
+    cookie_id: str = None,
+    limit: int = 100,
+    offset: int = 0,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """查询自动评价执行日志。"""
+    try:
+        if cookie_id:
+            cookie_id = _ensure_cookie_access(cookie_id, current_user)
+        logs = db_manager.get_scheduled_rate_logs(
+            user_id=current_user['user_id'],
+            cookie_id=cookie_id,
+            limit=limit,
+            offset=offset,
+        )
+        return {"success": True, "data": logs}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_with_user('error', f"查询自动评价日志失败: {str(e)}", current_user)
+        raise HTTPException(status_code=500, detail=f"查询自动评价日志失败: {str(e)}")
+
 
 @app.get("/logs")
 async def get_logs(lines: int = 200, level: str = None, source: str = None, admin_user: Dict[str, Any] = Depends(require_admin)):
