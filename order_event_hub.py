@@ -37,6 +37,11 @@ class OrderEventHub:
             try:
                 subscriber.put_nowait(event)
             except queue.Full:
+                # 背压策略：drop-oldest。订阅者消费慢时，丢掉最旧的事件让最新事件入队，
+                # 保证 UI 拿到的是"最新状态"而不是队列头的陈旧状态。
+                # 注意：hub lock 已在上面 list() 后释放，与其它 publisher 并发时，
+                # 下面的 get_nowait/put_nowait 之间可能被别的线程再灌满队列，
+                # 因此第二次 put_nowait 仍可能 Full——这是可接受的最后兜底：记日志+丢弃当前事件。
                 try:
                     subscriber.get_nowait()
                 except queue.Empty:
