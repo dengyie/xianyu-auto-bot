@@ -15,6 +15,8 @@ if defined XIANYU_IMAGE (
 ) else (
     set "GHCR_IMAGE=ghcr.io/dengyie/xianyu-auto-bot:latest"
 )
+if not defined GHCR_USER set "GHCR_USER=dengyie"
+if not defined GHCR_TOKEN_FILE set "GHCR_TOKEN_FILE=%USERPROFILE%\.config\xianyu\ghcr_token"
 
 set "INFO_PREFIX=[INFO]"
 set "SUCCESS_PREFIX=[SUCCESS]"
@@ -73,6 +75,8 @@ if "%1"=="" goto quick_deploy
 if "%1"=="help" goto show_help
 if "%1"=="--help" goto show_help
 if "%1"=="/?" goto show_help
+if "%1"=="login-ghcr" goto login_ghcr
+if "%1"=="login" goto login_ghcr
 if "%1"=="pull" goto pull_image
 if "%1"=="start" goto start_services
 if "%1"=="stop" goto stop_services
@@ -84,12 +88,30 @@ if "%1"=="update" goto update_deployment
 if "%1"=="cleanup" goto cleanup
 goto unknown_command
 
+:login_ghcr
+echo %INFO_PREFIX% 登录 ghcr.io (user=%GHCR_USER%)...
+if defined GHCR_TOKEN (
+    echo %GHCR_TOKEN%| docker login ghcr.io -u %GHCR_USER% --password-stdin
+) else if exist "%GHCR_TOKEN_FILE%" (
+    type "%GHCR_TOKEN_FILE%" | docker login ghcr.io -u %GHCR_USER% --password-stdin
+) else (
+    echo %ERROR_PREFIX% 未找到 GHCR token
+    echo %INFO_PREFIX% set GHCR_TOKEN=^<PAT read:packages^> 或写入 %GHCR_TOKEN_FILE%
+    exit /b 1
+)
+if %errorlevel% neq 0 (
+    echo %ERROR_PREFIX% docker login ghcr.io 失败
+    exit /b 1
+)
+echo %SUCCESS_PREFIX% ghcr.io 登录完成
+exit /b 0
+
 :pull_image
 echo %INFO_PREFIX% 从 GHCR 拉取镜像: %GHCR_IMAGE%
 echo %WARNING_PREFIX% Docker 镜像只由 GitHub Actions 构建；本脚本不会 docker build
 docker pull %GHCR_IMAGE%
 if %errorlevel% neq 0 (
-    echo %ERROR_PREFIX% 拉取失败。请确认 Actions「Build and Push Docker Image」已成功，且已 docker login ghcr.io
+    echo %ERROR_PREFIX% 拉取失败。请确认 Actions 已成功；private 包请先 %~nx0 login-ghcr
     pause
     exit /b 1
 )
@@ -231,22 +253,26 @@ echo.
 echo 用法: %~nx0 [命令]
 echo.
 echo 命令:
-echo   pull      从 GHCR 拉取最新镜像
-echo   start     拉取并启动（--no-build）
-echo   update    拉取并 force-recreate（推荐发版）
-echo   stop      停止服务
-echo   restart   重启服务
-echo   status    查看服务状态
-echo   logs      查看日志
-echo   build     已禁用（会提示改用 GHCR）
-echo   cleanup   清理环境
-echo   help      显示帮助信息
+echo   login-ghcr  用 PAT 登录 ghcr.io
+echo   pull        从 GHCR 拉取最新镜像
+echo   start       拉取并启动（--no-build）
+echo   update      拉取并 force-recreate（推荐发版）
+echo   stop        停止服务
+echo   restart     重启服务
+echo   status      查看服务状态
+echo   logs        查看日志
+echo   build       已禁用（会提示改用 GHCR）
+echo   cleanup     清理环境
+echo   help        显示帮助信息
 echo.
-echo 环境变量:
-echo   XIANYU_IMAGE   默认 ghcr.io/dengyie/xianyu-auto-bot:latest
+echo 环境变量 / 密钥:
+echo   XIANYU_IMAGE      默认 ghcr.io/dengyie/xianyu-auto-bot:latest
+echo   GHCR_TOKEN        PAT read:packages，或文件 %USERPROFILE%\.config\xianyu\ghcr_token
+echo   应用密钥          项目目录 .env（见 .env.example；compose 替换 ${VAR}）
 echo.
 echo 示例:
-echo   %~nx0 update   # 生产发版
+echo   %~nx0 login-ghcr
+echo   %~nx0 update
 echo   %~nx0 pull
 echo   %~nx0 start
 echo.

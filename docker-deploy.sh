@@ -18,6 +18,9 @@ COMPOSE_FILE="docker-compose.yml"
 SELECTED_COMPOSE_FILE="$COMPOSE_FILE"
 # 生产默认镜像：GitHub Actions 推送到 GHCR；可用环境变量覆盖
 GHCR_IMAGE="${XIANYU_IMAGE:-ghcr.io/dengyie/xianyu-auto-bot:latest}"
+GHCR_LOGIN_USER="${GHCR_USER:-dengyie}"
+# 登录 token 优先 env GHCR_TOKEN，否则读本地文件（勿提交仓库）
+GHCR_TOKEN_FILE="${GHCR_TOKEN_FILE:-$HOME/.config/xianyu/ghcr_token}"
 
 if docker compose version >/dev/null 2>&1; then
     COMPOSE_CMD="docker compose"
@@ -94,17 +97,93 @@ init_config() {
         print_success "global_config.yml 配置文件已存在"
     fi
 
+    # 应用密钥：compose 从同目录 .env 做 ${VAR} 替换（不是 env_file:）
+    if [ ! -f ".env" ]; then
+        if [ -f ".env.example" ]; then
+            cp .env.example .env
+            chmod 600 .env 2>/dev/null || true
+            print_warning "已从 .env.example 生成 .env（chmod 600）；请填写密钥后再启动"
+        else
+            print_warning "未找到 .env；compose 将使用空默认值（生产请创建 .env）"
+        fi
+    else
+        print_success ".env 已存在（compose 变量替换用；勿提交 git）"
+        chmod 600 .env 2>/dev/null || true
+    fi
+
     # 创建必要的目录
     mkdir -p data logs backups static/uploads/images
+    # GHCR token 目录（login-ghcr 用；token 文件本身由运维手写）
+    mkdir -p "$(dirname "$GHCR_TOKEN_FILE")" 2>/dev/null || true
     print_success "已创建必要的目录"
+}
+
+# 是否已有 ghcr.io 登录态（只看 registry 名，不读 token）
+ghcr_logged_in() {
+    local cfg="${HOME}/.docker/config.json"
+    [ -f "$cfg" ] || return 1
+    python3 - "$cfg" <<'PY' 2>/dev/null
+import json, sys
+c = json.load(open(sys.argv[1]))
+auths = c.get("auths") or {}
+helpers = c.get("credHelpers") or {}
+keys = set(auths) | set(helpers)
+sys.exit(0 if any(k == "ghcr.io" or k.endswith("ghcr.io") for k in keys) else 1)
+PY
+}
+
+# 用 GHCR_TOKEN 或 token 文件登录（固化路径，token 永不进仓库）
+login_ghcr() {
+    local token=""
+    if [ -n "${GHCR_TOKEN:-}" ]; then
+        token="$GHCR_TOKEN"
+    elif [ -f "$GHCR_TOKEN_FILE" ]; then
+        token=$(tr -d '\r\n' < "$GHCR_TOKEN_FILE")
+    fi
+
+    if [ -z "$token" ]; then
+        print_error "未找到 GHCR token"
+        print_info "任选其一："
+        print_info "  1) export GHCR_TOKEN=<PAT with read:packages> && $0 login-ghcr"
+        print_info "  2) mkdir -p \"\$(dirname \"$GHCR_TOKEN_FILE\")\" && umask 077 && printf '%s' '<PAT>' > \"$GHCR_TOKEN_FILE\""
+        print_info "     然后: $0 login-ghcr"
+        print_info "PAT: GitHub → Settings → Developer settings → Personal access tokens（classic: read:packages）"
+        exit 1
+    fi
+
+    print_info "登录 ghcr.io（user=$GHCR_LOGIN_USER）..."
+    if ! echo "$token" | docker login ghcr.io -u "$GHCR_LOGIN_USER" --password-stdin; then
+        print_error "docker login ghcr.io 失败（检查 PAT 是否含 read:packages，用户名是否为 GitHub 用户名）"
+        exit 1
+    fi
+    print_success "ghcr.io 登录已写入 ~/.docker/config.json"
+}
+
+ensure_ghcr_login() {
+    # 匿名 pull 若仍可用则不强制登录；有 token 则主动固化登录
+    if [ -n "${GHCR_TOKEN:-}" ] || [ -f "$GHCR_TOKEN_FILE" ]; then
+        if ghcr_logged_in; then
+            print_info "已检测到 ghcr.io 登录态，跳过 login"
+            return 0
+        fi
+        login_ghcr
+        return $?
+    fi
+    if ghcr_logged_in; then
+        return 0
+    fi
+    print_warning "未配置 GHCR 登录；将尝试匿名 pull。失败时请: $0 login-ghcr"
+    return 0
 }
 
 # 从 GHCR 拉取镜像（生产唯一路径；禁止在本机/VPS compose build）
 pull_image() {
     print_info "从 GHCR 拉取镜像: $GHCR_IMAGE"
     print_warning "Docker 镜像只由 GitHub Actions 构建；本脚本不会 docker build"
+    ensure_ghcr_login || true
     if ! docker pull "$GHCR_IMAGE"; then
-        print_error "拉取失败。请确认 Actions「Build and Push Docker Image」已成功，且已 docker login ghcr.io"
+        print_error "拉取失败。请确认 Actions「Build and Push Docker Image」已成功"
+        print_info "若包为 private：配置 token 后执行 $0 login-ghcr，再 $0 pull"
         exit 1
     fi
     # 兼容旧 compose / 本地 tag 习惯
@@ -326,6 +405,7 @@ show_help() {
     echo ""
     echo "命令:"
     echo "  init                初始化配置文件"
+    echo "  login-ghcr          用 PAT 登录 ghcr.io（写入 ~/.docker/config.json）"
     echo "  pull                从 GHCR 拉取最新镜像"
     echo "  build               已禁用（会提示改用 GHCR）"
     echo "  start [with-nginx]  启动服务（先 pull，--no-build）"
@@ -339,10 +419,14 @@ show_help() {
     echo "  cleanup             清理环境"
     echo "  help                显示帮助信息"
     echo ""
-    echo "环境变量:"
-    echo "  XIANYU_IMAGE   默认 ghcr.io/dengyie/xianyu-auto-bot:latest"
+    echo "环境变量 / 密钥文件:"
+    echo "  XIANYU_IMAGE      默认 ghcr.io/dengyie/xianyu-auto-bot:latest"
+    echo "  GHCR_TOKEN        PAT（read:packages）；或写入 $GHCR_TOKEN_FILE"
+    echo "  GHCR_USER         默认 dengyie"
+    echo "  应用密钥：项目目录 .env（compose 自动替换 \${VAR}；见 .env.example）"
     echo ""
     echo "示例:"
+    echo "  $0 login-ghcr       # 首次固化 GHCR 登录"
     echo "  $0 init             # 初始化配置"
     echo "  $0 update           # 生产发版：pull GHCR 并重建"
     echo "  $0 pull && $0 start # 分步拉取并启动"
@@ -356,6 +440,10 @@ main() {
         "init")
             check_dependencies
             init_config
+            ;;
+        "login-ghcr"|"login")
+            check_dependencies
+            login_ghcr
             ;;
         "pull")
             check_dependencies

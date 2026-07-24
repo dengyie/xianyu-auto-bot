@@ -10,7 +10,8 @@ services:
     # 即使挂载了 Windows 文件，bash 也能正确处理
     entrypoint: ["/bin/bash", "-c", "dos2unix /app/entrypoint.sh 2>/dev/null || true; bash /app/entrypoint.sh"]
     ports:
-      - "8000:8090"
+      # 与主 compose 一致：默认仅 loopback
+      - "127.0.0.1:8000:8090"
       # Enable only for trusted local debugging, with VNC_PASSWORD set.
       # - "127.0.0.1:5900:5900"
       # noVNC Web 端口（浏览器手动接管滑块/风控）；同样仅建议本机回环暴露

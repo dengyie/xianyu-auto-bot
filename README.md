@@ -84,18 +84,30 @@ python Start.py
 # 1) 代码 push 到 main 后，等待 Actions「Build and Push Docker Image」成功
 #    产物：ghcr.io/dengyie/xianyu-auto-bot:latest
 
-# 2) 拉取并启动（推荐脚本）
+# 2)（推荐）固化 GHCR 登录，避免包变 private 后 pull 失败
+#    PAT 需要 read:packages；token 只放本机，勿提交仓库
+export GHCR_TOKEN='ghp_...'   # 或写入 ~/.config/xianyu/ghcr_token（chmod 600）
+./docker-deploy.sh login-ghcr
+
+# 3) 应用密钥：复制 .env.example → .env 并填写（compose 自动替换 ${VAR}）
+cp .env.example .env
+chmod 600 .env
+# 编辑 ADMIN_PASSWORD / SECRET_ENCRYPTION_KEY / JWT_SECRET_KEY / 各 API_KEY
+
+# 4) 拉取并启动（推荐脚本）
 ./docker-deploy.sh update   # 备份 + pull + recreate --no-build
 # 或分步：
 ./docker-deploy.sh pull
 ./docker-deploy.sh start
 
-# 3) 等价手写
+# 5) 等价手写
 docker pull ghcr.io/dengyie/xianyu-auto-bot:latest
 docker compose up -d --no-build
 ```
 
-可选环境变量 `XIANYU_IMAGE` 覆盖镜像名；`docker-compose-cn.yml` 同样走 GHCR，仅端口默认 8000。
+- 默认端口绑定 **`127.0.0.1:9000→8090`**（loopback）；`docker-compose-cn.yml` 为 `127.0.0.1:8000`。
+- 可选环境变量 `XIANYU_IMAGE` 覆盖镜像名。
+- **密钥注入路径**：项目目录 `.env`（Compose 变量替换）→ `docker-compose.yml` 的 `environment:` → 容器进程；**不是** `env_file:` 指令。`.env` 已 gitignore。
 
 ## 📁 项目结构
 
