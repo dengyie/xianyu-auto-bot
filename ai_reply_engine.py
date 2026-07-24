@@ -505,10 +505,16 @@ class AIReplyEngine:
                     # openai / ollama / 空值 均走 chat/completions
                     reply = self._call_openai_chat_api(settings, messages, max_tokens=150, temperature=0.7)
 
-                # 10. 保存AI回复到对话记录
+                # 10. 校验回复非空：空回复会污染对话历史且被误发，必须拦截
+                if not reply or not reply.strip():
+                    logger.warning(f"AI返回空回复 (账号: {cookie_id})，跳过保存与发送")
+                    return None
+
+                reply = reply.strip()
+                # 11. 保存AI回复到对话记录
                 self.save_conversation(chat_id, cookie_id, user_id, item_id, "assistant", reply, intent=None)
-                
-                logger.info(f"AI回复生成成功 (账号: {cookie_id}): {reply}")
+
+                logger.info(f"AI回复生成成功 (账号: {cookie_id}): {reply[:100]}")
                 return reply
                 
         except Exception as e:
