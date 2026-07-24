@@ -1104,6 +1104,7 @@ Cookie数量: {cookie_count}
             self._ensure_orders_auto_comment_columns(cursor)
             self._ensure_scheduled_rate_logs_table(cursor)
             self._ensure_scheduled_task_logs_table(cursor)
+            self._ensure_product_publish_tables(cursor)
 
             # 迁移notification_templates表以支持新的模板类型
             self._migrate_notification_templates(cursor)
@@ -1610,6 +1611,7 @@ Cookie数量: {cookie_count}
                 self._ensure_orders_auto_comment_columns(cursor)
                 self._ensure_scheduled_rate_logs_table(cursor)
                 self._ensure_scheduled_task_logs_table(cursor)
+                self._ensure_product_publish_tables(cursor)
 
                 # 为item_info表添加多规格字段（如果不存在）
                 try:

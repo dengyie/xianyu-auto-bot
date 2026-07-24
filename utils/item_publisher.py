@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import os
@@ -138,12 +139,7 @@ class ItemPublisher:
 
         uploaded_images = []
         for image in images:
-            uploaded_images.append(
-                await self.upload_image(
-                    image_bytes=image["content"],
-                    filename=image.get("filename") or "item.jpg",
-                )
-            )
+            uploaded_images.append(await self.prepare_image_for_publish(image))
 
         publish_title = str(title or "").strip()
         publish_desc = str(description or title or "").strip()
@@ -181,6 +177,31 @@ class ItemPublisher:
 
         publish_res["_uploaded_images"] = uploaded_images
         return publish_res
+
+
+    async def prepare_image_for_publish(self, image: Dict[str, Any]) -> Dict[str, Any]:
+        """将前端/素材中的图片描述统一转换为发布接口可用的图片信息。"""
+        if not isinstance(image, dict):
+            raise ValueError("图片数据格式无效")
+
+        image_url = str(image.get("url") or image.get("image_url") or image.get("src") or "").strip()
+        if image_url:
+            return {
+                "url": image_url,
+                "width": self._parse_dimension(image.get("width") or image.get("widthSize"), 800),
+                "height": self._parse_dimension(image.get("height") or image.get("heightSize"), 800),
+            }
+
+        image_content = image.get("content") or image.get("data") or image.get("base64")
+        if isinstance(image_content, str):
+            image_content = self._decode_base64_image(image_content)
+        if not isinstance(image_content, (bytes, bytearray)):
+            raise ValueError("图片缺少可上传内容")
+
+        return await self.upload_image(
+            image_bytes=bytes(image_content),
+            filename=image.get("filename") or image.get("name") or "item.jpg",
+        )
 
     async def upload_image(self, *, image_bytes: bytes, filename: str) -> Dict[str, Any]:
         if not image_bytes:
@@ -579,6 +600,27 @@ class ItemPublisher:
     @staticmethod
     def _serialize_cookies(cookies: Dict[str, str]) -> str:
         return "; ".join(f"{key}={value}" for key, value in cookies.items() if str(key).strip())
+
+
+    @staticmethod
+    def _decode_base64_image(value: str) -> bytes:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("图片内容为空")
+        if "," in text and text.lower().startswith("data:"):
+            text = text.split(",", 1)[1]
+        try:
+            return base64.b64decode(text, validate=False)
+        except Exception as exc:
+            raise ValueError("图片 Base64 内容无效") from exc
+
+    @staticmethod
+    def _parse_dimension(value: Any, default: int = 800) -> int:
+        try:
+            dimension = int(float(value))
+            return dimension if dimension > 0 else default
+        except (TypeError, ValueError):
+            return default
 
     @staticmethod
     def _normalize_filename(filename: str) -> str:

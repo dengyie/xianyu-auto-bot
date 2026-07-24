@@ -6,6 +6,7 @@ from .orders import DBOrdersMixin
 from .users import DBUsersMixin
 from .ops import DBOpsMixin
 from .blacklist import DBBlacklistMixin
+from .product_publish import DBProductPublishMixin
 
 class DBManager(
     DBBase,
@@ -16,6 +17,7 @@ class DBManager(
     DBUsersMixin,
     DBOpsMixin,
     DBBlacklistMixin,
+    DBProductPublishMixin,
 ):
     pass
 

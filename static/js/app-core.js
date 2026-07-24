@@ -79,6 +79,11 @@ let totalItemsPages = 0; // 总页数
 let currentSearchKeyword = ''; // 当前搜索关键词
 let itemPublishPreviewUrls = [];
 let itemPublishInitialized = false;
+let itemPublishSavingMaterial = false;
+let itemPublishLoadedMaterialId = null;
+let itemPublishLoadedMaterialImages = [];
+let itemPublishMaterials = [];
+let itemPublishLogs = [];
 let itemPublishSubmitting = false;
 
 // 订单列表搜索和分页相关变量

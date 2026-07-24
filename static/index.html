@@ -832,7 +832,10 @@
                   <h5 class="mb-1">发布表单</h5>
                   <div class="text-muted small">第一版支持单商品发布、多图上传、价格与运费配置。</div>
                 </div>
-                <span class="badge text-bg-light border">单商品</span>
+                <div class="d-flex align-items-center gap-2">
+                  <span class="badge text-bg-light border" id="publishMaterialModeBadge">新建素材</span>
+                  <span class="badge text-bg-light border">单商品</span>
+                </div>
               </div>
               <div class="card-body">
                 <form id="itemPublishForm" onsubmit="submitItemPublishForm(); return false;">
@@ -919,8 +922,14 @@
                     <button type="submit" class="btn btn-primary" id="itemPublishSubmitBtn">
                       <i class="bi bi-cloud-upload me-1"></i>发布商品
                     </button>
+                    <button type="button" class="btn btn-outline-success" id="itemPublishSaveMaterialBtn" onclick="saveItemPublishMaterial()">
+                      <i class="bi bi-save me-1"></i>保存素材
+                    </button>
                     <button type="button" class="btn btn-outline-secondary" onclick="document.getElementById('itemPublishForm').reset(); clearItemPublishForm(false);">
                       <i class="bi bi-arrow-counterclockwise me-1"></i>重置表单
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary" onclick="startNewItemPublishMaterial()">
+                      <i class="bi bi-plus-circle me-1"></i>新建素材
                     </button>
                     <button type="button" class="btn btn-outline-dark" onclick="showSection('items')">
                       <i class="bi bi-box-seam me-1"></i>查看商品管理
@@ -963,6 +972,34 @@
                 <div class="mb-2 fw-semibold" id="publishResultTitle">等待发布</div>
                 <div class="text-muted small mb-3" id="publishResultMessage">提交后这里会展示发布结果和同步状态。</div>
                 <div id="publishResultMeta" class="item-publish-result-meta"></div>
+              </div>
+            </div>
+
+            <div class="card item-publish-material-card mt-4">
+              <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">素材库</h5>
+                <button type="button" class="btn btn-sm btn-outline-primary" onclick="loadItemPublishMaterials()">
+                  <i class="bi bi-arrow-clockwise me-1"></i>刷新
+                </button>
+              </div>
+              <div class="card-body">
+                <div id="publishMaterialList" class="item-publish-side-list">
+                  <div class="item-publish-preview-empty">暂无素材</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card item-publish-log-card mt-4">
+              <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">发布记录</h5>
+                <button type="button" class="btn btn-sm btn-outline-primary" onclick="loadItemPublishLogs()">
+                  <i class="bi bi-arrow-clockwise me-1"></i>刷新
+                </button>
+              </div>
+              <div class="card-body">
+                <div id="publishLogList" class="item-publish-side-list">
+                  <div class="item-publish-preview-empty">暂无发布记录</div>
+                </div>
               </div>
             </div>
           </div>
