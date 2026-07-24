@@ -2342,10 +2342,26 @@
           <i class="bi bi-file-text me-2"></i>
           日志管理
         </h2>
-        <p class="text-muted mb-0">实时显示系统日志，支持自动刷新和统计分析</p>
+        <p class="text-muted mb-0">集中查看系统运行日志和后台任务执行记录</p>
       </div>
 
       <div class="content-body">
+        <div class="log-center-tabs-wrap mb-4">
+          <ul class="nav nav-pills log-center-tabs" role="tablist" aria-label="日志类型切换">
+            <li class="nav-item" role="presentation">
+              <button class="nav-link active" id="systemLogsTab" type="button" role="tab" aria-selected="true" onclick="switchLogCenterTab('system')">
+                <i class="bi bi-terminal me-1"></i>系统运行日志
+              </button>
+            </li>
+            <li class="nav-item" role="presentation">
+              <button class="nav-link" id="taskLogsTab" type="button" role="tab" aria-selected="false" onclick="switchLogCenterTab('task')">
+                <i class="bi bi-list-task me-1"></i>任务日志
+              </button>
+            </li>
+          </ul>
+        </div>
+
+        <div id="systemLogsPane" class="log-center-pane active">
         <!-- 日志控制面板 -->
         <div class="card mb-4">
           <div class="card-header d-flex justify-content-between align-items-center">
@@ -2462,6 +2478,129 @@
             <div id="noSystemLogs" class="text-center py-4" style="display: none;">
               <i class="bi bi-file-text" style="font-size: 3rem; color: #ccc;"></i>
               <p class="mt-2 text-muted">暂无日志数据</p>
+            </div>
+          </div>
+        </div>
+        </div>
+
+        <div id="taskLogsPane" class="log-center-pane">
+          <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+              <h5 class="mb-0">
+                <i class="bi bi-funnel"></i> 任务日志筛选
+              </h5>
+              <small class="text-muted" id="taskLogsLastUpdate">最后更新: -</small>
+            </div>
+            <div class="card-body">
+              <div class="row g-3 align-items-end">
+                <div class="col-md-3">
+                  <label class="form-label">任务类型</label>
+                  <select class="form-select" id="taskLogTypeFilter" onchange="loadTaskLogs()">
+                    <option value="all" selected>全部任务</option>
+                    <option value="auto_comment">自动评价</option>
+                    <option value="item_polish">商品擦亮</option>
+                    <option value="login_renew">登录续期</option>
+                    <option value="cookie_refresh">Cookie刷新</option>
+                    <option value="other_task">其他任务</option>
+                  </select>
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">状态</label>
+                  <select class="form-select" id="taskLogStatusFilter" onchange="renderTaskLogs()">
+                    <option value="all" selected>全部状态</option>
+                    <option value="success">成功</option>
+                    <option value="failed">失败</option>
+                    <option value="skipped">已跳过</option>
+                    <option value="cookie_expired">Cookie/Session过期</option>
+                    <option value="processing">处理中</option>
+                  </select>
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label">账号</label>
+                  <select class="form-select" id="taskLogCookieFilter" onchange="loadTaskLogs()">
+                    <option value="">全部账号</option>
+                  </select>
+                </div>
+                <div class="col-md-2">
+                  <label class="form-label">显示数量</label>
+                  <select class="form-select" id="taskLogLimit" onchange="loadTaskLogs()">
+                    <option value="50">50条</option>
+                    <option value="100" selected>100条</option>
+                    <option value="200">200条</option>
+                    <option value="500">500条</option>
+                  </select>
+                </div>
+                <div class="col-md-1">
+                  <button class="btn btn-primary w-100" onclick="loadTaskLogs()" title="刷新任务日志">
+                    <i class="bi bi-arrow-clockwise"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="row g-3 mb-4">
+            <div class="col-md-3">
+              <div class="task-log-stat-card">
+                <span class="task-log-stat-label">总记录</span>
+                <strong id="taskLogTotalCount">0</strong>
+              </div>
+            </div>
+            <div class="col-md-3">
+              <div class="task-log-stat-card success">
+                <span class="task-log-stat-label">成功</span>
+                <strong id="taskLogSuccessCount">0</strong>
+              </div>
+            </div>
+            <div class="col-md-3">
+              <div class="task-log-stat-card danger">
+                <span class="task-log-stat-label">失败</span>
+                <strong id="taskLogFailedCount">0</strong>
+              </div>
+            </div>
+            <div class="col-md-3">
+              <div class="task-log-stat-card muted">
+                <span class="task-log-stat-label">跳过/过期</span>
+                <strong id="taskLogSkippedCount">0</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+              <h5 class="mb-0">
+                <i class="bi bi-list-check"></i> 任务日志
+              </h5>
+              <span class="text-muted small">聚合自动评价、登录续期、Cookie 刷新等后台任务记录</span>
+            </div>
+            <div class="card-body p-0">
+              <div id="loadingTaskLogs" class="text-center py-4" style="display: none;">
+                <div class="spinner-border" role="status">
+                  <span class="visually-hidden">加载中...</span>
+                </div>
+                <p class="mt-2">正在加载任务日志...</p>
+              </div>
+              <div class="table-responsive task-log-table-wrap">
+                <table class="table table-hover align-middle mb-0" id="taskLogsTable" style="display: none;">
+                  <thead>
+                    <tr>
+                      <th>时间</th>
+                      <th>类型</th>
+                      <th>账号</th>
+                      <th>订单/对象</th>
+                      <th>买家</th>
+                      <th>状态</th>
+                      <th>说明</th>
+                      <th>批次</th>
+                    </tr>
+                  </thead>
+                  <tbody id="taskLogsTableBody"></tbody>
+                </table>
+              </div>
+              <div id="noTaskLogs" class="text-center py-5" style="display: none;">
+                <i class="bi bi-journal-text" style="font-size: 3rem; color: #ccc;"></i>
+                <p class="mt-2 text-muted mb-0">暂无任务日志</p>
+              </div>
             </div>
           </div>
         </div>

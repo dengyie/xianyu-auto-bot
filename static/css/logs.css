@@ -873,3 +873,198 @@
 .want-count .badge {
   font-size: 0.8em;
 }
+
+
+/* ================================
+   日志中心 / 任务日志
+   ================================ */
+.log-center-tabs-wrap {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.log-center-tabs {
+  gap: 0.5rem;
+  padding: 0.35rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  background: rgba(248, 250, 252, 0.92);
+}
+
+.log-center-tabs .nav-link {
+  border-radius: 999px;
+  color: #64748b;
+  font-weight: 600;
+  padding: 0.55rem 1rem;
+}
+
+.log-center-tabs .nav-link.active {
+  color: #fff;
+  background: linear-gradient(135deg, var(--primary-color), var(--primary-light));
+  box-shadow: 0 10px 22px -14px rgba(79, 70, 229, 0.75);
+}
+
+.log-center-pane {
+  display: none;
+}
+
+.log-center-pane.active {
+  display: block;
+}
+
+.task-log-stat-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 78px;
+  padding: 1rem;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96));
+  box-shadow: 0 14px 30px -28px rgba(15, 23, 42, 0.25);
+}
+
+.task-log-stat-card strong {
+  font-size: 1.6rem;
+  line-height: 1;
+  color: #0f172a;
+}
+
+.task-log-stat-label {
+  color: #64748b;
+  font-weight: 600;
+}
+
+.task-log-stat-card.success strong {
+  color: var(--success-color);
+}
+
+.task-log-stat-card.danger strong {
+  color: var(--danger-color);
+}
+
+.task-log-stat-card.muted strong {
+  color: #64748b;
+}
+
+.task-log-table-wrap {
+  min-height: 220px;
+}
+
+#taskLogsTable th {
+  white-space: nowrap;
+  color: #475569;
+  font-size: 0.86rem;
+  background: rgba(248, 250, 252, 0.9);
+}
+
+#taskLogsTable td {
+  vertical-align: middle;
+}
+
+.task-type-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.task-type-comment {
+  color: #0369a1;
+  background: rgba(14, 165, 233, 0.12);
+  border: 1px solid rgba(14, 165, 233, 0.18);
+}
+
+.task-type-polish {
+  color: #a16207;
+  background: rgba(234, 179, 8, 0.14);
+  border: 1px solid rgba(234, 179, 8, 0.2);
+}
+
+.task-type-login {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.18);
+}
+
+.task-type-cookie {
+  color: #6d28d9;
+  background: rgba(139, 92, 246, 0.12);
+  border: 1px solid rgba(139, 92, 246, 0.18);
+}
+
+.task-type-other {
+  color: #475569;
+  background: rgba(100, 116, 139, 0.12);
+  border: 1px solid rgba(100, 116, 139, 0.18);
+}
+
+.task-log-account,
+.task-log-object,
+.task-log-batch {
+  display: inline-block;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.task-log-message {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-theme="dark"] .log-center-tabs {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.74);
+}
+
+[data-theme="dark"] .log-center-tabs .nav-link {
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .task-log-stat-card {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.96), rgba(15, 23, 42, 0.94));
+}
+
+[data-theme="dark"] .task-log-stat-card strong {
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .task-log-stat-label,
+[data-theme="dark"] #taskLogsTable th {
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] #taskLogsTable th {
+  background: rgba(15, 23, 42, 0.82);
+}
+
+[data-theme="dark"] .task-type-comment {
+  color: #bae6fd;
+  background: rgba(14, 165, 233, 0.18);
+}
+
+[data-theme="dark"] .task-type-polish {
+  color: #fef3c7;
+  background: rgba(234, 179, 8, 0.18);
+}
+
+[data-theme="dark"] .task-type-login {
+  color: #a7f3d0;
+  background: rgba(16, 185, 129, 0.18);
+}
+
+[data-theme="dark"] .task-type-cookie {
+  color: #ddd6fe;
+  background: rgba(139, 92, 246, 0.2);
+}

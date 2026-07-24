@@ -1330,3 +1330,254 @@ async function clearRiskControlLogs() {
     }
 }
 
+
+
+// ================================
+// 任务日志中心
+// ================================
+let currentLogCenterTab = 'system';
+let taskLogRows = [];
+let taskLogCookieOptionsLoaded = false;
+
+function switchLogCenterTab(tabName) {
+    currentLogCenterTab = tabName === 'task' ? 'task' : 'system';
+
+    const systemTab = document.getElementById('systemLogsTab');
+    const taskTab = document.getElementById('taskLogsTab');
+    const systemPane = document.getElementById('systemLogsPane');
+    const taskPane = document.getElementById('taskLogsPane');
+
+    if (systemTab) {
+        systemTab.classList.toggle('active', currentLogCenterTab === 'system');
+        systemTab.setAttribute('aria-selected', currentLogCenterTab === 'system' ? 'true' : 'false');
+    }
+    if (taskTab) {
+        taskTab.classList.toggle('active', currentLogCenterTab === 'task');
+        taskTab.setAttribute('aria-selected', currentLogCenterTab === 'task' ? 'true' : 'false');
+    }
+    if (systemPane) systemPane.classList.toggle('active', currentLogCenterTab === 'system');
+    if (taskPane) taskPane.classList.toggle('active', currentLogCenterTab === 'task');
+
+    if (currentLogCenterTab === 'task') {
+        initTaskLogsPane();
+    } else if (document.getElementById('systemLogContainer')) {
+        loadSystemLogs();
+    }
+}
+
+async function initTaskLogsPane() {
+    await loadTaskLogCookieOptions();
+    if (!taskLogRows.length) {
+        await loadTaskLogs();
+    } else {
+        renderTaskLogs();
+    }
+}
+
+async function loadTaskLogCookieOptions() {
+    const select = document.getElementById('taskLogCookieFilter');
+    if (!select || taskLogCookieOptionsLoaded) return;
+
+    try {
+        const response = await fetch(`${apiBase}/cookies/details`, {
+            headers: { 'Authorization': `Bearer ${getAuthToken()}` }
+        });
+        if (!response.ok) return;
+
+        const accounts = await response.json();
+        const currentValue = select.value;
+        select.innerHTML = '<option value="">全部账号</option>';
+        (Array.isArray(accounts) ? accounts : []).forEach(account => {
+            const option = document.createElement('option');
+            option.value = account.id || '';
+            const remark = account.remark ? `（${account.remark}）` : '';
+            option.textContent = `${account.id || '未知账号'}${remark}`;
+            select.appendChild(option);
+        });
+        select.value = currentValue;
+        taskLogCookieOptionsLoaded = true;
+    } catch (error) {
+        console.warn('加载任务日志账号筛选失败:', error);
+    }
+}
+
+async function loadTaskLogs() {
+    const loading = document.getElementById('loadingTaskLogs');
+    const table = document.getElementById('taskLogsTable');
+    const empty = document.getElementById('noTaskLogs');
+    const type = document.getElementById('taskLogTypeFilter')?.value || 'all';
+    const cookieId = document.getElementById('taskLogCookieFilter')?.value || '';
+    const limit = document.getElementById('taskLogLimit')?.value || '100';
+
+    if (loading) loading.style.display = 'block';
+    if (table) table.style.display = 'none';
+    if (empty) empty.style.display = 'none';
+
+    try {
+        const query = new URLSearchParams({ task_type: type, limit, offset: '0' });
+        if (cookieId) query.set('cookie_id', cookieId);
+
+        const response = await fetch(`${apiBase}/api/task-logs?${query.toString()}`, {
+            headers: { 'Authorization': `Bearer ${getAuthToken()}` }
+        });
+        if (!response.ok) {
+            throw new Error(`任务日志加载失败: HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        taskLogRows = (data.data || []).map(log => normalizeTaskLog(log)).sort((a, b) => {
+            const timeA = new Date(a.created_at || 0).getTime();
+            const timeB = new Date(b.created_at || 0).getTime();
+            return timeB - timeA;
+        });
+
+        renderTaskLogs();
+        const lastUpdate = document.getElementById('taskLogsLastUpdate');
+        if (lastUpdate) lastUpdate.textContent = '最后更新: ' + new Date().toLocaleTimeString('zh-CN');
+    } catch (error) {
+        console.error('加载任务日志失败:', error);
+        if (empty) {
+            empty.style.display = 'block';
+            empty.innerHTML = `
+                <i class="bi bi-exclamation-triangle" style="font-size: 3rem; color: #dc3545;"></i>
+                <p class="mt-2 text-danger mb-0">加载任务日志失败：${escapeHtml(error.message || '未知错误')}</p>
+            `;
+        }
+        showToast('加载任务日志失败', 'danger');
+    } finally {
+        if (loading) loading.style.display = 'none';
+    }
+}
+
+function normalizeTaskLog(log) {
+    const type = log.task_type || 'other_task';
+    return {
+        ...log,
+        task_type: type,
+        task_label: log.task_label || getTaskTypeLabel(type),
+        display_object: log.object_id || log.order_id || log.item_id || '-',
+        created_at: log.created_at || log.updated_at || ''
+    };
+}
+
+function renderTaskLogs() {
+    const tbody = document.getElementById('taskLogsTableBody');
+    const table = document.getElementById('taskLogsTable');
+    const empty = document.getElementById('noTaskLogs');
+    const statusFilter = document.getElementById('taskLogStatusFilter')?.value || 'all';
+    if (!tbody || !table || !empty) return;
+
+    const filtered = taskLogRows.filter(log => matchTaskLogStatusFilter(log.status, statusFilter));
+    updateTaskLogStats(filtered);
+
+    if (!filtered.length) {
+        table.style.display = 'none';
+        empty.style.display = 'block';
+        empty.innerHTML = `
+            <i class="bi bi-journal-text" style="font-size: 3rem; color: #ccc;"></i>
+            <p class="mt-2 text-muted mb-0">暂无任务日志</p>
+        `;
+        tbody.innerHTML = '';
+        return;
+    }
+
+    tbody.innerHTML = filtered.map(log => `
+        <tr>
+            <td class="text-nowrap">${escapeHtml(formatTaskLogTime(log.created_at))}</td>
+            <td>${renderTaskTypeBadge(log.task_type, log.task_label)}</td>
+            <td><span class="task-log-account" title="${escapeHtml(log.cookie_id || '')}">${escapeHtml(log.cookie_id || '-')}</span></td>
+            <td><span class="task-log-object" title="${escapeHtml(log.display_object || '')}">${escapeHtml(log.display_object || '-')}</span></td>
+            <td>${escapeHtml(log.buyer_nick || log.buyer_id || '-')}</td>
+            <td>${renderTaskStatusBadge(log.status)}</td>
+            <td class="task-log-message" title="${escapeHtml(log.message || '')}">${escapeHtml(log.message || '-')}</td>
+            <td><span class="task-log-batch" title="${escapeHtml(log.batch_id || '')}">${escapeHtml(shortenTaskLogBatchId(log.batch_id))}</span></td>
+        </tr>
+    `).join('');
+    table.style.display = 'table';
+    empty.style.display = 'none';
+}
+
+function matchTaskLogStatusFilter(status, filter) {
+    if (!filter || filter === 'all') return true;
+    const value = String(status || '').toLowerCase();
+    if (filter === 'success') return ['success', 'partial_success', 'already_rated'].includes(value);
+    if (filter === 'skipped') return ['skipped', 'missing_template'].includes(value);
+    if (filter === 'cookie_expired') return ['cookie_expired', 'session_expired'].includes(value);
+    if (filter === 'processing') return ['processing', 'started', 'running'].includes(value);
+    return value === filter;
+}
+
+function updateTaskLogStats(rows) {
+    const total = rows.length;
+    const success = rows.filter(row => matchTaskLogStatusFilter(row.status, 'success')).length;
+    const failed = rows.filter(row => String(row.status || '').toLowerCase() === 'failed').length;
+    const skipped = rows.filter(row => matchTaskLogStatusFilter(row.status, 'skipped') || matchTaskLogStatusFilter(row.status, 'cookie_expired')).length;
+
+    setTaskLogText('taskLogTotalCount', total);
+    setTaskLogText('taskLogSuccessCount', success);
+    setTaskLogText('taskLogFailedCount', failed);
+    setTaskLogText('taskLogSkippedCount', skipped);
+}
+
+function setTaskLogText(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = String(value);
+}
+
+function getTaskTypeLabel(type) {
+    const labels = {
+        auto_comment: '自动评价',
+        item_polish: '商品擦亮',
+        login_renew: '登录续期',
+        cookie_refresh: 'Cookie刷新',
+        other_task: '其他任务'
+    };
+    return labels[type] || '其他任务';
+}
+
+function renderTaskTypeBadge(type, label) {
+    const config = {
+        auto_comment: ['chat-heart', 'task-type-comment'],
+        item_polish: ['stars', 'task-type-polish'],
+        login_renew: ['shield-check', 'task-type-login'],
+        cookie_refresh: ['arrow-repeat', 'task-type-cookie'],
+        other_task: ['box-seam', 'task-type-other']
+    };
+    const [icon, cls] = config[type] || config.other_task;
+    return `<span class="task-type-badge ${cls}"><i class="bi bi-${icon}"></i>${escapeHtml(label || getTaskTypeLabel(type))}</span>`;
+}
+
+function renderTaskStatusBadge(status) {
+    const value = String(status || '').toLowerCase();
+    const map = {
+        success: ['bg-success', '成功'],
+        failed: ['bg-danger', '失败'],
+        skipped: ['bg-secondary', '已跳过'],
+        cookie_expired: ['bg-warning text-dark', 'Cookie过期'],
+        session_expired: ['bg-warning text-dark', 'Session过期'],
+        processing: ['bg-info', '处理中'],
+        started: ['bg-info', '处理中'],
+        running: ['bg-info', '运行中'],
+        partial_success: ['bg-primary', '部分成功'],
+        already_rated: ['bg-success', '已评价'],
+        missing_template: ['bg-secondary', '缺少模板']
+    };
+    const [cls, text] = map[value] || ['bg-secondary', status || '未知'];
+    return `<span class="badge ${cls}">${escapeHtml(text)}</span>`;
+}
+
+function formatTaskLogTime(value) {
+    if (!value) return '-';
+    let date = null;
+    if (typeof parseUtcDateTime === 'function') {
+        date = parseUtcDateTime(value);
+    }
+    if (!date) date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString('zh-CN');
+}
+
+function shortenTaskLogBatchId(batchId) {
+    if (!batchId) return '-';
+    const value = String(batchId);
+    return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
+}

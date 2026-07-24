@@ -180,13 +180,15 @@ function showSection(sectionName) {
         initMenuManagement();
         break;
     case 'logs':            // 【日志管理菜单】
-        // 自动加载系统日志
+        // 默认进入系统运行日志页签；任务日志页签按需加载
         setTimeout(() => {
-            // 检查是否在正确的页面并且元素存在
-            const systemLogContainer = document.getElementById('systemLogContainer');
-            if (systemLogContainer) {
-                console.log('首次进入日志页面，自动加载日志...');
-                loadSystemLogs();
+            if (typeof switchLogCenterTab === 'function') {
+                switchLogCenterTab(typeof currentLogCenterTab === 'string' ? currentLogCenterTab : 'system');
+            } else {
+                const systemLogContainer = document.getElementById('systemLogContainer');
+                if (systemLogContainer) {
+                    loadSystemLogs();
+                }
             }
         }, 100);
         break;
