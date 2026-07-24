@@ -8342,6 +8342,13 @@ class AutoCommentUpdate(BaseModel):
     auto_comment: bool
 
 
+class AutoCommentBatchRateRequest(BaseModel):
+    cookie_ids: Optional[List[str]] = None
+    account_ids: Optional[List[str]] = None
+    page_size: Optional[int] = 100
+
+
+
 class CommentTemplateCreate(BaseModel):
     name: str
     content: str
@@ -10817,6 +10824,257 @@ def get_auto_comment_logs(
     except Exception as e:
         log_with_user('error', f"查询自动评价日志失败: {str(e)}", current_user)
         raise HTTPException(status_code=500, detail=f"查询自动评价日志失败: {str(e)}")
+
+
+
+
+def _find_first_nested_value(payload: Any, keys: List[str]) -> Any:
+    """从闲鱼待评价列表项中尽量提取字段。"""
+    if isinstance(payload, dict):
+        for key in keys:
+            if key in payload and payload[key] not in (None, ''):
+                return payload[key]
+        for value in payload.values():
+            found = _find_first_nested_value(value, keys)
+            if found not in (None, ''):
+                return found
+    elif isinstance(payload, list):
+        for value in payload:
+            found = _find_first_nested_value(value, keys)
+            if found not in (None, ''):
+                return found
+    return None
+
+
+def _extract_merchant_rate_order_id(item: Dict[str, Any]) -> str:
+    return str(_find_first_nested_value(item, [
+        'orderId', 'tradeId', 'bizOrderId', 'biz_order_id', 'order_id', 'trade_id'
+    ]) or '').strip()
+
+
+def _extract_merchant_rate_item_meta(item: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        'item_id': str(_find_first_nested_value(item, ['itemId', 'item_id', 'auctionId', 'auction_id']) or '').strip(),
+        'buyer_id': str(_find_first_nested_value(item, ['buyerId', 'buyer_id', 'buyerUserId', 'userId']) or '').strip(),
+        'buyer_nick': str(_find_first_nested_value(item, ['buyerNick', 'buyer_nick', 'buyerName', 'nick', 'userNick']) or '').strip(),
+    }
+
+
+@app.post('/api/auto-comment/batch-rate')
+async def batch_rate_historical_orders(
+    request: AutoCommentBatchRateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """从闲鱼待评价列表拉取历史订单并批量补评价。"""
+    try:
+        from utils.rate_service import RateService, fetch_merchant_rate_list
+
+        raw_ids = request.cookie_ids if request.cookie_ids is not None else request.account_ids
+        account_ids = list(dict.fromkeys(
+            str(account_id or '').strip()
+            for account_id in (raw_ids or [])
+            if str(account_id or '').strip()
+        ))
+        if not account_ids:
+            raise HTTPException(status_code=400, detail='请选择账号')
+
+        page_size = max(1, min(int(request.page_size or 100), 100))
+        batch_id = f"manual_history_rate_{uuid.uuid4()}"
+        details = []
+        stats = {
+            'batch_id': batch_id,
+            'total_accounts': len(account_ids),
+            'success_accounts': 0,
+            'total_pending': 0,
+            'total_rated': 0,
+            'total_failed': 0,
+            'total_skipped': 0,
+        }
+
+        for raw_cookie_id in account_ids:
+            account_result = {
+                'account_id': raw_cookie_id,
+                'success': False,
+                'rated_count': 0,
+                'failed_count': 0,
+                'skipped_count': 0,
+                'total_pending': 0,
+                'message': '',
+            }
+            try:
+                cookie_id = _ensure_cookie_access(raw_cookie_id, current_user)
+                account_result['account_id'] = cookie_id
+
+                if not db_manager.get_auto_comment(cookie_id):
+                    account_result['message'] = '未开启自动好评'
+                    account_result['skipped_count'] += 1
+                    stats['total_skipped'] += 1
+                    db_manager.add_scheduled_rate_log(
+                        batch_id, cookie_id, status='skipped', message='历史补评价跳过：未开启自动好评'
+                    )
+                    details.append(account_result)
+                    continue
+
+                template = db_manager.get_active_comment_template(cookie_id)
+                feedback = str((template or {}).get('content') or '').strip()
+                if not feedback:
+                    account_result['message'] = '未设置激活的好评模板'
+                    account_result['skipped_count'] += 1
+                    stats['total_skipped'] += 1
+                    db_manager.add_scheduled_rate_log(
+                        batch_id, cookie_id, status='missing_template', message='历史补评价跳过：未设置激活的好评模板'
+                    )
+                    details.append(account_result)
+                    continue
+
+                cookie_string = db_manager.get_cookie(cookie_id)
+                if not cookie_string:
+                    account_result['message'] = '账号 Cookie 为空或不存在'
+                    account_result['failed_count'] += 1
+                    stats['total_failed'] += 1
+                    db_manager.add_scheduled_rate_log(
+                        batch_id, cookie_id, status='cookie_expired', message='历史补评价失败：账号 Cookie 为空或不存在'
+                    )
+                    details.append(account_result)
+                    continue
+
+                list_result = await fetch_merchant_rate_list(
+                    cookie_string=cookie_string,
+                    account_id=cookie_id,
+                    page=1,
+                    page_size=page_size,
+                    max_retries=3,
+                )
+                if not list_result.get('success'):
+                    status = 'cookie_expired' if list_result.get('session_expired') else 'failed'
+                    message = f"获取待评价列表失败: {list_result.get('message') or '未知错误'}"
+                    account_result['message'] = message
+                    account_result['failed_count'] += 1
+                    stats['total_failed'] += 1
+                    db_manager.add_scheduled_rate_log(
+                        batch_id=batch_id,
+                        cookie_id=cookie_id,
+                        status=status,
+                        message=message,
+                        raw_response=list_result.get('raw') or list_result,
+                    )
+                    details.append(account_result)
+                    continue
+
+                pending_items = list_result.get('items') or []
+                if not isinstance(pending_items, list):
+                    pending_items = []
+                account_result['total_pending'] = len(pending_items)
+                stats['total_pending'] += len(pending_items)
+
+                if not pending_items:
+                    account_result['success'] = True
+                    account_result['message'] = '没有待评价订单'
+                    stats['success_accounts'] += 1
+                    db_manager.add_scheduled_rate_log(
+                        batch_id, cookie_id, status='skipped', message='历史补评价：没有待评价订单'
+                    )
+                    details.append(account_result)
+                    continue
+
+                current_cookie = str(list_result.get('cookies_str') or cookie_string)
+                for item in pending_items:
+                    meta = _extract_merchant_rate_item_meta(item if isinstance(item, dict) else {})
+                    order_id = _extract_merchant_rate_order_id(item if isinstance(item, dict) else {})
+                    if not order_id:
+                        account_result['failed_count'] += 1
+                        stats['total_failed'] += 1
+                        db_manager.add_scheduled_rate_log(
+                            batch_id=batch_id,
+                            cookie_id=cookie_id,
+                            item_id=meta.get('item_id') or None,
+                            buyer_id=meta.get('buyer_id') or None,
+                            buyer_nick=meta.get('buyer_nick') or None,
+                            comment=feedback,
+                            status='failed',
+                            message='待评价列表项缺少订单号',
+                            raw_response=item,
+                        )
+                        continue
+
+                    rate_service = RateService(current_cookie, account_id=cookie_id)
+                    rate_result = await rate_service.rate_buyer(order_id, feedback=feedback)
+                    if rate_service.cookie_string and rate_service.cookie_string != current_cookie:
+                        current_cookie = rate_service.cookie_string
+
+                    status = 'already_rated' if rate_result.get('already_rated') else (
+                        'success' if rate_result.get('success') else (
+                            'cookie_expired' if rate_result.get('session_expired') else 'failed'
+                        )
+                    )
+                    message = str(rate_result.get('message') or '')
+                    db_manager.add_scheduled_rate_log(
+                        batch_id=batch_id,
+                        cookie_id=cookie_id,
+                        order_id=order_id,
+                        item_id=meta.get('item_id') or None,
+                        buyer_id=meta.get('buyer_id') or None,
+                        buyer_nick=meta.get('buyer_nick') or None,
+                        comment=feedback,
+                        status=status,
+                        message=message,
+                        raw_response=rate_result.get('raw') or rate_result,
+                    )
+
+                    if rate_result.get('success'):
+                        account_result['rated_count'] += 1
+                        stats['total_rated'] += 1
+                        db_manager.mark_order_rated(order_id, True)
+                    else:
+                        account_result['failed_count'] += 1
+                        stats['total_failed'] += 1
+                        db_manager.mark_order_rated(order_id, False, message)
+
+                    await asyncio.sleep(1)
+
+                account_result['success'] = True
+                account_result['message'] = (
+                    f"评价完成: 成功 {account_result['rated_count']} 笔，"
+                    f"失败 {account_result['failed_count']} 笔"
+                )
+                stats['success_accounts'] += 1
+                details.append(account_result)
+            except HTTPException as exc:
+                account_result['message'] = str(exc.detail or '账号无权限或不存在')
+                account_result['failed_count'] += 1
+                stats['total_failed'] += 1
+                details.append(account_result)
+            except Exception as exc:
+                logger.error(f"[历史补评价] 账号 {raw_cookie_id} 处理异常: {exc}")
+                account_result['message'] = f"处理异常: {str(exc)}"
+                account_result['failed_count'] += 1
+                stats['total_failed'] += 1
+                try:
+                    db_manager.add_scheduled_rate_log(
+                        batch_id, raw_cookie_id, status='failed', message=account_result['message']
+                    )
+                except Exception:
+                    pass
+                details.append(account_result)
+
+        message = (
+            f"历史补评价完成: {stats['success_accounts']}/{stats['total_accounts']} 个账号处理成功，"
+            f"共评价 {stats['total_rated']} 笔，失败 {stats['total_failed']} 笔"
+        )
+        log_with_user('info', message, current_user)
+        return {
+            'success': True,
+            'message': message,
+            'data': {
+                **stats,
+                'details': details,
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_with_user('error', f"历史补评价失败: {str(e)}", current_user)
+        raise HTTPException(status_code=500, detail=f"历史补评价失败: {str(e)}")
 
 
 @app.get("/logs")
