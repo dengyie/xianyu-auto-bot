@@ -6605,7 +6605,9 @@ async def check_qr_code_status_lite(session_id: str, current_user: Dict[str, Any
         if not st:
             return {'status': 'error', 'message': '会话不存在或已过期'}
 
-        if st.get('user_id') and st['user_id'] != current_user.get('user_id'):
+        # 归属校验：user_id 可能为 0 等 falsy 值，必须显式判空
+        st_user_id = st.get('user_id')
+        if st_user_id is not None and st_user_id != current_user.get('user_id'):
             return {'status': 'error', 'message': '无权访问该会话'}
 
         state = st.get('state', 'pending')
