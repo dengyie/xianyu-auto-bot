@@ -307,8 +307,13 @@ function displayOrders() {
 // 创建订单行HTML
 function createOrderRow(order) {
     const statusClass = getOrderStatusClass(order.order_status);
-    const statusText = getOrderStatusText(order.order_status);
+    let statusText = getOrderStatusText(order.order_status);
     const normalizedStatus = normalizeOrderStatus(order.order_status);
+    const pendingPlatformConfirm = !!order.pending_platform_confirm;
+    if (pendingPlatformConfirm) {
+        const units = order.pending_confirm_units ? `×${order.pending_confirm_units}` : '';
+        statusText = `待补确认${units}`;
+    }
     const orderId = escapeHtml(order.order_id || '');
     const itemId = escapeHtml(order.item_id || '-');
     const buyerId = escapeHtml(order.buyer_id || '-');
@@ -323,6 +328,7 @@ function createOrderRow(order) {
 
     // 判断是否可以手动发货（允许多次发货，除了交易关闭的订单）
     const canDeliver = !['cancelled', 'refunding'].includes(normalizedStatus);
+    const canConfirmRetry = pendingPlatformConfirm;
 
     let specHtml = '-';
     if (order.spec_name && order.spec_value) {
@@ -377,6 +383,10 @@ function createOrderRow(order) {
                     <button class="btn btn-outline-success btn-sm order-action-btn" data-order-action="deliver" data-order-id="${orderId}" title="手动发货" ${canDeliver ? '' : 'disabled'}>
                         <i class="bi bi-truck"></i>
                     </button>
+                    ${canConfirmRetry ? `
+                    <button class="btn btn-outline-warning btn-sm order-action-btn" data-order-action="confirm-retry" data-order-id="${orderId}" title="补确认平台发货">
+                        <i class="bi bi-shield-check"></i>
+                    </button>` : ''}
                     <button class="btn btn-outline-info btn-sm order-action-btn" data-order-action="refresh" data-order-id="${orderId}" title="刷新状态">
                         <i class="bi bi-arrow-repeat"></i>
                     </button>
@@ -420,7 +430,7 @@ function getOrderStatusText(status) {
         'pending_payment': '待付款',
         'pending_ship': '待发货',
         'partial_success': '部分发货',
-        'partial_pending_finalize': '部分待收尾',
+        'partial_pending_finalize': '部分待收尾/待补确认',
         'shipped': '已发货',
         'completed': '交易成功',
         'success': '交易成功',
@@ -1318,6 +1328,43 @@ async function batchDeleteOrders() {
 }
 
 // 手动发货订单
+async function retryPlatformConfirm(orderId) {
+    try {
+        const confirmed = confirm(`确定只补确认平台发货吗？\n\n订单ID: ${orderId}\n\n不会重复发送卡券，仅重试平台确认发货。`);
+        if (!confirmed) {
+            return;
+        }
+
+        showToast('正在补确认平台发货...', 'info');
+
+        const response = await fetch(`${apiBase}/api/orders/${orderId}/confirm-retry`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${authToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+            if (result.confirmed) {
+                showToast(`补确认成功！\n${result.message || ''}`, 'success');
+            } else if (result.success) {
+                showToast(result.message || '没有待补确认记录', 'info');
+            } else {
+                showToast(`补确认失败: ${result.message || '未知错误'}`, 'warning');
+            }
+            await refreshOrdersData();
+        } else {
+            showToast(`补确认失败: ${result.detail || result.message || '未知错误'}`, 'danger');
+        }
+    } catch (error) {
+        console.error('补确认发货失败:', error);
+        showToast('补确认发货失败: ' + error.message, 'danger');
+    }
+}
+
 async function manualDeliverOrder(orderId) {
     try {
         const confirmed = confirm(`确定要手动发货此订单吗？\n\n订单ID: ${orderId}\n\n系统将根据发货规则自动匹配发货内容并发送给买家。`);
@@ -1494,6 +1541,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (action === 'deliver') {
                 manualDeliverOrder(orderId);
+            } else if (action === 'confirm-retry') {
+                retryPlatformConfirm(orderId);
             } else if (action === 'refresh') {
                 refreshOrderStatus(orderId);
             } else if (action === 'detail') {

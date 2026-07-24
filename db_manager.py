@@ -5371,6 +5371,80 @@ Cookie数量: {cookie_count}
                 logger.error(f"获取订单全部发货 finalize 状态失败: {e}")
                 return []
 
+
+    def get_pending_platform_confirm_states(self, cookie_id: str = None, order_id: str = None, limit: int = 100):
+        """获取“卡券已发出但平台确认失败，等待补确认”的发货单元。"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                safe_limit = max(1, min(int(limit or 100), 500))
+                conditions = ["status = 'sent'"]
+                params = []
+
+                if cookie_id:
+                    conditions.append("cookie_id = ?")
+                    params.append(cookie_id)
+                if order_id:
+                    conditions.append("order_id = ?")
+                    params.append(order_id)
+
+                conditions.append(
+                    "("
+                    "COALESCE(last_error, '') LIKE '%平台确认发货失败%' "
+                    "OR COALESCE(last_error, '') LIKE '%自动确认发货失败%' "
+                    "OR COALESCE(delivery_meta, '') LIKE '%\"pending_platform_confirm\"%' "
+                    "OR COALESCE(delivery_meta, '') LIKE '%\"platform_confirm_status\": \"failed\"%' "
+                    "OR COALESCE(delivery_meta, '') LIKE '%\"confirm_retry_required\"%'"
+                    ")"
+                )
+
+                params.append(safe_limit)
+                where_sql = ' AND '.join(conditions)
+                sql = (
+                    "SELECT order_id, unit_index, cookie_id, item_id, buyer_id, channel, status, "
+                    "delivery_meta, last_error, sent_at, finalized_at, created_at, updated_at "
+                    "FROM delivery_finalization_states "
+                    f"WHERE {where_sql} "
+                    "ORDER BY datetime(updated_at) ASC, id ASC "
+                    "LIMIT ?"
+                )
+                self._execute_sql(cursor, sql, tuple(params))
+
+                states = []
+                for row in cursor.fetchall():
+                    try:
+                        delivery_meta = json.loads(row[7] or '{}')
+                    except Exception:
+                        delivery_meta = {}
+                    if delivery_meta.get('confirm_retry_stopped') or delivery_meta.get('platform_confirm_status') == 'not_required_terminal':
+                        if not delivery_meta.get('pending_platform_confirm') and not delivery_meta.get('confirm_retry_required'):
+                            continue
+                    if (
+                        delivery_meta.get('pending_platform_confirm') is False
+                        and delivery_meta.get('confirm_retry_required') is False
+                        and delivery_meta.get('platform_confirm_status') in ('success', 'not_required_terminal')
+                    ):
+                        continue
+                    states.append({
+                        'order_id': row[0],
+                        'unit_index': row[1],
+                        'cookie_id': row[2],
+                        'item_id': row[3],
+                        'buyer_id': row[4],
+                        'channel': row[5],
+                        'status': row[6],
+                        'delivery_meta': delivery_meta,
+                        'last_error': row[8],
+                        'sent_at': row[9],
+                        'finalized_at': row[10],
+                        'created_at': row[11],
+                        'updated_at': row[12],
+                    })
+                return states
+            except Exception as e:
+                logger.error(f"获取待补确认发货单元失败: {e}")
+                return []
+
     def get_delivery_progress_summary(self, order_id: str, expected_quantity: int = 1):
         """汇总订单的多数量发货进度。"""
         try:

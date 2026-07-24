@@ -12477,6 +12477,22 @@ def get_user_orders(current_user: Dict[str, Any] = Depends(get_current_user)):
             # 为每个订单添加cookie_id信息
             for order in orders:
                 order['cookie_id'] = cookie_id
+                if normalize_order_status_value(order.get('order_status')) == 'partial_pending_finalize':
+                    pending_states = db_manager.get_pending_platform_confirm_states(
+                        cookie_id=cookie_id,
+                        order_id=order.get('order_id'),
+                        limit=20,
+                    )
+                    if pending_states:
+                        pending_errors = []
+                        for state in pending_states:
+                            meta = state.get('delivery_meta') or {}
+                            error_text = meta.get('confirm_error') or state.get('last_error')
+                            if error_text and error_text not in pending_errors:
+                                pending_errors.append(error_text)
+                        order['pending_platform_confirm'] = True
+                        order['pending_confirm_units'] = len(pending_states)
+                        order['pending_confirm_error'] = '；'.join(pending_errors[:3]) if pending_errors else '平台确认发货失败，等待补确认'
                 all_orders.append(order)
 
         # 历史订单补录后优先按平台下单时间展示，回退到本地入库时间
@@ -12816,6 +12832,64 @@ def delete_user_order(order_id: str, current_user: Dict[str, Any] = Depends(get_
     except Exception as e:
         log_with_user('error', f"删除订单失败: {order_id} - {mask_sensitive_text(e)}", current_user)
         raise HTTPException(status_code=500, detail="删除订单失败，请稍后重试")
+
+
+
+@app.post('/api/orders/{order_id}/confirm-retry')
+async def retry_order_platform_confirm(order_id: str, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """只重试平台确认发货，不重复发送卡券。"""
+    try:
+        from db_manager import db_manager
+        import cookie_manager
+
+        user_id = current_user['user_id']
+        log_with_user('info', f"补确认发货请求: 订单 {order_id}", current_user)
+
+        order = db_manager.get_order_by_id(order_id)
+        if not order:
+            return {"success": False, "confirmed": False, "message": "订单不存在"}
+
+        cookie_id = order.get('cookie_id')
+        if not cookie_id:
+            return {"success": False, "confirmed": False, "message": "订单缺少账号信息"}
+
+        cookie_info = db_manager.get_cookie_details(cookie_id)
+        if not cookie_info or cookie_info.get('user_id') != user_id:
+            return {"success": False, "confirmed": False, "message": "无权操作此订单"}
+
+        pending_states = db_manager.get_pending_platform_confirm_states(
+            cookie_id=cookie_id,
+            order_id=order_id,
+            limit=50,
+        )
+        if not pending_states:
+            return {"success": True, "confirmed": False, "message": "该订单没有待补确认记录"}
+
+        xianyu_instance = cookie_manager.manager.get_xianyu_instance(cookie_id) if cookie_manager.manager else None
+        if not xianyu_instance:
+            return {"success": False, "confirmed": False, "message": f"账号 {cookie_id} 未运行，请先启动账号"}
+
+        result = await xianyu_instance.retry_pending_platform_confirms(
+            order_id=order_id,
+            source='manual_confirm_retry',
+            limit=50,
+        )
+        try:
+            publish_order_update_event(order_id, source='manual_confirm_retry')
+        except Exception:
+            pass
+
+        return {
+            "success": bool(result.get('success')),
+            "confirmed": int(result.get('confirmed') or 0) > 0,
+            "message": result.get('message') or '补确认完成',
+            "data": result,
+        }
+    except Exception as e:
+        import traceback
+        log_with_user('error', f"补确认发货异常: 订单 {order_id} - {str(e)}", current_user)
+        logger.error(f"补确认发货异常: {traceback.format_exc()}")
+        return {"success": False, "confirmed": False, "message": f"补确认异常: {str(e)}"}
 
 
 @app.post('/api/orders/{order_id}/deliver')
