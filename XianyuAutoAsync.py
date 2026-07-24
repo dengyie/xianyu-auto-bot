@@ -3362,6 +3362,82 @@ class XianyuLive:
         delay_task = asyncio.create_task(self._delayed_lock_release(lock_key, delay_minutes=delay_minutes))
         self._lock_hold_info[lock_key]['task'] = delay_task
 
+
+    def _resolve_blacklist_user_id(self) -> Optional[int]:
+        """获取当前账号归属用户，用于黑名单隔离。"""
+        if self.user_id:
+            try:
+                return int(self.user_id)
+            except (TypeError, ValueError):
+                pass
+
+        try:
+            cookie_details = db_manager.get_cookie_details(self.cookie_id) or {}
+            user_id = cookie_details.get('user_id')
+            return int(user_id) if user_id else None
+        except Exception as e:
+            logger.warning(f"【{self.cookie_id}】解析黑名单用户归属失败: {self._safe_str(e)}")
+            return None
+
+    def _format_blacklist_block_reason(self, hit: Dict[str, Any], action: str = '自动动作') -> str:
+        scope_label = {
+            'item': '商品级',
+            'account': '账号级',
+            'user': '用户级',
+        }.get((hit or {}).get('scope'), (hit or {}).get('scope') or '未知级别')
+        reason = str((hit or {}).get('reason') or '').strip()
+        reason_part = f"，原因：{reason}" if reason else ''
+        buyer_id = (hit or {}).get('buyer_id') or '未知买家'
+        return f"买家 {buyer_id} 命中个人黑名单 scope={scope_label}{reason_part}，跳过{action}"
+
+    def _check_buyer_blacklist_for_action(self, buyer_id: str = None, item_id: str = None,
+                                          order_id: str = None, buyer_nick: str = None,
+                                          action: str = '自动动作', channel: str = 'auto',
+                                          log_delivery: bool = False) -> Optional[Dict[str, Any]]:
+        """检查买家黑名单，命中时可记录发货跳过日志。"""
+        normalized_buyer_id = str(buyer_id or '').strip()
+        if not normalized_buyer_id:
+            return None
+
+        try:
+            user_id = self._resolve_blacklist_user_id()
+            if not user_id:
+                return None
+
+            hit = db_manager.is_buyer_blacklisted(
+                user_id=user_id,
+                buyer_id=normalized_buyer_id,
+                cookie_id=self.cookie_id,
+                item_id=str(item_id or '').strip() or None,
+            )
+            if not hit:
+                return None
+
+            block_reason = self._format_blacklist_block_reason(hit, action=action)
+            logger.warning(
+                f"【{self.cookie_id}】买家 {normalized_buyer_id} 命中个人黑名单，"
+                f"scope={hit.get('scope')}, item_id={item_id or ''}, order_id={order_id or ''}，跳过{action}"
+            )
+
+            if log_delivery:
+                self._record_delivery_log(
+                    order_id=order_id,
+                    item_id=item_id,
+                    buyer_id=normalized_buyer_id,
+                    buyer_nick=buyer_nick,
+                    status='skipped',
+                    reason=block_reason,
+                    channel=channel,
+                    rule_meta={'match_mode': 'blacklist'},
+                )
+            return hit
+        except Exception as e:
+            logger.warning(
+                f"【{self.cookie_id}】检查买家黑名单失败: buyer_id={normalized_buyer_id}, "
+                f"item_id={item_id or ''}, error={self._safe_str(e)}"
+            )
+            return None
+
     def _record_delivery_log(self, order_id: str = None, item_id: str = None, buyer_id: str = None,
                              buyer_nick: str = None, status: str = 'failed', reason: str = None,
                              channel: str = 'auto', rule_meta: dict = None):
@@ -4949,6 +5025,16 @@ class XianyuLive:
                         channel='auto'
                     )
                     return
+
+            if self._check_buyer_blacklist_for_action(
+                buyer_id=user_id,
+                item_id=item_id,
+                order_id=order_id,
+                action='自动发货',
+                channel='auto',
+                log_delivery=True,
+            ):
+                return
             
             # 检查订单是否已发货
             if not self.can_auto_delivery(order_id):
@@ -5327,6 +5413,16 @@ class XianyuLive:
                     )
                     return
 
+            if self._check_buyer_blacklist_for_action(
+                buyer_id=send_user_id,
+                item_id=item_id,
+                buyer_nick=send_user_name,
+                action='自动发货',
+                channel='auto',
+                log_delivery=True,
+            ):
+                return
+
             # 提取订单ID（传递原始消息数据以便在解密消息中找不到时进行备用搜索）
             order_id = self._extract_order_id(message, message_data)
 
@@ -5502,6 +5598,17 @@ class XianyuLive:
                 if (not item_id or item_id == "未知商品") and existing_item_id:
                     item_id = existing_item_id
                     logger.info(f'[{msg_time}] 【{self.cookie_id}】订单一致性校验补全商品ID: {item_id}')
+
+            if self._check_buyer_blacklist_for_action(
+                buyer_id=send_user_id,
+                item_id=item_id,
+                order_id=order_id,
+                buyer_nick=send_user_name,
+                action='自动发货',
+                channel='auto',
+                log_delivery=True,
+            ):
+                return
 
             logger.info(f'[{msg_time}] 【{self.cookie_id}】提取到订单ID: {order_id}，将在自动发货时处理确认发货')
 
@@ -9421,6 +9528,15 @@ class XianyuLive:
     async def get_ai_reply(self, send_user_name: str, send_user_id: str, send_message: str, item_id: str, chat_id: str):
         """获取AI回复"""
         try:
+            if self._check_buyer_blacklist_for_action(
+                buyer_id=send_user_id,
+                item_id=item_id,
+                buyer_nick=send_user_name,
+                action='AI回复',
+                log_delivery=False,
+            ):
+                return None
+
             from ai_reply_engine import ai_reply_engine
 
             # 检查是否启用AI回复
@@ -14999,6 +15115,16 @@ class XianyuLive:
                 logger.info(f"[{msg_time}] 【{self.cookie_id}】【系统】chat_id {chat_id} 自动回复已暂停，剩余时间: {remaining_minutes}分{remaining_seconds}秒")
                 return
 
+            blacklist_hit = self._check_buyer_blacklist_for_action(
+                buyer_id=send_user_id,
+                item_id=item_id,
+                buyer_nick=send_user_name,
+                action='自动回复',
+                log_delivery=False,
+            )
+            if blacklist_hit:
+                return
+
             reply = None
             reply_source = None
 
@@ -15756,6 +15882,18 @@ class XianyuLive:
                                     
                                     # 继续执行亦凡API调用（带账号）
                                     try:
+                                        if self._check_buyer_blacklist_for_action(
+                                            buyer_id=send_user_id,
+                                            item_id=item_id_saved,
+                                            order_id=order_id_saved,
+                                            buyer_nick=send_user_name,
+                                            action='亦凡账号确认自动发货',
+                                            channel='auto',
+                                            log_delivery=True,
+                                        ):
+                                            logger.info(f"【{self.cookie_id}】[{msg_id}] 亦凡账号确认发货被黑名单拦截")
+                                            return
+
                                         # 直接调用亦凡API下单
                                         delivery_content = await self._call_yifan_api_with_account(
                                             rule, account, order_id_saved, item_id_saved, send_user_id, chat_id

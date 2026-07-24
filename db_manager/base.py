@@ -915,6 +915,40 @@ class DBBase:
             )
             ''')
 
+            # 创建个人黑名单表
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS xy_personal_blacklist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                cookie_id TEXT,
+                buyer_id TEXT NOT NULL,
+                buyer_nick TEXT DEFAULT '',
+                item_id TEXT,
+                reason TEXT DEFAULT '',
+                is_enabled INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (cookie_id) REFERENCES cookies(id) ON DELETE CASCADE
+            )
+            ''')
+            self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_xy_personal_blacklist_user_buyer ON xy_personal_blacklist(user_id, buyer_id)")
+            self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_xy_personal_blacklist_scope ON xy_personal_blacklist(user_id, buyer_id, cookie_id, item_id, is_enabled)")
+
+            # 创建平台黑名单表（预留平台同步能力）
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS xy_platform_blacklist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                buyer_id TEXT NOT NULL,
+                buyer_nick TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            ''')
+            self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_xy_platform_blacklist_user_buyer ON xy_platform_blacklist(user_id, buyer_id)")
+
             # 插入默认通知模板
             cursor.execute('''
             INSERT OR IGNORE INTO notification_templates (type, template) VALUES

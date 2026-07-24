@@ -37,6 +37,7 @@ from utils.qr_login_lite import qrcode_login_lite
 from utils.xianyu_utils import trans_cookies
 from utils.image_utils import image_manager
 from utils.audit_logger import record_audit_event, status_from_http_status_code
+from utils.blacklist_service import blacklist_service
 from utils.client_ip import get_client_ip
 from utils.time_utils import (
     LOCAL_TIMEZONE,
@@ -2879,6 +2880,24 @@ class SaveItemKeywordsRequest(BaseModel):
 class CopyKeywordsRequest(BaseModel):
     source_item_id: str
     target_item_ids: List[str]
+
+
+class PersonalBlacklistCreateRequest(BaseModel):
+    buyer_ids: Any
+    cookie_id: Optional[str] = None
+    item_id: Optional[str] = None
+    buyer_nick: Optional[str] = ''
+    reason: Optional[str] = ''
+    is_enabled: bool = True
+
+
+class PersonalBlacklistBatchDeleteRequest(BaseModel):
+    ids: List[int]
+
+
+class PersonalBlacklistToggleRequest(BaseModel):
+    is_enabled: bool
+
 
 
 class ChatHydrationDebug(BaseModel):
@@ -12890,6 +12909,177 @@ async def retry_order_platform_confirm(order_id: str, current_user: Dict[str, An
         log_with_user('error', f"补确认发货异常: 订单 {order_id} - {str(e)}", current_user)
         logger.error(f"补确认发货异常: {traceback.format_exc()}")
         return {"success": False, "confirmed": False, "message": f"补确认异常: {str(e)}"}
+
+
+
+
+# ------------------------- 黑名单接口 -------------------------
+
+
+@app.get('/api/blacklist/personal')
+def get_personal_blacklist(
+    buyer_id: str = None,
+    buyer_nick: str = None,
+    page: int = 1,
+    page_size: int = 20,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    try:
+        result = blacklist_service.list_personal(
+            user_id=current_user['user_id'],
+            buyer_id=buyer_id,
+            buyer_nick=buyer_nick,
+            page=page,
+            page_size=page_size,
+        )
+        return {'success': True, **result}
+    except Exception as e:
+        log_with_user('error', f"查询个人黑名单失败: {mask_sensitive_text(e)}", current_user)
+        raise HTTPException(status_code=500, detail='查询个人黑名单失败')
+
+
+@app.post('/api/blacklist/personal')
+def create_personal_blacklist(
+    request: PersonalBlacklistCreateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    try:
+        cookie_id = str(request.cookie_id or '').strip() or None
+        if cookie_id:
+            cookie_id = _ensure_cookie_access(cookie_id, current_user)
+
+        result = blacklist_service.create_personal(
+            user_id=current_user['user_id'],
+            buyer_ids=request.buyer_ids,
+            cookie_id=cookie_id,
+            item_id=str(request.item_id or '').strip() or None,
+            reason=str(request.reason or '').strip(),
+            is_enabled=bool(request.is_enabled),
+            buyer_nick=str(request.buyer_nick or '').strip(),
+        )
+        created = int(result.get('created') or 0)
+        skipped = int(result.get('skipped') or 0)
+        message = f"成功添加 {created} 条黑名单"
+        if skipped:
+            message += f"，跳过 {skipped} 条"
+        log_with_user('info', f"新增个人黑名单: created={created}, skipped={skipped}", current_user)
+        return {
+            'success': True,
+            'message': message,
+            'data': {
+                'count': created,
+                'skipped': skipped,
+                'records': result.get('records') or [],
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_with_user('error', f"新增个人黑名单失败: {mask_sensitive_text(e)}", current_user)
+        raise HTTPException(status_code=500, detail='新增个人黑名单失败')
+
+
+@app.post('/api/blacklist/personal/batch-delete')
+def batch_delete_personal_blacklist(
+    request: PersonalBlacklistBatchDeleteRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    try:
+        deleted = blacklist_service.batch_delete_personal(request.ids, current_user['user_id'])
+        return {'success': True, 'message': f'成功删除 {deleted} 条黑名单', 'data': {'deleted': deleted}}
+    except Exception as e:
+        log_with_user('error', f"批量删除个人黑名单失败: {mask_sensitive_text(e)}", current_user)
+        raise HTTPException(status_code=500, detail='批量删除个人黑名单失败')
+
+
+@app.patch('/api/blacklist/personal/{record_id}/toggle')
+def toggle_personal_blacklist(
+    record_id: int,
+    request: PersonalBlacklistToggleRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    try:
+        success = blacklist_service.toggle_personal(record_id, current_user['user_id'], request.is_enabled)
+        if not success:
+            raise HTTPException(status_code=404, detail='黑名单记录不存在')
+        return {'success': True, 'message': '状态已更新'}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_with_user('error', f"更新个人黑名单状态失败: {mask_sensitive_text(e)}", current_user)
+        raise HTTPException(status_code=500, detail='更新个人黑名单状态失败')
+
+
+@app.delete('/api/blacklist/personal/{record_id}')
+def delete_personal_blacklist(
+    record_id: int,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    try:
+        success = blacklist_service.delete_personal(record_id, current_user['user_id'])
+        if not success:
+            raise HTTPException(status_code=404, detail='黑名单记录不存在')
+        return {'success': True, 'message': '删除成功'}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_with_user('error', f"删除个人黑名单失败: {mask_sensitive_text(e)}", current_user)
+        raise HTTPException(status_code=500, detail='删除个人黑名单失败')
+
+
+@app.get('/api/blacklist/personal/export')
+def export_personal_blacklist(current_user: Dict[str, Any] = Depends(get_current_user)):
+    try:
+        content = blacklist_service.export_personal_xlsx(current_user['user_id'])
+        filename = f"personal_blacklist_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        headers = {'Content-Disposition': f'attachment; filename="{filename}"'}
+        return Response(
+            content=content,
+            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            headers=headers,
+        )
+    except Exception as e:
+        log_with_user('error', f"导出个人黑名单失败: {mask_sensitive_text(e)}", current_user)
+        raise HTTPException(status_code=500, detail='导出个人黑名单失败')
+
+
+@app.post('/api/blacklist/personal/import')
+async def import_personal_blacklist(
+    file: UploadFile = File(...),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    try:
+        filename = file.filename or ''
+        if not filename.lower().endswith('.xlsx'):
+            raise HTTPException(status_code=400, detail='仅支持 .xlsx 文件')
+        content = await file.read()
+        result = blacklist_service.import_personal_xlsx(current_user['user_id'], content)
+        return {
+            'success': True,
+            'message': f"导入完成：新增 {result.get('created', 0)} 条，跳过 {result.get('skipped', 0)} 条",
+            'data': result,
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        log_with_user('error', f"导入个人黑名单失败: {mask_sensitive_text(e)}", current_user)
+        raise HTTPException(status_code=500, detail='导入个人黑名单失败')
+
+
+@app.get('/api/blacklist/platform')
+def get_platform_blacklist(
+    page: int = 1,
+    page_size: int = 20,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    try:
+        result = blacklist_service.list_platform(current_user['user_id'], page=page, page_size=page_size)
+        return {'success': True, **result}
+    except Exception as e:
+        log_with_user('error', f"查询平台黑名单失败: {mask_sensitive_text(e)}", current_user)
+        raise HTTPException(status_code=500, detail='查询平台黑名单失败')
 
 
 @app.post('/api/orders/{order_id}/deliver')
