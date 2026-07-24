@@ -906,9 +906,8 @@
                         accept="image/*"
                         multiple
                         onchange="handlePublishImagesChange()"
-                        required
                       >
-                      <div class="form-text" id="publishImageSummary">请上传 1-9 张图片，建议首图清晰展示商品主体。</div>
+                      <div class="form-text" id="publishImageSummary">请上传 1-9 张图片，或载入素材图后直接发布；建议首图清晰展示商品主体。</div>
                     </div>
 
                     <div class="col-12">
@@ -953,7 +952,7 @@
                   </div>
                   <div class="item-publish-guide-item">
                     <span class="item-publish-guide-index">2</span>
-                    <div>图片会直接上传到闲鱼 CDN，发布成功后系统会自动同步最新商品列表。</div>
+                    <div>可上传新图，或载入素材图后直接发布；也可在右侧勾选多账号/多素材批量发布。</div>
                   </div>
                   <div class="item-publish-guide-item">
                     <span class="item-publish-guide-index">3</span>
@@ -972,6 +971,53 @@
                 <div class="mb-2 fw-semibold" id="publishResultTitle">等待发布</div>
                 <div class="text-muted small mb-3" id="publishResultMessage">提交后这里会展示发布结果和同步状态。</div>
                 <div id="publishResultMeta" class="item-publish-result-meta"></div>
+              </div>
+            </div>
+
+
+            <div class="card item-publish-batch-card mt-4">
+              <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">批量发布</h5>
+                <button type="button" class="btn btn-sm btn-outline-primary" onclick="refreshItemPublishBatchPanel()">
+                  <i class="bi bi-arrow-clockwise me-1"></i>刷新
+                </button>
+              </div>
+              <div class="card-body">
+                <div class="text-muted small mb-3">勾选账号与素材后启动后台任务，最多 100 个组合；进度会显示在下方。</div>
+                <div class="mb-3">
+                  <div class="d-flex justify-content-between align-items-center mb-2">
+                    <label class="form-label mb-0">发布账号</label>
+                    <button type="button" class="btn btn-sm btn-link p-0" onclick="toggleAllItemPublishBatchAccounts(true)">全选</button>
+                  </div>
+                  <div id="publishBatchAccountList" class="item-publish-check-list">
+                    <div class="item-publish-preview-empty">加载账号中...</div>
+                  </div>
+                </div>
+                <div class="mb-3">
+                  <div class="d-flex justify-content-between align-items-center mb-2">
+                    <label class="form-label mb-0">商品素材</label>
+                    <button type="button" class="btn btn-sm btn-link p-0" onclick="toggleAllItemPublishBatchMaterials(true)">全选</button>
+                  </div>
+                  <div id="publishBatchMaterialList" class="item-publish-check-list">
+                    <div class="item-publish-preview-empty">加载素材中...</div>
+                  </div>
+                </div>
+                <button type="button" class="btn btn-warning w-100" id="itemPublishBatchSubmitBtn" onclick="submitItemPublishBatch()">
+                  <i class="bi bi-collection-play me-1"></i>启动批量发布
+                </button>
+                <div id="publishBatchStatusPanel" class="item-publish-batch-status mt-3" style="display:none;">
+                  <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
+                    <div class="fw-semibold" id="publishBatchStatusTitle">批量任务</div>
+                    <span class="badge text-bg-secondary" id="publishBatchStatusBadge">等待中</span>
+                  </div>
+                  <div class="text-muted small mb-2" id="publishBatchStatusMessage">尚未启动批量任务。</div>
+                  <div class="item-publish-batch-progress mb-2">
+                    <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+                      <div class="progress-bar" id="publishBatchProgressBar" style="width: 0%">0%</div>
+                    </div>
+                  </div>
+                  <div class="small" id="publishBatchStatusMeta"></div>
+                </div>
               </div>
             </div>
 

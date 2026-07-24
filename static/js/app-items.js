@@ -4,11 +4,13 @@
 async function loadItemPublish() {
     ensureItemPublishPageInitialized();
     handlePublishDeliveryChoiceChange();
+    updateItemPublishImageRequiredState();
     await Promise.all([
         loadItemPublishAccounts(),
         loadItemPublishMaterials(),
         loadItemPublishLogs()
     ]);
+    refreshItemPublishBatchPanel();
 }
 
 function ensureItemPublishPageInitialized() {
@@ -71,9 +73,14 @@ async function loadItemPublishAccounts() {
         } else if (availableAccounts.length === 1) {
             select.value = availableAccounts[0].id;
         }
+
+        itemPublishBatchAccounts = availableAccounts;
+        renderItemPublishBatchAccounts();
     } catch (error) {
         console.error('加载发布账号失败:', error);
         select.innerHTML = '<option value="">加载账号失败</option>';
+        itemPublishBatchAccounts = [];
+        renderItemPublishBatchAccounts();
         showToast('加载发布账号失败', 'danger');
     }
 }
@@ -118,6 +125,7 @@ function handlePublishImagesChange() {
         itemPublishLoadedMaterialImages = [];
     }
     updateItemPublishMaterialModeBadge();
+    updateItemPublishImageRequiredState();
     if (files.length > 9) {
         showToast('单次最多上传 9 张图片', 'warning');
         input.value = '';
@@ -185,6 +193,7 @@ function clearItemPublishForm(clearResult = true) {
     itemPublishLoadedMaterialId = null;
     itemPublishLoadedMaterialImages = [];
     updateItemPublishMaterialModeBadge();
+    updateItemPublishImageRequiredState();
     handlePublishDeliveryChoiceChange();
 
     const imagesInput = document.getElementById('publishImages');
@@ -378,7 +387,7 @@ async function convertPublishFilesToImages(files) {
 }
 
 function buildItemPublishJsonPayload(values, images) {
-    return {
+    const payload = {
         account_id: values.accountId,
         title: values.title,
         description: values.description,
@@ -390,6 +399,10 @@ function buildItemPublishJsonPayload(values, images) {
         can_self_pickup: values.canSelfPickup,
         condition: '全新'
     };
+    if (itemPublishLoadedMaterialId) {
+        payload.material_id = itemPublishLoadedMaterialId;
+    }
+    return payload;
 }
 
 function buildItemPublishMaterialPayload(values, images) {
@@ -526,12 +539,14 @@ async function loadItemPublishMaterials() {
     }
     container.innerHTML = '<div class="text-muted small">正在加载素材...</div>';
     try {
-        const data = await requestItemPublishJson('/product-materials?page=1&page_size=20');
+        const data = await requestItemPublishJson('/product-materials?page=1&page_size=50');
         itemPublishMaterials = data.list || [];
         renderItemPublishMaterials();
+        renderItemPublishBatchMaterials();
     } catch (error) {
         console.error('加载商品素材失败:', error);
         container.innerHTML = '<div class="item-publish-preview-empty">加载素材失败</div>';
+        renderItemPublishBatchMaterials();
     }
 }
 
@@ -590,7 +605,9 @@ function loadItemPublishMaterialToForm(materialId) {
     handlePublishDeliveryChoiceChange();
     renderItemPublishStoredImagePreviews(itemPublishLoadedMaterialImages);
     updateItemPublishMaterialModeBadge();
+    updateItemPublishImageRequiredState();
     renderItemPublishMaterials();
+    renderItemPublishBatchMaterials();
     showToast('已载入商品素材，可直接发布或继续编辑', 'info');
 }
 
@@ -748,6 +765,260 @@ async function submitItemPublishForm() {
 }
 
 // ================================
+
+
+function updateItemPublishImageRequiredState() {
+    const input = document.getElementById('publishImages');
+    if (!input) {
+        return;
+    }
+    // 有素材图时可无文件直发；无素材图时仅靠 JS 校验（不再依赖 HTML required，避免拦截 onsubmit）
+    input.required = false;
+    const hasMaterialImages = Array.isArray(itemPublishLoadedMaterialImages) && itemPublishLoadedMaterialImages.length > 0;
+    const summary = document.getElementById('publishImageSummary');
+    if (summary && !input.files?.length) {
+        if (hasMaterialImages) {
+            summary.textContent = `已载入素材图片 ${itemPublishLoadedMaterialImages.length} 张；可直接发布，或重新选择文件替换。`;
+        }
+    }
+}
+
+function renderItemPublishBatchAccounts() {
+    const container = document.getElementById('publishBatchAccountList');
+    if (!container) {
+        return;
+    }
+    const accounts = Array.isArray(itemPublishBatchAccounts) ? itemPublishBatchAccounts : [];
+    if (!accounts.length) {
+        container.innerHTML = '<div class="item-publish-preview-empty">暂无可用账号</div>';
+        return;
+    }
+    const selected = new Set((itemPublishBatchSelectedAccountIds || []).map(String));
+    container.innerHTML = accounts.map(account => {
+        const id = String(account.id);
+        const checked = selected.has(id) ? 'checked' : '';
+        const label = buildItemPublishAccountLabel(account);
+        return `
+            <label class="item-publish-check-item">
+                <input type="checkbox" value="${escapeHtml(id)}" ${checked} onchange="toggleItemPublishBatchAccount('${escapeHtml(id)}', this.checked)">
+                <span>${escapeHtml(label)}</span>
+            </label>
+        `;
+    }).join('');
+}
+
+function renderItemPublishBatchMaterials() {
+    const container = document.getElementById('publishBatchMaterialList');
+    if (!container) {
+        return;
+    }
+    if (!itemPublishMaterials.length) {
+        container.innerHTML = '<div class="item-publish-preview-empty">暂无素材，请先保存素材</div>';
+        return;
+    }
+    const selected = new Set((itemPublishBatchSelectedMaterialIds || []).map(Number));
+    container.innerHTML = itemPublishMaterials.map(material => {
+        const id = Number(material.id);
+        const checked = selected.has(id) ? 'checked' : '';
+        const title = material.title || '未命名素材';
+        const imageCount = Array.isArray(material.images) ? material.images.length : 0;
+        return `
+            <label class="item-publish-check-item">
+                <input type="checkbox" value="${id}" ${checked} onchange="toggleItemPublishBatchMaterial(${id}, this.checked)">
+                <span>#${id} ${escapeHtml(title)} · ${imageCount} 图</span>
+            </label>
+        `;
+    }).join('');
+}
+
+function toggleItemPublishBatchAccount(accountId, checked) {
+    const id = String(accountId || '').trim();
+    if (!id) {
+        return;
+    }
+    const set = new Set((itemPublishBatchSelectedAccountIds || []).map(String));
+    if (checked) {
+        set.add(id);
+    } else {
+        set.delete(id);
+    }
+    itemPublishBatchSelectedAccountIds = Array.from(set);
+}
+
+function toggleItemPublishBatchMaterial(materialId, checked) {
+    const id = Number(materialId);
+    if (!id) {
+        return;
+    }
+    const set = new Set((itemPublishBatchSelectedMaterialIds || []).map(Number));
+    if (checked) {
+        set.add(id);
+    } else {
+        set.delete(id);
+    }
+    itemPublishBatchSelectedMaterialIds = Array.from(set);
+}
+
+function toggleAllItemPublishBatchAccounts(selectAll = true) {
+    if (selectAll) {
+        itemPublishBatchSelectedAccountIds = (itemPublishBatchAccounts || []).map(account => String(account.id));
+    } else {
+        itemPublishBatchSelectedAccountIds = [];
+    }
+    renderItemPublishBatchAccounts();
+}
+
+function toggleAllItemPublishBatchMaterials(selectAll = true) {
+    if (selectAll) {
+        itemPublishBatchSelectedMaterialIds = (itemPublishMaterials || []).map(material => Number(material.id)).filter(Boolean);
+    } else {
+        itemPublishBatchSelectedMaterialIds = [];
+    }
+    renderItemPublishBatchMaterials();
+}
+
+function refreshItemPublishBatchPanel() {
+    renderItemPublishBatchAccounts();
+    renderItemPublishBatchMaterials();
+    if (itemPublishBatchId) {
+        pollItemPublishBatchStatus(true);
+    }
+}
+
+function stopItemPublishBatchPolling() {
+    if (itemPublishBatchPollingTimer) {
+        clearInterval(itemPublishBatchPollingTimer);
+        itemPublishBatchPollingTimer = null;
+    }
+}
+
+function startItemPublishBatchPolling() {
+    stopItemPublishBatchPolling();
+    itemPublishBatchPollingTimer = setInterval(() => {
+        pollItemPublishBatchStatus(false);
+    }, 2500);
+}
+
+function renderItemPublishBatchStatus(data) {
+    const panel = document.getElementById('publishBatchStatusPanel');
+    const title = document.getElementById('publishBatchStatusTitle');
+    const badge = document.getElementById('publishBatchStatusBadge');
+    const message = document.getElementById('publishBatchStatusMessage');
+    const meta = document.getElementById('publishBatchStatusMeta');
+    const bar = document.getElementById('publishBatchProgressBar');
+    if (!panel || !title || !badge || !message || !meta || !bar) {
+        return;
+    }
+
+    panel.style.display = '';
+    const total = Number(data.total || 0);
+    const success = Number(data.success || 0);
+    const failed = Number(data.failed || 0);
+    const publishing = Number(data.publishing || 0);
+    const pending = Number(data.pending || 0);
+    const finished = Boolean(data.finished);
+    const done = success + failed;
+    const percent = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+
+    title.textContent = data.batch_id ? `任务 ${data.batch_id}` : '批量任务';
+    badge.className = `badge ${finished ? (failed > 0 ? 'text-bg-warning' : 'text-bg-success') : 'text-bg-primary'}`;
+    badge.textContent = finished ? (failed > 0 ? '已完成(含失败)' : '已完成') : '进行中';
+    message.textContent = finished
+        ? `完成 ${done}/${total}：成功 ${success}，失败 ${failed}`
+        : `进度 ${done}/${total}：成功 ${success}，失败 ${failed}，发布中 ${publishing}，等待 ${pending}`;
+    bar.style.width = `${percent}%`;
+    bar.textContent = `${percent}%`;
+
+    const accountLines = (data.account_statuses || []).map(item => {
+        return `${item.account_id || '-'}: 成功${item.success || 0}/失败${item.failed || 0}/共${item.total || 0}`;
+    });
+    meta.innerHTML = accountLines.length
+        ? accountLines.map(line => `<div>${escapeHtml(line)}</div>`).join('')
+        : '<div class="text-muted">暂无账号维度统计</div>';
+}
+
+async function pollItemPublishBatchStatus(force = false) {
+    if (!itemPublishBatchId) {
+        return;
+    }
+    try {
+        const data = await requestItemPublishJson(`/product-publish/batch/${encodeURIComponent(itemPublishBatchId)}?page=1&page_size=20`);
+        renderItemPublishBatchStatus(data);
+        if (data.finished) {
+            stopItemPublishBatchPolling();
+            await loadItemPublishLogs();
+            if (force || data.failed > 0) {
+                showToast(data.failed > 0 ? '批量发布已结束，存在失败任务' : '批量发布已完成', data.failed > 0 ? 'warning' : 'success');
+            }
+        }
+    } catch (error) {
+        console.error('轮询批量发布状态失败:', error);
+    }
+}
+
+async function submitItemPublishBatch() {
+    if (itemPublishBatchSubmitting) {
+        return;
+    }
+    const accountIds = (itemPublishBatchSelectedAccountIds || []).map(String).filter(Boolean);
+    const materialIds = (itemPublishBatchSelectedMaterialIds || []).map(Number).filter(Boolean);
+    if (!accountIds.length) {
+        showToast('请至少选择 1 个发布账号', 'warning');
+        return;
+    }
+    if (!materialIds.length) {
+        showToast('请至少选择 1 个商品素材', 'warning');
+        return;
+    }
+    if (accountIds.length * materialIds.length > 100) {
+        showToast('单次批量发布最多支持 100 个任务（账号数 × 素材数）', 'warning');
+        return;
+    }
+
+    const button = document.getElementById('itemPublishBatchSubmitBtn');
+    const originalHtml = button?.innerHTML || '';
+    itemPublishBatchSubmitting = true;
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>启动中...';
+    }
+
+    try {
+        const result = await requestItemPublishJson('/product-publish/batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                account_ids: accountIds,
+                material_ids: materialIds
+            })
+        });
+        itemPublishBatchId = result.batch_id;
+        renderItemPublishBatchStatus({
+            batch_id: result.batch_id,
+            total: result.total || (accountIds.length * materialIds.length),
+            success: 0,
+            failed: 0,
+            publishing: 0,
+            pending: result.total || (accountIds.length * materialIds.length),
+            finished: false,
+            account_statuses: []
+        });
+        showToast(result.message || '批量发布任务已启动', 'success');
+        startItemPublishBatchPolling();
+        await pollItemPublishBatchStatus(true);
+        await loadItemPublishLogs();
+    } catch (error) {
+        console.error('启动批量发布失败:', error);
+        showToast(error.message || '启动批量发布失败', 'danger');
+    } finally {
+        itemPublishBatchSubmitting = false;
+        if (button) {
+            button.disabled = false;
+            button.innerHTML = originalHtml || '<i class="bi bi-collection-play me-1"></i>启动批量发布';
+        }
+    }
+}
+
 
 // ================================
 // 【商品管理菜单】相关功能

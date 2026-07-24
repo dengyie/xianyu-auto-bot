@@ -88,6 +88,58 @@ class DBProductPublishMixin:
         except Exception:
             return default
 
+    @staticmethod
+    def _summarize_publish_raw_response(value: Any, *, max_chars: int = 4000) -> Optional[Any]:
+        """压缩发布上游响应，避免把完整 payload / 图片结构写入日志。"""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            text = value.strip()
+            return text[:max_chars] if text else None
+
+        if not isinstance(value, dict):
+            try:
+                text = json.dumps(value, ensure_ascii=False, default=str)
+            except Exception:
+                text = str(value)
+            return text[:max_chars]
+
+        summary: Dict[str, Any] = {}
+        for key in ('ret', 'api', 'v', 'traceId', 'code', 'msg', 'message', 'success'):
+            if key in value and value.get(key) is not None:
+                summary[key] = value.get(key)
+
+        data = value.get('data')
+        if isinstance(data, dict):
+            data_summary = {}
+            for key in ('itemId', 'item_id', 'id', 'url', 'failMsg', 'errorMsg', 'errorCode', 'title'):
+                if key in data and data.get(key) is not None:
+                    data_summary[key] = data.get(key)
+            if data_summary:
+                summary['data'] = data_summary
+        elif data is not None:
+            summary['data_type'] = type(data).__name__
+
+        uploaded = value.get('_uploaded_images')
+        if isinstance(uploaded, list):
+            summary['uploaded_image_count'] = len(uploaded)
+            urls = []
+            for item in uploaded[:3]:
+                if isinstance(item, dict):
+                    url = item.get('url') or item.get('image_url') or item.get('src')
+                    if url:
+                        urls.append(str(url)[:200])
+            if urls:
+                summary['uploaded_image_urls'] = urls
+
+        if len(summary) <= 1:
+            try:
+                raw = json.dumps(value, ensure_ascii=False, default=str)
+            except Exception:
+                raw = str(value)
+            summary['preview'] = raw[:max_chars]
+        return summary
+
     def add_product_material(self, user_id: int, data: Dict[str, Any]) -> Optional[int]:
         """新增商品发布素材。"""
         with self.lock:
@@ -300,7 +352,7 @@ class DBProductPublishMixin:
                 ''', (
                     user_id, account_id, title, description, price, material_id, batch_id,
                     status, str(error_message)[:1000] if error_message else None,
-                    self._json_dumps_safe(raw_response),
+                    self._json_dumps_safe(self._summarize_publish_raw_response(raw_response)),
                 ))
                 log_id = cursor.lastrowid
                 self.conn.commit()
@@ -314,10 +366,13 @@ class DBProductPublishMixin:
                            item_id: str = None, error_message: str = None,
                            sync_status: str = None, sync_message: str = None,
                            sync_total_count: int = None, sync_saved_count: int = None,
-                           raw_response: Any = None) -> bool:
+                           raw_response: Any = None, user_id: int = None) -> bool:
         """更新商品发布日志。"""
         update_fields = []
         params = []
+        summarized_raw = None
+        if raw_response is not None:
+            summarized_raw = self._json_dumps_safe(self._summarize_publish_raw_response(raw_response))
         for key, value in {
             'status': status,
             'item_url': item_url,
@@ -327,7 +382,7 @@ class DBProductPublishMixin:
             'sync_message': sync_message,
             'sync_total_count': sync_total_count,
             'sync_saved_count': sync_saved_count,
-            'raw_response': self._json_dumps_safe(raw_response) if raw_response is not None else None,
+            'raw_response': summarized_raw,
         }.items():
             if value is not None:
                 update_fields.append(f"{key} = ?")
@@ -339,7 +394,14 @@ class DBProductPublishMixin:
                 cursor = self.conn.cursor()
                 update_fields.append('updated_at = CURRENT_TIMESTAMP')
                 params.append(log_id)
-                cursor.execute(f"UPDATE publish_logs SET {', '.join(update_fields)} WHERE id = ?", tuple(params))
+                where_sql = 'WHERE id = ?'
+                if user_id is not None:
+                    where_sql += ' AND user_id = ?'
+                    params.append(user_id)
+                cursor.execute(
+                    f"UPDATE publish_logs SET {', '.join(update_fields)} {where_sql}",
+                    tuple(params),
+                )
                 self.conn.commit()
                 return cursor.rowcount > 0
             except Exception as e:
@@ -371,8 +433,9 @@ class DBProductPublishMixin:
         }
 
     def list_publish_logs(self, user_id: int = None, account_id: str = None, status: str = None,
-                          batch_id: str = None, page: int = 1, page_size: int = 20) -> Dict[str, Any]:
-        """分页查询商品发布日志。"""
+                          batch_id: str = None, page: int = 1, page_size: int = 20,
+                          include_raw_response: bool = False) -> Dict[str, Any]:
+        """分页查询商品发布日志。默认不返回 raw_response，避免列表接口膨胀。"""
         with self.lock:
             try:
                 safe_page = max(1, int(page or 1))
@@ -406,6 +469,9 @@ class DBProductPublishMixin:
                     LIMIT ? OFFSET ?
                 ''', tuple(params + [safe_page_size, offset]))
                 logs = [self._row_to_publish_log(row) for row in cursor.fetchall()]
+                if not include_raw_response:
+                    for log in logs:
+                        log.pop('raw_response', None)
                 return {
                     'list': logs,
                     'total': total,
@@ -417,20 +483,49 @@ class DBProductPublishMixin:
                 logger.error(f"查询商品发布日志失败: {e}")
                 return {'list': [], 'total': 0, 'page': page, 'page_size': page_size, 'total_pages': 0}
 
-    def get_publish_batch_status(self, batch_id: str, user_id: int) -> Dict[str, Any]:
-        """查询批量发布状态。"""
-        logs_data = self.list_publish_logs(user_id=user_id, batch_id=batch_id, page=1, page_size=100)
-        logs = logs_data.get('list') or []
+    def get_publish_batch_status(self, batch_id: str, user_id: int, page: int = 1, page_size: int = 50) -> Dict[str, Any]:
+        """查询批量发布状态（计数走 SQL 聚合，列表分页且不含 raw_response）。"""
         counts = {'success': 0, 'failed': 0, 'publishing': 0, 'pending': 0}
         account_map: Dict[str, Dict[str, int]] = {}
-        for log in logs:
-            status = log.get('status') or 'pending'
-            counts[status] = counts.get(status, 0) + 1
-            account_id = log.get('account_id') or ''
-            account_counts = account_map.setdefault(account_id, {'success': 0, 'failed': 0, 'publishing': 0, 'pending': 0, 'total': 0})
-            account_counts[status] = account_counts.get(status, 0) + 1
-            account_counts['total'] += 1
-        total = len(logs)
+        total = 0
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    "SELECT status, COUNT(*) FROM publish_logs WHERE user_id = ? AND batch_id = ? GROUP BY status",
+                    (user_id, batch_id),
+                )
+                for status, count in cursor.fetchall():
+                    key = status or 'pending'
+                    c = int(count or 0)
+                    counts[key] = counts.get(key, 0) + c
+                    total += c
+
+                cursor.execute(
+                    "SELECT account_id, status, COUNT(*) FROM publish_logs WHERE user_id = ? AND batch_id = ? GROUP BY account_id, status",
+                    (user_id, batch_id),
+                )
+                for account_id, status, count in cursor.fetchall():
+                    account_key = account_id or ''
+                    account_counts = account_map.setdefault(
+                        account_key,
+                        {'success': 0, 'failed': 0, 'publishing': 0, 'pending': 0, 'total': 0},
+                    )
+                    status_key = status or 'pending'
+                    c = int(count or 0)
+                    account_counts[status_key] = account_counts.get(status_key, 0) + c
+                    account_counts['total'] += c
+            except Exception as e:
+                logger.error(f"聚合批量发布状态失败: {e}")
+
+        logs_data = self.list_publish_logs(
+            user_id=user_id,
+            batch_id=batch_id,
+            page=page,
+            page_size=page_size,
+            include_raw_response=False,
+        )
+        logs = logs_data.get('list') or []
         return {
             'batch_id': batch_id,
             'total': total,
@@ -447,6 +542,9 @@ class DBProductPublishMixin:
                 for account_id, status_map in account_map.items()
             ],
             'logs': logs,
+            'page': logs_data.get('page'),
+            'page_size': logs_data.get('page_size'),
+            'total_pages': logs_data.get('total_pages'),
         }
 
     def clear_old_publish_logs(self, user_id: int, days: int = 30) -> int:

@@ -85,6 +85,12 @@ let itemPublishLoadedMaterialImages = [];
 let itemPublishMaterials = [];
 let itemPublishLogs = [];
 let itemPublishSubmitting = false;
+let itemPublishBatchAccounts = [];
+let itemPublishBatchSelectedAccountIds = [];
+let itemPublishBatchSelectedMaterialIds = [];
+let itemPublishBatchId = null;
+let itemPublishBatchPollingTimer = null;
+let itemPublishBatchSubmitting = false;
 
 // 订单列表搜索和分页相关变量
 let allOrdersData = []; // 存储所有订单数据

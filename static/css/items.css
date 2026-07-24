@@ -260,3 +260,46 @@
     height: 120px;
   }
 }
+
+
+.item-publish-check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.7);
+}
+
+.item-publish-check-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.86rem;
+  color: #334155;
+}
+
+.item-publish-check-item input {
+  margin-top: 3px;
+}
+
+.item-publish-batch-status {
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #fff;
+}
+
+.item-publish-batch-status .progress {
+  height: 0.85rem;
+  border-radius: 999px;
+}
+
+.item-publish-side-item.is-batch-selected {
+  outline: 1px solid rgba(59, 130, 246, 0.45);
+  background: rgba(239, 246, 255, 0.85);
+}

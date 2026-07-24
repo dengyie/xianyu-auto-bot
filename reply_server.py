@@ -10333,8 +10333,12 @@ class ProductSinglePublishRequest(BaseModel):
     category: Optional[str] = None
     brand: Optional[str] = None
     condition: Optional[str] = "全新"
+    material_id: Optional[int] = None
 
 PRODUCT_PUBLISH_DELIVERY_CHOICES = {"包邮", "按距离计费", "一口价", "无需邮寄"}
+PRODUCT_PUBLISH_MAX_IMAGES = 9
+PRODUCT_PUBLISH_MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 单图解码后上限 8MB
+PRODUCT_PUBLISH_MAX_BASE64_CHARS = 12 * 1024 * 1024  # Base64 文本上限约 12MB
 
 
 def _model_to_dict(model: BaseModel, *, exclude_unset: bool = False) -> Dict[str, Any]:
@@ -10424,11 +10428,73 @@ def _normalize_product_publish_data(data: Dict[str, Any], *, partial: bool = Fal
     return normalized
 
 
+def _estimate_base64_bytes(value: str) -> int:
+    text = str(value or '').strip()
+    if not text:
+        return 0
+    if ',' in text and text.lower().startswith('data:'):
+        text = text.split(',', 1)[1]
+    text = re.sub(r'\s+', '', text)
+    padding = text.count('=')
+    return max(0, (len(text) * 3) // 4 - padding)
+
+
+def _sanitize_material_images(images: List[Any], *, require_images: bool = True) -> List[Dict[str, Any]]:
+    """素材落库前规范化图片：优先保留 URL，限制数量与 Base64 体积。"""
+    if not isinstance(images, list):
+        raise HTTPException(status_code=400, detail="商品图片必须是数组")
+    if require_images and not images:
+        raise HTTPException(status_code=400, detail="请至少提供 1 张商品图片")
+    if len(images) > PRODUCT_PUBLISH_MAX_IMAGES:
+        raise HTTPException(status_code=400, detail=f"单次最多支持 {PRODUCT_PUBLISH_MAX_IMAGES} 张商品图片")
+
+    sanitized: List[Dict[str, Any]] = []
+    for index, image in enumerate(images, start=1):
+        if not isinstance(image, dict):
+            raise HTTPException(status_code=400, detail=f"第 {index} 张图片格式无效")
+
+        url = str(image.get('url') or image.get('image_url') or image.get('src') or '').strip()
+        item: Dict[str, Any] = {}
+        if url:
+            item['url'] = url
+            for key in ('width', 'height', 'widthSize', 'heightSize', 'filename', 'name'):
+                if image.get(key) is not None:
+                    item[key] = image.get(key)
+            sanitized.append(item)
+            continue
+
+        raw = image.get('content') or image.get('data') or image.get('base64')
+        if raw is None:
+            raise HTTPException(status_code=400, detail=f"第 {index} 张图片缺少 URL 或 Base64 内容")
+
+        if isinstance(raw, (bytes, bytearray)):
+            if len(raw) > PRODUCT_PUBLISH_MAX_IMAGE_BYTES:
+                raise HTTPException(status_code=400, detail=f"第 {index} 张图片超过 {PRODUCT_PUBLISH_MAX_IMAGE_BYTES // (1024 * 1024)}MB 限制")
+            # 素材库不直接存二进制，要求前端转 data URL / 先上传拿 URL
+            raise HTTPException(status_code=400, detail=f"第 {index} 张图片请使用 URL 或 Base64 文本保存到素材")
+
+        raw_text = str(raw).strip()
+        if not raw_text:
+            raise HTTPException(status_code=400, detail=f"第 {index} 张图片内容为空")
+        if len(raw_text) > PRODUCT_PUBLISH_MAX_BASE64_CHARS:
+            raise HTTPException(status_code=400, detail=f"第 {index} 张图片 Base64 过大，请先压缩或改用已上传 URL")
+        estimated = _estimate_base64_bytes(raw_text)
+        if estimated > PRODUCT_PUBLISH_MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=400, detail=f"第 {index} 张图片超过 {PRODUCT_PUBLISH_MAX_IMAGE_BYTES // (1024 * 1024)}MB 限制")
+
+        item['data'] = raw_text
+        for key in ('filename', 'name', 'type', 'size', 'width', 'height'):
+            if image.get(key) is not None:
+                item[key] = image.get(key)
+        sanitized.append(item)
+    return sanitized
+
+
 def _validate_publish_images(images: List[Any]) -> List[Dict[str, Any]]:
     if not images:
         raise HTTPException(status_code=400, detail="请至少提供 1 张商品图片")
-    if len(images) > 9:
-        raise HTTPException(status_code=400, detail="单次最多支持 9 张商品图片")
+    if len(images) > PRODUCT_PUBLISH_MAX_IMAGES:
+        raise HTTPException(status_code=400, detail=f"单次最多支持 {PRODUCT_PUBLISH_MAX_IMAGES} 张商品图片")
 
     normalized_images = []
     for index, image in enumerate(images, start=1):
@@ -10436,8 +10502,40 @@ def _validate_publish_images(images: List[Any]) -> List[Dict[str, Any]]:
             raise HTTPException(status_code=400, detail=f"第 {index} 张图片格式无效")
         if not any(image.get(key) for key in ('url', 'image_url', 'src', 'content', 'data', 'base64')):
             raise HTTPException(status_code=400, detail=f"第 {index} 张图片缺少 URL 或 Base64 内容")
+
+        raw = image.get('content') or image.get('data') or image.get('base64')
+        if isinstance(raw, str) and raw.strip():
+            if len(raw) > PRODUCT_PUBLISH_MAX_BASE64_CHARS:
+                raise HTTPException(status_code=400, detail=f"第 {index} 张图片 Base64 过大")
+            if _estimate_base64_bytes(raw) > PRODUCT_PUBLISH_MAX_IMAGE_BYTES:
+                raise HTTPException(status_code=400, detail=f"第 {index} 张图片超过 {PRODUCT_PUBLISH_MAX_IMAGE_BYTES // (1024 * 1024)}MB 限制")
+        elif isinstance(raw, (bytes, bytearray)) and len(raw) > PRODUCT_PUBLISH_MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=400, detail=f"第 {index} 张图片超过 {PRODUCT_PUBLISH_MAX_IMAGE_BYTES // (1024 * 1024)}MB 限制")
+
         normalized_images.append(image)
     return normalized_images
+
+
+def _summarize_publish_result_for_client(publish_result: Any) -> Dict[str, Any]:
+    """发布接口出站摘要，避免把完整上游响应回传前端。"""
+    if not isinstance(publish_result, dict):
+        return {'preview': str(publish_result)[:500]}
+    summary: Dict[str, Any] = {}
+    for key in ('ret', 'api', 'v', 'traceId'):
+        if key in publish_result:
+            summary[key] = publish_result.get(key)
+    data = publish_result.get('data')
+    if isinstance(data, dict):
+        data_summary = {}
+        for key in ('itemId', 'item_id', 'id', 'url', 'failMsg', 'errorMsg', 'errorCode'):
+            if key in data and data.get(key) is not None:
+                data_summary[key] = data.get(key)
+        if data_summary:
+            summary['data'] = data_summary
+    uploaded = publish_result.get('_uploaded_images')
+    if isinstance(uploaded, list):
+        summary['uploaded_image_count'] = len(uploaded)
+    return summary
 
 
 def _build_published_item_url(item_id: Optional[str]) -> Optional[str]:
@@ -10520,7 +10618,7 @@ async def _publish_product_to_account(
             status='publishing',
         )
     else:
-        db_manager.update_publish_log(created_log_id, status='publishing')
+        db_manager.update_publish_log(created_log_id, status='publishing', user_id=current_user['user_id'])
 
     try:
         logger.info(
@@ -10550,6 +10648,7 @@ async def _publish_product_to_account(
                         status='failed',
                         error_message=error_message,
                         raw_response=publish_result,
+                        user_id=current_user['user_id'],
                     )
                 raise HTTPException(status_code=400, detail=f"商品发布失败: {error_message}")
 
@@ -10594,6 +10693,7 @@ async def _publish_product_to_account(
                 sync_total_count=sync_total_count,
                 sync_saved_count=sync_saved_count,
                 raw_response=publish_result,
+                user_id=current_user['user_id'],
             )
 
         sync_success = bool(sync_result.get('success'))
@@ -10615,26 +10715,27 @@ async def _publish_product_to_account(
             "item_url": item_url,
             "log_id": created_log_id,
             "batch_id": batch_id,
-            "publish_result": publish_result,
+            "material_id": material_id,
+            "publish_result": _summarize_publish_result_for_client(publish_result),
             "sync_result": sync_result,
         }
 
     except HTTPException as exc:
         if created_log_id and exc.status_code >= 400:
-            db_manager.update_publish_log(created_log_id, status='failed', error_message=str(exc.detail))
+            db_manager.update_publish_log(created_log_id, status='failed', error_message=str(exc.detail), user_id=current_user['user_id'])
         raise
     except ValueError as exc:
         if created_log_id:
-            db_manager.update_publish_log(created_log_id, status='failed', error_message=str(exc))
+            db_manager.update_publish_log(created_log_id, status='failed', error_message=str(exc), user_id=current_user['user_id'])
         raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:
         if created_log_id:
-            db_manager.update_publish_log(created_log_id, status='failed', error_message=str(exc))
+            db_manager.update_publish_log(created_log_id, status='failed', error_message=str(exc), user_id=current_user['user_id'])
         logger.error(f"{user_prefix} 商品发布运行失败: {mask_sensitive_text(exc)}")
         raise HTTPException(status_code=500, detail=str(exc))
     except Exception as exc:
         if created_log_id:
-            db_manager.update_publish_log(created_log_id, status='failed', error_message=str(exc))
+            db_manager.update_publish_log(created_log_id, status='failed', error_message=str(exc), user_id=current_user['user_id'])
         logger.error(f"{user_prefix} 商品发布异常: {mask_sensitive_text(exc)}")
         raise HTTPException(status_code=500, detail=f"商品发布异常: {str(exc)}")
 
@@ -10668,7 +10769,7 @@ async def _run_product_batch_publish(batch_id: str, jobs: List[Dict[str, Any]], 
             )
         except Exception as exc:
             if log_id:
-                db_manager.update_publish_log(log_id, status='failed', error_message=str(exc))
+                db_manager.update_publish_log(log_id, status='failed', error_message=str(exc), user_id=current_user['user_id'])
             logger.error(
                 f"{get_user_log_prefix(current_user)} 商品批量发布异常: batch_id={batch_id}, "
                 f"account_id={account_id}, material_id={material.get('id')}, error={mask_sensitive_text(exc)}"
@@ -10696,6 +10797,7 @@ def create_product_material(
 ):
     """保存商品发布素材。"""
     data = _normalize_product_publish_data(_model_to_dict(request), partial=False)
+    data['images'] = _sanitize_material_images(data.get('images') or [], require_images=True)
     material_id = db_manager.add_product_material(current_user['user_id'], data)
     if not material_id:
         raise HTTPException(status_code=500, detail="保存商品素材失败")
@@ -10737,6 +10839,8 @@ def update_product_material(
     data = {key: normalized_full.get(key) for key in update_payload.keys() if key in normalized_full}
     if not data:
         raise HTTPException(status_code=400, detail="没有可更新的字段")
+    if 'images' in data:
+        data['images'] = _sanitize_material_images(data.get('images') or [], require_images=True)
 
     if not db_manager.update_product_material(material_id, current_user['user_id'], data):
         raise HTTPException(status_code=500, detail="更新商品素材失败")
@@ -10809,6 +10913,13 @@ async def publish_product_json(
         "brand": request.brand,
         "condition": request.condition,
     }, partial=False)
+    material_id = request.material_id
+    if material_id is not None:
+        material = db_manager.get_product_material(int(material_id), current_user['user_id'])
+        if not material:
+            raise HTTPException(status_code=404, detail="商品素材不存在")
+        material_id = int(material_id)
+
     return await _publish_product_to_account(
         current_user=current_user,
         account_id=request.account_id,
@@ -10820,6 +10931,7 @@ async def publish_product_json(
         delivery_choice=data.get('delivery_method') or '包邮',
         post_price=data.get('postage'),
         can_self_pickup=bool(data.get('can_self_pickup')),
+        material_id=material_id,
     )
 
 
@@ -10875,11 +10987,18 @@ async def batch_publish_products(
 @app.get("/product-publish/batch/{batch_id}")
 def get_product_publish_batch_status(
     batch_id: str,
+    page: int = 1,
+    page_size: int = 50,
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     return {
         "success": True,
-        **db_manager.get_publish_batch_status(batch_id, current_user['user_id']),
+        **db_manager.get_publish_batch_status(
+            batch_id,
+            current_user['user_id'],
+            page=page,
+            page_size=page_size,
+        ),
     }
 
 
