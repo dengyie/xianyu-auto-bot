@@ -76,14 +76,26 @@ python Start.py
 # 管理员用户名为 admin；密码优先读取 ADMIN_PASSWORD，否则首次启动时随机生成并输出到启动日志
 ```
 
-### Docker 一键部署
+### Docker 一键部署（镜像由 GitHub Actions 构建）
+
+生产镜像只发布到 GHCR，**不要**在本机/VPS 上 `docker compose build`（尤其 1GB 机器会卡死）。
 
 ```bash
-# 国内网络使用 docker-compose-cn.yml
-docker compose up -d
-# 或
-docker-compose up -d
+# 1) 代码 push 到 main 后，等待 Actions「Build and Push Docker Image」成功
+#    产物：ghcr.io/dengyie/xianyu-auto-bot:latest
+
+# 2) 拉取并启动（推荐脚本）
+./docker-deploy.sh update   # 备份 + pull + recreate --no-build
+# 或分步：
+./docker-deploy.sh pull
+./docker-deploy.sh start
+
+# 3) 等价手写
+docker pull ghcr.io/dengyie/xianyu-auto-bot:latest
+docker compose up -d --no-build
 ```
+
+可选环境变量 `XIANYU_IMAGE` 覆盖镜像名；`docker-compose-cn.yml` 同样走 GHCR，仅端口默认 8000。
 
 ## 📁 项目结构
 
@@ -171,9 +183,11 @@ Playwright 固定为 `1.59.0`。`slidex` 因为是 VCS 依赖，不能参与 pip
 **Q: Docker 启动报错 `exec /app/entrypoint.sh: no such file`？**
 ```bash
 docker compose down
-docker compose build --no-cache
-docker compose up -d
+# 重新拉取 GHCR 镜像（不要本地 build）
+docker pull ghcr.io/dengyie/xianyu-auto-bot:latest
+docker compose up -d --no-build --force-recreate
 ```
+若镜像本身损坏，在 GitHub 对 `docker-image.yml` 跑 `workflow_dispatch` 重建后再 pull。
 
 **Q: Windows 系统部署问题？**
 直接使用批处理脚本: `docker-deploy.bat`

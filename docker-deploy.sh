@@ -16,6 +16,8 @@ NC='\033[0m' # No Color
 PROJECT_NAME="xianyu-auto-bot"
 COMPOSE_FILE="docker-compose.yml"
 SELECTED_COMPOSE_FILE="$COMPOSE_FILE"
+# 生产默认镜像：GitHub Actions 推送到 GHCR；可用环境变量覆盖
+GHCR_IMAGE="${XIANYU_IMAGE:-ghcr.io/dengyie/xianyu-auto-bot:latest}"
 
 if docker compose version >/dev/null 2>&1; then
     COMPOSE_CMD="docker compose"
@@ -97,17 +99,27 @@ init_config() {
     print_success "已创建必要的目录"
 }
 
-# 构建镜像
+# 从 GHCR 拉取镜像（生产唯一路径；禁止在本机/VPS compose build）
+pull_image() {
+    print_info "从 GHCR 拉取镜像: $GHCR_IMAGE"
+    print_warning "Docker 镜像只由 GitHub Actions 构建；本脚本不会 docker build"
+    if ! docker pull "$GHCR_IMAGE"; then
+        print_error "拉取失败。请确认 Actions「Build and Push Docker Image」已成功，且已 docker login ghcr.io"
+        exit 1
+    fi
+    # 兼容旧 compose / 本地 tag 习惯
+    if [ "$GHCR_IMAGE" != "dengyie/xianyu-auto-bot:latest" ]; then
+        docker tag "$GHCR_IMAGE" dengyie/xianyu-auto-bot:latest 2>/dev/null || true
+    fi
+    print_success "镜像拉取完成: $GHCR_IMAGE"
+}
+
+# 兼容旧命令名：明确拒绝本地 build
 build_image() {
-    print_info "构建 Docker 镜像..."
-    echo "是否需要使用国内镜像(y/n): " && read iscn
-    if [[ $iscn == "y" ]]; then
-        SELECTED_COMPOSE_FILE="docker-compose-cn.yml"
-    else
-        SELECTED_COMPOSE_FILE="$COMPOSE_FILE"
-    fi  
-    compose build --no-cache
-    print_success "镜像构建完成"
+    print_error "已禁用本地/VPS docker build"
+    print_info "请 push 到 main，等待 GitHub Actions 推送 GHCR，再执行: $0 pull && $0 start"
+    print_info "或: $0 update   # 自动 pull + recreate --no-build"
+    exit 1
 }
 
 # 启动服务
@@ -120,7 +132,8 @@ start_services() {
         print_info "启动基础服务..."
     fi
 
-    compose $profile up -d
+    # 强制不在启动时 build
+    compose $profile up -d --no-build --pull never
     print_success "服务启动完成"
 
     # 等待服务就绪
@@ -250,28 +263,34 @@ backup_data() {
     print_success "数据备份完成: $backup_dir"
 }
 
-# 更新部署
+# 更新部署（GHCR pull + recreate，绝不本地 build）
 update_deployment() {
-    print_info "更新部署..."
-    
+    print_info "更新部署（GHCR only）..."
+
     # 备份数据
     backup_data
-    
-    # 停止服务
-    stop_services
-    
-    # 拉取最新代码（如果是git仓库）
+
+    # 生产目录通常无 .git；代码真相在 GitHub，镜像真相在 GHCR
     if [ -d ".git" ]; then
-        print_info "拉取最新代码..."
-        git pull
+        print_warning "检测到 .git；生产推荐无 git 目录，仅 pull 镜像"
     fi
-    
-    # 重新构建
-    build_image
-    
-    # 启动服务
-    start_services
-    
+
+    pull_image
+
+    print_info "用新镜像重建容器（--no-build）..."
+    compose up -d --no-build --force-recreate --pull never
+
+    print_info "等待服务就绪..."
+    sleep 10
+    if compose ps | grep -q "Up"; then
+        print_success "服务运行正常"
+        show_access_info
+    else
+        print_error "服务启动失败"
+        compose logs
+        exit 1
+    fi
+
     print_success "更新完成"
 }
 
@@ -297,28 +316,36 @@ cleanup() {
 
 # 显示帮助信息
 show_help() {
-    echo "闲鱼管理系统 Docker 部署脚本"
+    echo "闲鱼管理系统 Docker 部署脚本（GHCR only）"
+    echo ""
+    echo "镜像构建：GitHub Actions (.github/workflows/docker-image.yml) →"
+    echo "  ghcr.io/dengyie/xianyu-auto-bot:latest"
+    echo "本机/VPS 禁止 docker compose build（1GB 机器会卡死）。"
     echo ""
     echo "用法: $0 [命令] [选项]"
     echo ""
     echo "命令:"
     echo "  init                初始化配置文件"
-    echo "  build               构建 Docker 镜像"
-    echo "  start [with-nginx]  启动服务（可选包含 Nginx）"
+    echo "  pull                从 GHCR 拉取最新镜像"
+    echo "  build               已禁用（会提示改用 GHCR）"
+    echo "  start [with-nginx]  启动服务（先 pull，--no-build）"
     echo "  stop                停止服务"
     echo "  restart             重启服务"
     echo "  status              查看服务状态"
     echo "  logs [service]      查看日志"
     echo "  health              健康检查"
     echo "  backup              备份数据"
-    echo "  update              更新部署"
+    echo "  update              备份 + pull + recreate（推荐发版）"
     echo "  cleanup             清理环境"
     echo "  help                显示帮助信息"
     echo ""
+    echo "环境变量:"
+    echo "  XIANYU_IMAGE   默认 ghcr.io/dengyie/xianyu-auto-bot:latest"
+    echo ""
     echo "示例:"
     echo "  $0 init             # 初始化配置"
-    echo "  $0 start            # 启动基础服务"
-    echo "  $0 start with-nginx # 启动包含 Nginx 的服务"
+    echo "  $0 update           # 生产发版：pull GHCR 并重建"
+    echo "  $0 pull && $0 start # 分步拉取并启动"
     echo "  $0 logs xianyu-app  # 查看应用日志"
     echo ""
 }
@@ -330,6 +357,10 @@ main() {
             check_dependencies
             init_config
             ;;
+        "pull")
+            check_dependencies
+            pull_image
+            ;;
         "build")
             check_dependencies
             build_image
@@ -337,7 +368,7 @@ main() {
         "start")
             check_dependencies
             init_config
-            build_image
+            pull_image
             start_services "$2"
             ;;
         "stop")
@@ -370,10 +401,10 @@ main() {
             show_help
             ;;
         "")
-            print_info "快速部署模式"
+            print_info "快速部署模式（GHCR pull，不 build）"
             check_dependencies
             init_config
-            build_image
+            pull_image
             start_services
             ;;
         *)

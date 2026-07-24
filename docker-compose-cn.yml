@@ -1,9 +1,8 @@
 services:
   xianyu-app:
-    build:
-      context: .
-      dockerfile: Dockerfile-cn
-    image: xianyu-auto-bot:latest
+    # 与 docker-compose.yml 一致：镜像只来自 GitHub Actions → GHCR
+    # Dockerfile-cn 仅供本地/CI 调试，禁止在生产机 compose build
+    image: ${XIANYU_IMAGE:-ghcr.io/dengyie/xianyu-auto-bot:latest}
     container_name: xianyu-auto-bot
     restart: unless-stopped
     user: "${APP_UID:-1000}:${APP_GID:-1000}"

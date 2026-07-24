@@ -2,25 +2,25 @@
 chcp 65001 >nul
 setlocal enabledelayedexpansion
 
-REM 闲鱼管理系统 Docker 部署脚本 (Windows版本)
-REM 支持快速部署和管理
+REM 闲鱼管理系统 Docker 部署脚本 (Windows)
+REM 镜像只由 GitHub Actions 构建并推送到 GHCR；本脚本禁止本地 compose build
 
-title 闲鱼管理系统 Docker 部署
+title 闲鱼管理系统 Docker 部署 (GHCR only)
 
-REM 项目配置
 set PROJECT_NAME=xianyu-auto-bot
 set COMPOSE_FILE=docker-compose.yml
 set "COMPOSE_CMD=docker-compose"
+if defined XIANYU_IMAGE (
+    set "GHCR_IMAGE=%XIANYU_IMAGE%"
+) else (
+    set "GHCR_IMAGE=ghcr.io/dengyie/xianyu-auto-bot:latest"
+)
 
-set "COMPOSE_FILE=%COMPOSE_FILE%"
-
-REM 颜色定义（Windows CMD不支持ANSI颜色，使用echo代替）
 set "INFO_PREFIX=[INFO]"
 set "SUCCESS_PREFIX=[SUCCESS]"
 set "WARNING_PREFIX=[WARNING]"
 set "ERROR_PREFIX=[ERROR]"
 
-REM 检查依赖
 echo %INFO_PREFIX% 检查系统依赖...
 
 where docker >nul 2>&1
@@ -45,13 +45,10 @@ if %errorlevel% neq 0 (
 
 echo %SUCCESS_PREFIX% 系统依赖检查通过
 
-REM 初始化配置
 echo %INFO_PREFIX% 初始化配置文件...
 
-REM 检查关键文件
 if not exist "entrypoint.sh" (
     echo %ERROR_PREFIX% entrypoint.sh 文件不存在，Docker容器将无法启动
-    echo %INFO_PREFIX% 请确保项目文件完整
     pause
     exit /b 1
 ) else (
@@ -60,60 +57,83 @@ if not exist "entrypoint.sh" (
 
 if not exist "global_config.yml" (
     echo %ERROR_PREFIX% global_config.yml 配置文件不存在
-    echo %INFO_PREFIX% 请确保配置文件存在
     pause
     exit /b 1
 ) else (
     echo %SUCCESS_PREFIX% global_config.yml 配置文件已存在
 )
 
-REM 创建必要的目录
 if not exist "data" mkdir data
 if not exist "logs" mkdir logs
 if not exist "backups" mkdir backups
 if not exist "static\uploads\images" mkdir static\uploads\images
 echo %SUCCESS_PREFIX% 已创建必要的目录
 
-REM 处理命令行参数
 if "%1"=="" goto quick_deploy
 if "%1"=="help" goto show_help
+if "%1"=="--help" goto show_help
+if "%1"=="/?" goto show_help
+if "%1"=="pull" goto pull_image
 if "%1"=="start" goto start_services
 if "%1"=="stop" goto stop_services
 if "%1"=="restart" goto restart_services
 if "%1"=="status" goto show_status
 if "%1"=="logs" goto show_logs
 if "%1"=="build" goto build_image
+if "%1"=="update" goto update_deployment
 if "%1"=="cleanup" goto cleanup
 goto unknown_command
 
-:quick_deploy
-echo %INFO_PREFIX% 快速部署模式
-goto build_and_start
-
-:build_image
-echo %INFO_PREFIX% 构建 Docker 镜像...
-set /p use_cn="是否使用国内镜像源？(y/n): "
-if /i "!use_cn!"=="y" (
-    set "COMPOSE_FILE=docker-compose-cn.yml"
-) else (
-    set "COMPOSE_FILE=docker-compose.yml"
-)
-%COMPOSE_CMD% -f %COMPOSE_FILE% build --no-cache
+:pull_image
+echo %INFO_PREFIX% 从 GHCR 拉取镜像: %GHCR_IMAGE%
+echo %WARNING_PREFIX% Docker 镜像只由 GitHub Actions 构建；本脚本不会 docker build
+docker pull %GHCR_IMAGE%
 if %errorlevel% neq 0 (
-    echo %ERROR_PREFIX% 镜像构建失败
+    echo %ERROR_PREFIX% 拉取失败。请确认 Actions「Build and Push Docker Image」已成功，且已 docker login ghcr.io
     pause
     exit /b 1
 )
-echo %SUCCESS_PREFIX% 镜像构建完成
+if /i not "%GHCR_IMAGE%"=="dengyie/xianyu-auto-bot:latest" (
+    docker tag %GHCR_IMAGE% dengyie/xianyu-auto-bot:latest 2>nul
+)
+echo %SUCCESS_PREFIX% 镜像拉取完成: %GHCR_IMAGE%
+exit /b 0
+
+:build_image
+echo %ERROR_PREFIX% 已禁用本地/VPS docker build
+echo %INFO_PREFIX% 请 push 到 main，等待 GitHub Actions 推送 GHCR，再执行: %~nx0 pull ^&^& %~nx0 start
+echo %INFO_PREFIX% 或: %~nx0 update
+exit /b 1
+
+:quick_deploy
+echo %INFO_PREFIX% 快速部署模式（GHCR pull，不 build）
+call :pull_image
+if %errorlevel% neq 0 exit /b 1
+goto start_services_only
+
+:update_deployment
+echo %INFO_PREFIX% 更新部署（GHCR only）...
+call :pull_image
+if %errorlevel% neq 0 exit /b 1
+echo %INFO_PREFIX% 用新镜像重建容器（--no-build）...
+%COMPOSE_CMD% -f %COMPOSE_FILE% up -d --no-build --force-recreate --pull never
+if %errorlevel% neq 0 (
+    echo %ERROR_PREFIX% 服务启动失败
+    %COMPOSE_CMD% -f %COMPOSE_FILE% logs
+    pause
+    exit /b 1
+)
+echo %SUCCESS_PREFIX% 更新完成
+call :show_access_info
 goto end
 
-:build_and_start
-call :build_image
+:start_services
+call :pull_image
 if %errorlevel% neq 0 exit /b 1
 
-:start_services
+:start_services_only
 echo %INFO_PREFIX% 启动服务...
-%COMPOSE_CMD% -f %COMPOSE_FILE% up -d
+%COMPOSE_CMD% -f %COMPOSE_FILE% up -d --no-build --pull never
 if %errorlevel% neq 0 (
     echo %ERROR_PREFIX% 服务启动失败
     %COMPOSE_CMD% -f %COMPOSE_FILE% logs
@@ -122,12 +142,9 @@ if %errorlevel% neq 0 (
 )
 
 echo %SUCCESS_PREFIX% 服务启动完成
-
-REM 等待服务就绪
 echo %INFO_PREFIX% 等待服务就绪...
 timeout /t 10 /nobreak >nul
 
-REM 检查服务状态
 %COMPOSE_CMD% -f %COMPOSE_FILE% ps | findstr "Up" >nul
 if %errorlevel% equ 0 (
     echo %SUCCESS_PREFIX% 服务运行正常
@@ -185,44 +202,53 @@ goto end
 
 :show_access_info
 echo.
-echo %SUCCESS_PREFIX% 🎉 部署完成！
+echo %SUCCESS_PREFIX% 部署完成！
 echo.
 set "WEB_PORT=9000"
 if /i "%COMPOSE_FILE%"=="docker-compose-cn.yml" set "WEB_PORT=8000"
-echo 📱 访问地址:
+echo 访问地址:
 echo    HTTP: http://localhost:%WEB_PORT%
 echo.
-echo 🔐 登录信息:
+echo 登录信息:
 echo    用户名: admin
 echo    密码:   请查看首次启动日志，或通过 ADMIN_PASSWORD 显式配置
 echo.
-echo 📊 管理命令:
+echo 管理命令:
 echo    查看状态: %~nx0 status
 echo    查看日志: %~nx0 logs
+echo    更新发版: %~nx0 update
 echo    重启服务: %~nx0 restart
 echo    停止服务: %~nx0 stop
 echo.
 goto :eof
 
 :show_help
-echo 闲鱼管理系统 Docker 部署脚本 (Windows版本)
+echo 闲鱼管理系统 Docker 部署脚本 (Windows · GHCR only)
+echo.
+echo 镜像构建: GitHub Actions → ghcr.io/dengyie/xianyu-auto-bot:latest
+echo 本机禁止 docker compose build。
 echo.
 echo 用法: %~nx0 [命令]
 echo.
 echo 命令:
-echo   start     启动服务
+echo   pull      从 GHCR 拉取最新镜像
+echo   start     拉取并启动（--no-build）
+echo   update    拉取并 force-recreate（推荐发版）
 echo   stop      停止服务
 echo   restart   重启服务
 echo   status    查看服务状态
 echo   logs      查看日志
-echo   build     构建镜像
+echo   build     已禁用（会提示改用 GHCR）
 echo   cleanup   清理环境
 echo   help      显示帮助信息
 echo.
+echo 环境变量:
+echo   XIANYU_IMAGE   默认 ghcr.io/dengyie/xianyu-auto-bot:latest
+echo.
 echo 示例:
-echo   %~nx0         # 快速部署
-echo   %~nx0 start   # 启动服务
-echo   %~nx0 logs    # 查看日志
+echo   %~nx0 update   # 生产发版
+echo   %~nx0 pull
+echo   %~nx0 start
 echo.
 goto end
 

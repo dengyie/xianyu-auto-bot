@@ -1,17 +1,8 @@
 services:
   xianyu-app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        BASE_IMAGE: python:3.11-slim-bookworm
-        HTTP_PROXY: ${HTTP_PROXY}
-        HTTPS_PROXY: ${HTTPS_PROXY}
-        NO_PROXY: ${NO_PROXY}
-        http_proxy: ${HTTP_PROXY}
-        https_proxy: ${HTTPS_PROXY}
-        no_proxy: ${NO_PROXY}
-    image: dengyie/xianyu-auto-bot:latest
+    # 生产镜像只来自 GitHub Actions → GHCR，禁止在 1GB VPS 上 compose build
+    # 本地若需改 Dockerfile：用 `docker build` 或 workflow_dispatch，不要在本文件加回 build:
+    image: ${XIANYU_IMAGE:-ghcr.io/dengyie/xianyu-auto-bot:latest}
     container_name: xianyu-auto-bot
     # 回收 chrome 退出后的僵尸进程（Playwright 浏览器树）
     init: true
