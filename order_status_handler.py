@@ -845,7 +845,10 @@ class OrderStatusHandler:
                     clear_pre_refund_status = True
                 
                 # 更新订单状态（带重试机制）
+                # 注意：db_manager.insert_or_update_order 内部会捕获所有异常并返回 False，
+                # 所以重试判断必须基于返回值（success），不能只靠 try/except。
                 success = False
+                last_error: Optional[str] = None
                 for attempt in range(max_retries):
                     try:
                         logger.info(f"💾 尝试更新订单状态 (尝试 {attempt + 1}/{max_retries}): {order_id}")
@@ -856,15 +859,26 @@ class OrderStatusHandler:
                             pre_refund_status=pre_refund_status_to_save,
                             clear_pre_refund_status=clear_pre_refund_status
                         )
-                        logger.info(f"✅ 订单状态更新成功: {order_id}")
-                        break
+                        if success:
+                            logger.info(f"✅ 订单状态写库成功: {order_id} (尝试 {attempt + 1}/{max_retries})")
+                            break
+                        # success=False：db 层已吞异常，需要重试
+                        last_error = "insert_or_update_order returned False"
+                        logger.warning(
+                            f"⚠️ 订单状态写库返回失败 (尝试 {attempt + 1}/{max_retries}): {order_id}"
+                        )
                     except Exception as db_e:
-                        if attempt == max_retries - 1:
-                            logger.error(f"❌ 更新订单状态失败 (尝试 {attempt + 1}/{max_retries}): {str(db_e)}")
-                            return False
-                        else:
-                            logger.error(f"⚠️ 更新订单状态失败，重试中 (尝试 {attempt + 1}/{max_retries}): {str(db_e)}")
-                            time.sleep(0.1 * (attempt + 1))  # 递增延迟
+                        # 防御性分支：万一 db 层未来改造成对外抛异常
+                        last_error = str(db_e)
+                        logger.error(
+                            f"⚠️ 更新订单状态抛出异常 (尝试 {attempt + 1}/{max_retries}): {last_error}"
+                        )
+                    if attempt < max_retries - 1:
+                        time.sleep(0.1 * (attempt + 1))  # 递增延迟
+                if not success:
+                    logger.error(
+                        f"❌ 更新订单状态最终失败: {order_id} -> {new_status}, 已重试 {max_retries} 次, last_error={last_error}"
+                    )
                 
                 if success:
                     # 记录状态历史（用于退款撤销时回退）
