@@ -13,6 +13,8 @@ services:
         no_proxy: ${NO_PROXY}
     image: dengyie/xianyu-auto-bot:latest
     container_name: xianyu-auto-bot
+    # 回收 chrome 退出后的僵尸进程（Playwright 浏览器树）
+    init: true
     restart: unless-stopped
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
     # 使用 bash 执行脚本，避免 Windows 行尾格式问题

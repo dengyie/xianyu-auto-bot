@@ -292,7 +292,8 @@ def test_cancelled_red_reminder_queues_when_direct_backfill_is_ambiguous(mocker)
     ]
 
 
-def test_cancelled_red_reminder_queues_when_direct_backfill_has_no_strong_key(mocker):
+def test_cancelled_red_reminder_sid_only_backfills_unique_order(mocker):
+    """轻量交易关闭只有 sid 时，唯一候选订单应直接回填 cancelled。"""
     fake_db = _MessageBindingDB()
     fake_db.orders["resolved-no-strong-key-red"] = {
         "order_id": "resolved-no-strong-key-red",
@@ -326,12 +327,9 @@ def test_cancelled_red_reminder_queues_when_direct_backfill_has_no_strong_key(mo
     )
 
     assert handled is True
-    assert fake_db.orders["resolved-no-strong-key-red"]["order_status"] == "pending_ship"
-    assert "temp_260000_a1b2c3d4" in handler.pending_updates
-    assert handler.pending_updates["temp_260000_a1b2c3d4"][0]["new_status"] == "cancelled"
-    assert [msg["temp_order_id"] for msg in handler._pending_red_reminder_messages["cookie-no-strong-key-red"]] == [
-        "temp_260000_a1b2c3d4"
-    ]
+    assert fake_db.orders["resolved-no-strong-key-red"]["order_status"] == "cancelled"
+    assert "temp_260000_a1b2c3d4" not in handler.pending_updates
+    assert "cookie-no-strong-key-red" not in handler._pending_red_reminder_messages
 
 
 def test_cancelled_red_reminder_queues_when_direct_backfill_has_no_candidates(mocker):
@@ -1607,7 +1605,8 @@ def test_cancelled_system_message_direct_backfill_updates_unique_order(mocker):
     assert "cookie-direct-system" not in handler._pending_system_messages
 
 
-def test_cancelled_system_message_queues_when_direct_backfill_has_no_strong_key(mocker):
+def test_cancelled_system_message_sid_only_backfills_unique_order(mocker):
+    """系统交易关闭消息只有 sid 时，唯一候选订单应直接回填 cancelled。"""
     fake_db = _MessageBindingDB()
     fake_db.orders["resolved-no-strong-key-system"] = {
         "order_id": "resolved-no-strong-key-system",
@@ -1649,12 +1648,9 @@ def test_cancelled_system_message_queues_when_direct_backfill_has_no_strong_key(
     )
 
     assert handled is True
-    assert fake_db.orders["resolved-no-strong-key-system"]["order_status"] == "pending_ship"
-    assert "temp_250000_55667788" in handler.pending_updates
-    assert handler.pending_updates["temp_250000_55667788"][0]["new_status"] == "cancelled"
-    assert [
-        msg["temp_order_id"] for msg in handler._pending_system_messages["cookie-no-strong-key-system"]
-    ] == ["temp_250000_55667788"]
+    assert fake_db.orders["resolved-no-strong-key-system"]["order_status"] == "cancelled"
+    assert "temp_250000_55667788" not in handler.pending_updates
+
 
 
 def test_cancelled_system_message_queues_when_direct_backfill_has_no_candidates(mocker):

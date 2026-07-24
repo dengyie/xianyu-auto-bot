@@ -303,11 +303,16 @@ async function editCard(cardId) {
 
         // 根据类型填充特定字段
         if (card.type === 'api' && card.api_config) {
+        // 记住原始 api_config，保存时合并回去，避免表单未覆盖的扩展字段被丢弃
+        window._editingCardApiConfig = card.api_config;
+        // headers/params 可能是对象（后端存的是嵌套 JSON），需要序列化后再填入文本框，
+        // 否则会变成 "[object Object]" 导致保存时 JSON 校验报错
+        const _fmtJsonField = (v) => (typeof v === 'string' ? v : JSON.stringify(v || {}, null, 2));
         document.getElementById('editApiUrl').value = card.api_config.url || '';
         document.getElementById('editApiMethod').value = card.api_config.method || 'GET';
         document.getElementById('editApiTimeout').value = card.api_config.timeout || 10;
-        document.getElementById('editApiHeaders').value = card.api_config.headers || '{}';
-        document.getElementById('editApiParams').value = card.api_config.params || '{}';
+        document.getElementById('editApiHeaders').value = _fmtJsonField(card.api_config.headers);
+        document.getElementById('editApiParams').value = _fmtJsonField(card.api_config.params);
         } else if (card.type === 'yifan_api' && card.api_config) {
         document.getElementById('editYifanUserId').value = card.api_config.user_id || '';
         document.getElementById('editYifanUserKey').value = card.api_config.user_key || '';
@@ -482,13 +487,14 @@ async function updateCard() {
             return;
         }
 
-        cardData.api_config = {
+        // 以原始 api_config 为底合并表单字段，保留表单未覆盖的扩展配置
+        cardData.api_config = Object.assign({}, window._editingCardApiConfig || {}, {
             url: document.getElementById('editApiUrl').value,
             method: document.getElementById('editApiMethod').value,
-            timeout: parseInt(document.getElementById('editApiTimeout').value),
+            timeout: parseInt(document.getElementById('editApiTimeout').value) || 10,
             headers: headers,
             params: params
-        };
+        });
         break;
         case 'yifan_api':
         // 验证必填字段

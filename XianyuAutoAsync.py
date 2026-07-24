@@ -8496,6 +8496,58 @@ class XianyuLive:
             await asyncio.sleep(0.5)
             return await self.get_item_info(item_id, retry_count + 1)
 
+    async def _is_item_owned_by_self(self, item_id: str):
+        """判断商品是否属于本账号，用于区分本账号在会话中的买家/卖家身份。
+
+        Returns:
+            True: 本账号的商品（自己是卖家）
+            False: 别人的商品（本账号主动咨询/购买，自己是买家）
+            None: 无法判断（缺商品ID或接口失败）
+        判断顺序：内存缓存 -> 本地 item_info 表（只存本账号商品）-> 商品详情API比对卖家ID。
+        """
+        if not item_id:
+            return None
+
+        cache = getattr(self, '_item_ownership_cache', None)
+        if cache is None:
+            cache = self._item_ownership_cache = {}
+        if item_id in cache:
+            return cache[item_id]
+
+        # 本地 item_info 表只存本账号的商品，命中即认定为自己的
+        try:
+            from db_manager import db_manager
+            if db_manager.get_item_info(self.cookie_id, item_id):
+                cache[item_id] = True
+                return True
+        except Exception as db_e:
+            logger.debug(f"【{self.cookie_id}】查询本地商品归属失败: {self._safe_str(db_e)}")
+
+        # 本地没有：调商品详情接口比对卖家ID（结果缓存，避免重复请求）
+        try:
+            detail = await self.get_item_info(item_id)
+            data = (detail or {}).get('data') or {}
+            seller = data.get('sellerDO') or {}
+            seller_id = str(
+                seller.get('sellerId')
+                or seller.get('userId')
+                or (data.get('itemDO') or {}).get('sellerId')
+                or ''
+            ).strip()
+            if seller_id:
+                owned = seller_id == str(self.myid)
+                cache[item_id] = owned
+                if not owned:
+                    logger.info(
+                        f"【{self.cookie_id}】商品 {item_id} 属于卖家 {seller_id}，"
+                        f"本账号({self.myid})在该会话中是买家身份"
+                    )
+                return owned
+        except Exception as api_e:
+            logger.warning(f"【{self.cookie_id}】判断商品归属失败（默认放行）: {self._safe_str(api_e)}")
+
+        return None
+
     def extract_item_id_from_message(self, message):
         """从消息中提取商品ID的辅助方法"""
         try:
@@ -11166,8 +11218,9 @@ class XianyuLive:
             if isinstance(params, str):
                 params = json.loads(params)
 
-            # 如果是POST请求且有动态参数，进行参数替换
-            if method == 'POST' and params:
+            # 有动态参数时进行替换（GET 的 query 参数同样需要，
+            # 否则 {order_id} 等占位符会原样发给对方接口）
+            if params:
                 params = await self._replace_api_dynamic_params(params, order_id, item_id, buyer_id, spec_name, spec_value)
 
             retry_info = f" (重试 {retry_count + 1}/{max_retries})" if retry_count > 0 else ""
@@ -15627,6 +15680,15 @@ class XianyuLive:
                 logger.info(
                     f"【{self.cookie_id}】[{msg_id}] ⏹️ 当前消息不进入自动回复链: "
                     f"route={message_route}, status_signal={order_status_signal or 'none'}"
+                )
+                return
+
+            # 身份判断：本账号主动去别人商品下咨询/购买时，自己是买家身份，
+            # 对方（卖家）发来的消息不应触发本账号的自动/AI回复
+            if await self._is_item_owned_by_self(item_id) is False:
+                logger.info(
+                    f"【{self.cookie_id}】[{msg_id}] ⏹️ 商品 {item_id} 非本账号所有"
+                    f"（本账号为买家身份），跳过自动回复"
                 )
                 return
 

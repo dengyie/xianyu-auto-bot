@@ -20,7 +20,7 @@ import re
 import sys
 import socket
 from datetime import datetime
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlencode, quote_plus
 from playwright.sync_api import sync_playwright as playwright_sync_playwright, ElementHandle
 try:
     from patchright.sync_api import sync_playwright as patchright_sync_playwright

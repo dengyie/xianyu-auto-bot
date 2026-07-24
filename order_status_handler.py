@@ -433,6 +433,13 @@ class OrderStatusHandler:
             message_timestamp_ms = self._extract_message_timestamp_ms(message)
 
         sid = self._normalize_match_text(raw_context.get('sid'))
+        if not sid and isinstance(message, dict):
+            # 轻量红色提醒（{'1': 'sid@goofish', '3': {'redReminder': ...}}）不带订单号，
+            # 但字段 '1' 就是会话 sid，补进匹配键供 sid 单键回填使用
+            raw_sid = message.get('1')
+            if isinstance(raw_sid, str) and '@goofish' in raw_sid:
+                sid = self._normalize_match_text(raw_sid)
+
         buyer_id = self._normalize_match_text(raw_context.get('buyer_id'))
         item_id = self._normalize_item_match_value(raw_context.get('item_id'))
 
@@ -617,8 +624,11 @@ class OrderStatusHandler:
         ]
 
     def _find_recent_orders_for_match_context(self, cookie_id: str, match_context: Dict[str, Any],
-                                              statuses: list, exclude_order_id: str = None) -> list:
-        if not match_context.get('has_strong_match_key'):
+                                              statuses: list, exclude_order_id: str = None,
+                                              allow_sid_only: bool = False) -> list:
+        # allow_sid_only: 轻量红色提醒（如"交易关闭"）只带会话 sid，不带 buyer/item；
+        # sid 本身已能定位到一条会话（买家×商品），配合调用方的"唯一候选"约束足够安全。
+        if not match_context.get('has_strong_match_key') and not (allow_sid_only and match_context.get('sid')):
             return []
 
         try:
@@ -642,13 +652,18 @@ class OrderStatusHandler:
 
     def _try_resolve_cancelled_message_without_order_id(self, cookie_id: str, msg_time: str, new_status: str,
                                                         context_label: str, match_context: Dict[str, Any]) -> bool:
-        if new_status != 'cancelled' or not match_context.get('has_strong_match_key'):
+        if new_status != 'cancelled':
+            return False
+        # 强匹配键（sid+buyer+item）或至少有 sid 才尝试回填；
+        # sid 单键场景由"唯一候选"约束兜底，命中多个候选时仍走待处理队列
+        if not match_context.get('has_strong_match_key') and not match_context.get('sid'):
             return False
 
         candidates = self._find_recent_orders_for_match_context(
             cookie_id=cookie_id,
             match_context=match_context,
-            statuses=self._get_terminal_resolution_candidate_statuses()
+            statuses=self._get_terminal_resolution_candidate_statuses(),
+            allow_sid_only=True
         )
 
         if not candidates:

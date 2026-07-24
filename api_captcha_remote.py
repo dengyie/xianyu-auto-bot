@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 from typing import Optional, List
 import asyncio
+import json
 import os
 import secrets
 from loguru import logger
@@ -18,6 +19,17 @@ from slidex.remote import captcha_controller
 # 创建路由器
 router = APIRouter(prefix="/api/captcha", tags=["captcha"])
 
+
+def _safe_json_for_inline_script(value: str) -> str:
+    """将值安全嵌入内联 script 的 JSON 字面量。"""
+    return (
+        json.dumps(str(value or ''))
+        .replace('<', '\\u003c')
+        .replace('>', '\\u003e')
+        .replace('&', '\\u0026')
+        .replace(chr(0x2028), '\\u2028')
+        .replace(chr(0x2029), '\\u2029')
+    )
 
 def _configured_control_key() -> str:
     return (os.getenv("CAPTCHA_CONTROL_API_KEY") or "").strip()
@@ -373,9 +385,10 @@ async def captcha_control_page_with_session(session_id: str, _: None = Depends(r
         with open(html_file, 'r', encoding='utf-8') as f:
             html_content = f.read()
             # 注入会话ID
+            safe_session_id = _safe_json_for_inline_script(session_id)
             html_content = html_content.replace(
                 '</body>',
-                f'<script>window.INITIAL_SESSION_ID = "{session_id}";</script></body>'
+                f'<script>window.INITIAL_SESSION_ID = {safe_session_id};</script></body>'
             )
             return HTMLResponse(content=html_content)
     else:
