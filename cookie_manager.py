@@ -395,7 +395,7 @@ class CookieManager:
             user_id = cookie_info.get('user_id') if cookie_info else None
 
             # 使用异步方式启动任务
-            if hasattr(self.loop, 'is_running') and self.loop.is_running():
+            if self.loop is not None and self.loop.is_running():
                 # 事件循环正在运行，使用run_coroutine_threadsafe
                 fut = asyncio.run_coroutine_threadsafe(
                     self._add_cookie_async(cookie_id, cookie_value, user_id),
@@ -404,10 +404,17 @@ class CookieManager:
                 fut.result(timeout=5)  # 等待最多5秒
             else:
                 # 事件循环未运行，直接创建任务
+                if self.loop is None:
+                    logger.error(f"事件循环未初始化，无法启动Cookie任务: {cookie_id}")
+                    return
                 task = self.loop.create_task(self._run_xianyu(cookie_id, cookie_value, user_id))
                 self.tasks[cookie_id] = task
 
             logger.info(f"成功启动Cookie任务: {cookie_id}")
+        except asyncio.CancelledError:
+            # fut.result() 重抛的取消是 BaseException 子类，不会被 except Exception 捕获
+            logger.warning(f"启动Cookie任务被取消: {cookie_id}")
+            raise
         except Exception as e:
             logger.error(f"启动Cookie任务失败: {cookie_id}, {e}")
 
@@ -439,16 +446,22 @@ class CookieManager:
 
         try:
             # 在事件循环中执行异步停止
-            if hasattr(self.loop, 'is_running') and self.loop.is_running():
+            if self.loop is not None and self.loop.is_running():
                 fut = asyncio.run_coroutine_threadsafe(_stop_task_async(), self.loop)
                 fut.result(timeout=10)  # 等待最多10秒
             else:
                 logger.warning(f"事件循环未运行，无法正常等待任务清理: {cookie_id}")
                 # 直接取消任务（非最佳方案）
+                if self.loop is None:
+                    logger.error(f"事件循环未初始化，无法停止Cookie任务: {cookie_id}")
+                    return
                 task = self.tasks[cookie_id]
                 if not task.done():
                     task.cancel()
                 del self.tasks[cookie_id]
+        except asyncio.CancelledError:
+            logger.warning(f"停止Cookie任务被取消: {cookie_id}")
+            raise
         except Exception as e:
             logger.error(f"停止Cookie任务失败: {cookie_id}, {e}")
 
