@@ -1813,7 +1813,7 @@ class XianyuApis:
                 'deviceId': self.session.cookies.get('cna', '')
             }
             
-            response = self.session.post(url, params=params, data=data)
+            response = self.session.post(url, params=params, data=data, timeout=(10, 30))
             res_json = response.json()
             if res_json.get('content', {}).get('success'):
                 logger.debug("Login成功")
@@ -1868,7 +1868,7 @@ class XianyuApis:
         params['sign'] = sign
         
         try:
-            response = self.session.post('https://h5api.m.goofish.com/h5/mtop.taobao.idlemessage.pc.login.token/1.0/', params=params, data=data)
+            response = self.session.post('https://h5api.m.goofish.com/h5/mtop.taobao.idlemessage.pc.login.token/1.0/', params=params, data=data, timeout=(10, 30))
             res_json = response.json()
             
             if isinstance(res_json, dict):
@@ -1939,9 +1939,10 @@ class XianyuApis:
         
         try:
             response = self.session.post(
-                'https://h5api.m.goofish.com/h5/mtop.taobao.idle.pc.detail/1.0/', 
-                params=params, 
-                data=data
+                'https://h5api.m.goofish.com/h5/mtop.taobao.idle.pc.detail/1.0/',
+                params=params,
+                data=data,
+                timeout=(10, 30)
             )
             
             res_json = response.json()
