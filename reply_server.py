@@ -4731,6 +4731,55 @@ def _get_latest_verification_risk_log_for_account(account_id: str) -> Optional[D
     return None
 
 
+
+def _get_latest_risk_log_epoch_for_account(account_id: str) -> Optional[float]:
+    """返回该账号最近一次风控事件（任意类型，含 slider_captcha）的时间戳(epoch秒)。
+
+    用于判断历史验证截图是否已过期：只要有比截图更新的风控事件，
+    就说明当前的问题不是那次截图对应的验证（如滑块被风控硬拒时不产生新截图），
+    此时不应把旧截图当成待处理验证展示。
+
+    注意：风控日志的 created_at/updated_at 由 SQLite CURRENT_TIMESTAMP 写入（UTC），
+    必须用 parse_db_timestamp 按 UTC 解析，否则 Asia/Shanghai 部署会有 8 小时偏差。
+    """
+    from utils.time_utils import parse_db_timestamp
+    logs = db_manager.get_risk_control_logs(cookie_id=str(account_id), limit=5)
+    latest = None
+    for log in logs:
+        raw = log.get('updated_at') or log.get('created_at')
+        parsed = parse_db_timestamp(raw)
+        if parsed is None:
+            continue
+        ts = parsed.timestamp()  # parse_db_timestamp 返回 UTC aware datetime，timestamp() 即正确 epoch
+        if latest is None or ts > latest:
+            latest = ts
+    return latest
+
+
+# 风控事件晚于截图多少秒即判定截图过期（留 60 秒容差，避免同一验证内的时序抖动误判）
+_SCREENSHOT_STALE_GAP_SECONDS = 60
+
+
+def _evaluate_screenshot_freshness(latest_file: str, latest_risk_epoch: Optional[float]) -> Tuple[str, Optional[str]]:
+    """判断 glob 到的历史截图是否仍应展示。抽成纯函数便于单测。
+
+    Returns (status, message):
+      - ('ok', None)           截图有效，可展示
+      - ('stale', msg)         有更新的风控事件，截图已过期
+      - ('unavailable', msg)   截图 mtime 读取失败（文件被并发删除等），不可用
+    """
+    if latest_risk_epoch is None:
+        return ('ok', None)
+    try:
+        screenshot_mtime = os.path.getmtime(latest_file)
+    except OSError:
+        # 不能默认 0，否则任何近期风控都会把它误判为"过期"；明确报"不可用"
+        return ('unavailable', '验证截图读取失败或已被清理，请重新发起验证')
+    if latest_risk_epoch > screenshot_mtime + _SCREENSHOT_STALE_GAP_SECONDS:
+        return ('stale', '当前没有待处理的验证截图（最近一次风控可能是滑块/Token刷新，已自动处理或需等待风控冷却）')
+    return ('ok', None)
+
+
 def _build_face_verification_screenshot_info(account_id: str, file_path: str) -> Dict[str, Any]:
     from datetime import datetime
 
@@ -5988,8 +6037,9 @@ async def get_account_face_verification_screenshot(
                     }
 
         latest_verification_log = _get_latest_verification_risk_log_for_account(account_id)
-        if latest_verification_log and str(latest_verification_log.get('processing_status') or '').strip().lower() == 'failed':
-            if _is_timed_out_verification_risk_log(latest_verification_log):
+        if latest_verification_log:
+            log_status = str(latest_verification_log.get('processing_status') or '').strip().lower()
+            if log_status == 'failed' and _is_timed_out_verification_risk_log(latest_verification_log):
                 timeout_message = (
                     str(latest_verification_log.get('error_message') or '').strip()
                     or '当前验证页面已超时/失效，请重新发起验证'
@@ -5999,7 +6049,14 @@ async def get_account_face_verification_screenshot(
                     'success': False,
                     'message': timeout_message
                 }
-        
+            if log_status == 'success':
+                # 最近一次验证已完成，历史截图仅作留档，不应再当成待处理验证展示
+                log_with_user('info', f"账号 {account_id} 最新验证已完成，无待处理验证", current_user)
+                return {
+                    'success': False,
+                    'message': '最近一次验证已完成，当前没有待处理的验证'
+                }
+
         # 获取该账号的验证截图
         screenshots_dir = os.path.join(static_dir, 'uploads', 'images')
         pattern_jpg = os.path.join(screenshots_dir, f'face_verify_{account_id}_*.jpg')
@@ -6022,10 +6079,23 @@ async def get_account_face_verification_screenshot(
         
         # 获取最新的截图
         latest_file = max(screenshot_files, key=os.path.getmtime)
+
+        # 新鲜度门槛：若最近一次风控事件（含 slider_captcha 等不产生截图的类型）
+        # 比这张截图还新，说明当前问题不是这张截图对应的验证（如滑块被风控硬拒），
+        # 旧截图不应再当成待处理验证展示，避免"当前提醒被历史截图覆盖"的误导
+        latest_risk_epoch = _get_latest_risk_log_epoch_for_account(account_id)
+        freshness_status, freshness_message = _evaluate_screenshot_freshness(latest_file, latest_risk_epoch)
+        if freshness_status == 'unavailable':
+            log_with_user('warning', f"账号 {account_id} 截图不可用: {freshness_message}", current_user)
+            return {'success': False, 'message': freshness_message}
+        if freshness_status == 'stale':
+            log_with_user('info', f"账号 {account_id} 最新风控事件晚于历史截图，判定截图已过期，不展示", current_user)
+            return {'success': False, 'message': freshness_message}
+
         screenshot_info = _build_face_verification_screenshot_info(account_id, latest_file)
-        
+
         log_with_user('info', f"获取账号 {account_id} 的验证截图", current_user)
-        
+
         return {
             'success': True,
             'screenshot': screenshot_info

@@ -19,6 +19,7 @@ import subprocess
 import re
 import sys
 import socket
+import signal
 from datetime import datetime
 from urllib.parse import parse_qs, urlparse, urlencode, quote_plus
 from playwright.sync_api import sync_playwright as playwright_sync_playwright, ElementHandle
@@ -1021,6 +1022,7 @@ class XianyuSliderStealth:
         self.browser = None
         self.page = None
         self.context = None
+        self._browser_pid = None
         self.local_browser_info = {}
         try:
             self.browser_cookie_warmup_probe_timeout_ms = max(
@@ -2370,6 +2372,7 @@ class XianyuSliderStealth:
                     )
                     launched_with_persistent_profile = True
                     self.browser = None
+                    self._browser_pid = self._extract_browser_pid(self.context)
                 except Exception as persistent_launch_error:
                     if not self._is_profile_in_use_launch_error(persistent_launch_error):
                         raise
@@ -2386,6 +2389,7 @@ class XianyuSliderStealth:
                             )
                             launched_with_persistent_profile = True
                             self.browser = None
+                            self._browser_pid = self._extract_browser_pid(self.context)
                         except Exception as retry_launch_error:
                             if not self._is_profile_in_use_launch_error(retry_launch_error):
                                 raise
@@ -2402,6 +2406,7 @@ class XianyuSliderStealth:
             if not launched_with_persistent_profile:
                 try:
                     self.browser = self.playwright.chromium.launch(**launch_options)
+                    self._browser_pid = self._extract_browser_pid(self.browser)
                 except Exception as launch_error:
                     if self.headless and (launch_options.get("executable_path") or launch_options.get("channel")):
                         fallback_options = dict(launch_options)
@@ -2411,6 +2416,7 @@ class XianyuSliderStealth:
                             f"【{self.pure_user_id}】指定浏览器无头启动失败，回退到 Playwright Chromium: {launch_error}"
                         )
                         self.browser = self.playwright.chromium.launch(**fallback_options)
+                        self._browser_pid = self._extract_browser_pid(self.browser)
                     else:
                         raise
             
@@ -2481,6 +2487,8 @@ class XianyuSliderStealth:
                 self.browser = None
         except Exception as e:
             logger.warning(f"【{self.pure_user_id}】清理浏览器时出错: {e}")
+
+        self._force_kill_browser_process_tree("init_failure_cleanup")
         
         try:
             if hasattr(self, 'playwright') and self.playwright:
@@ -5507,6 +5515,20 @@ class XianyuSliderStealth:
 
         self._log_cookie_snapshot_integrity(cookies_dict, f"{scene}完成后")
         logger.success(f"【{self.pure_user_id}】✅ {scene}后Cookie获取完成，字段数: {len(cookies_dict)}")
+
+        # 验证成功后回填该账号悬挂在 processing 状态的验证类风控日志，
+        # 否则前端"查看验证截图"会一直把历史截图当成待处理验证展示
+        try:
+            from db_manager import db_manager as _db
+            resolved_count = _db.resolve_pending_verification_risk_logs(
+                self.pure_user_id,
+                processing_result=f'{scene}成功，验证已完成',
+            )
+            if resolved_count:
+                logger.info(f"【{self.pure_user_id}】已回填 {resolved_count} 条待处理验证风控日志为成功")
+        except Exception as resolve_err:
+            logger.warning(f"【{self.pure_user_id}】回填验证风控日志状态失败: {resolve_err}")
+
         cleared_pending_markers = []
         sanitized_cookies = dict(cookies_dict)
         for key in self._IDENTITY_VERIFY_PENDING_COOKIE_FIELDS:
@@ -9610,6 +9632,117 @@ class XianyuSliderStealth:
             else:
                 logger.warning(f"【{self.pure_user_id}】{action} {obj_name} 时出错: {e}")
 
+
+    def _collect_process_tree(self, root_pid: int) -> List[int]:
+        """收集给定 PID 的全部子孙进程，避免残留 Chromium 进程树。"""
+        try:
+            output = subprocess.check_output(
+                ["ps", "-eo", "pid=,ppid="],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            return [root_pid]
+
+        parent_map: Dict[int, List[int]] = {}
+        for line in output.splitlines():
+            parts = line.strip().split()
+            if len(parts) != 2:
+                continue
+            try:
+                pid = int(parts[0])
+                ppid = int(parts[1])
+            except Exception:
+                continue
+            parent_map.setdefault(ppid, []).append(pid)
+
+        to_visit = [root_pid]
+        seen = set()
+        ordered: List[int] = []
+        while to_visit:
+            pid = to_visit.pop()
+            if pid in seen:
+                continue
+            seen.add(pid)
+            ordered.append(pid)
+            to_visit.extend(parent_map.get(pid, []))
+        return ordered
+
+    def _extract_browser_pid(self, runtime_obj, playwright_obj=None) -> Optional[int]:
+        """尽量从 Playwright runtime 对象上提取浏览器进程 PID。"""
+        try:
+            process = getattr(runtime_obj, "process", None)
+            pid = getattr(process, "pid", None)
+            if pid:
+                return int(pid)
+        except Exception:
+            pass
+        try:
+            browser = getattr(runtime_obj, "browser", None)
+            process = getattr(browser, "process", None) if browser else None
+            pid = getattr(process, "pid", None)
+            if pid:
+                return int(pid)
+        except Exception:
+            pass
+        # Python sync API 的 Browser/Context 并不暴露 process 属性，上面两条路径
+        # 实际拿不到 PID（永远返回 None），导致强杀兜底静默失效、浏览器进程常驻泄漏。
+        # 回退为提取 Playwright node driver 的子进程 PID：所有 chrome 进程都挂在
+        # driver 之下，按 driver 进程树清理可以等效覆盖浏览器进程树。
+        try:
+            pw = playwright_obj or getattr(self, "playwright", None)
+            impl = getattr(pw, "_impl_obj", pw)
+            proc = getattr(getattr(getattr(impl, "_connection", None), "_transport", None), "_proc", None)
+            pid = getattr(proc, "pid", None)
+            if proc is not None and pid:
+                # sync API 下 _proc 实际是 asyncio.subprocess.Process：
+                # 只有 returncode 没有 poll()，需要兼容两种存活判断
+                poll = getattr(proc, "poll", None)
+                if callable(poll):
+                    alive = poll() is None
+                else:
+                    alive = getattr(proc, "returncode", None) is None
+                if alive:
+                    return int(pid)
+        except Exception:
+            pass
+        return None
+
+    def _force_kill_browser_process_tree(self, reason: str = "") -> bool:
+        """兜底终止浏览器进程树，用于 close 失败或页面崩溃后的残留清理。"""
+        pid = self._browser_pid
+        if not pid:
+            return False
+
+        reason_suffix = f"（{reason}）" if reason else ""
+        try:
+            process_tree = self._collect_process_tree(int(pid))
+            if not process_tree:
+                return False
+
+            logger.warning(
+                f"【{self.pure_user_id}】开始兜底清理浏览器进程树{reason_suffix}: {process_tree}"
+            )
+
+            for signal_name, sig in (("TERM", signal.SIGTERM), ("KILL", signal.SIGKILL)):
+                for proc_pid in process_tree:
+                    try:
+                        os.kill(proc_pid, sig)
+                    except ProcessLookupError:
+                        continue
+                    except PermissionError as e:
+                        logger.warning(f"【{self.pure_user_id}】终止进程 {proc_pid} 失败: {e}")
+                    except Exception as e:
+                        logger.debug(f"【{self.pure_user_id}】清理进程 {proc_pid} 时出错: {e}")
+
+                time.sleep(0.4 if signal_name == "TERM" else 0.2)
+
+            self._browser_pid = None
+            return True
+        except Exception as e:
+            logger.warning(f"【{self.pure_user_id}】兜底清理浏览器进程树失败: {e}")
+            return False
+
     def close_browser(self):
         """安全关闭浏览器并清理资源"""
         logger.info(f"【{self.pure_user_id}】开始清理资源...")
@@ -9617,39 +9750,58 @@ class XianyuSliderStealth:
         # 先释放槽位，避免后续任一清理步骤卡死把同账号任务永久堵住。
         self._release_concurrency_slot("close_browser开始")
 
-        # 清理页面 / 上下文 / 浏览器：跨线程 greenlet 错误由 _safe_pw_dispose 统一吸收
-        self._safe_pw_dispose('页面', getattr(self, 'page', None), action='close')
-        self.page = None
+        # 看门狗：优雅清理超过20秒仍未完成（如 close()/stop() 同线程挂死在
+        # 死循环页面上）时，直接按进程树强杀兜底。强杀会让阻塞的 sync 调用
+        # 抛错并被 _safe_pw_dispose 吸收，close_browser 得以继续走完。
+        close_watchdog = threading.Timer(
+            20.0,
+            self._force_kill_browser_process_tree,
+            args=("close_browser_watchdog",),
+        )
+        close_watchdog.daemon = True
+        close_watchdog.start()
 
-        self._safe_pw_dispose('上下文', getattr(self, 'context', None), action='close')
-        self.context = None
-
-        self._safe_pw_dispose('浏览器', getattr(self, 'browser', None), action='close')
-        self.browser = None
-
-        # 停止 Playwright（_stop_playwright_with_timeout 内部已做跨线程保护）
         try:
-            if hasattr(self, 'playwright') and self.playwright:
-                stopped = self._stop_playwright_with_timeout()
-                if stopped:
-                    logger.info(f"【{self.pure_user_id}】Playwright已停止")
-                else:
-                    logger.warning(f"【{self.pure_user_id}】Playwright未能在当前线程停止，已放弃 stop() 仅置空引用")
-        except Exception as e:
-            logger.warning(f"【{self.pure_user_id}】停止Playwright时出错: {e}")
+            # 清理页面 / 上下文 / 浏览器：跨线程 greenlet 错误由 _safe_pw_dispose 统一吸收
+            self._safe_pw_dispose('页面', getattr(self, 'page', None), action='close')
+            self.page = None
+
+            self._safe_pw_dispose('上下文', getattr(self, 'context', None), action='close')
+            self.context = None
+
+            self._safe_pw_dispose('浏览器', getattr(self, 'browser', None), action='close')
+            self.browser = None
+
+            # 停止 Playwright（_stop_playwright_with_timeout 内部已做跨线程保护）
+            try:
+                if hasattr(self, 'playwright') and self.playwright:
+                    stopped = self._stop_playwright_with_timeout()
+                    if stopped:
+                        logger.info(f"【{self.pure_user_id}】Playwright已停止")
+                    else:
+                        logger.warning(f"【{self.pure_user_id}】Playwright未能在当前线程停止，已放弃 stop() 仅置空引用")
+            except Exception as e:
+                logger.warning(f"【{self.pure_user_id}】停止Playwright时出错: {e}")
+            finally:
+                # 不论 stop 成功与否，都把引用置空，避免下一次 close_browser 又对死引用操作
+                self.playwright = None
+                self._playwright_thread_id = None
+
+            # 再补一层浏览器子进程兜底清理，防止 browser.close()/playwright.stop() 没有真正回收干净
+            self._force_kill_browser_process_tree("close_browser")
+
+            # 清理临时目录
+            try:
+                if hasattr(self, 'temp_dir') and self.temp_dir:
+                    shutil.rmtree(self.temp_dir, ignore_errors=True)
+                    logger.debug(f"【{self.pure_user_id}】临时目录已清理: {self.temp_dir}")
+                    self.temp_dir = None  # 设置为None，防止重复清理
+            except Exception as e:
+                logger.warning(f"【{self.pure_user_id}】清理临时目录时出错: {e}")
         finally:
-            # 不论 stop 成功与否，都把引用置空，避免下一次 close_browser 又对死引用操作
-            self.playwright = None
-            self._playwright_thread_id = None
-
-        # 清理临时目录
-        try:
-            if hasattr(self, 'temp_dir') and self.temp_dir:
-                shutil.rmtree(self.temp_dir, ignore_errors=True)
-                logger.debug(f"【{self.pure_user_id}】临时目录已清理: {self.temp_dir}")
-                self.temp_dir = None  # 设置为None，防止重复清理
-        except Exception as e:
-            logger.warning(f"【{self.pure_user_id}】清理临时目录时出错: {e}")
+            # 放在 finally：即使清理中途抛出未捕获异常，也保证取消看门狗，
+            # 避免 20 秒后按已过期的 _browser_pid 误杀后续新会话的进程树
+            close_watchdog.cancel()
 
         # 再兜底释放一次，兼容前面提前释放失败的极端情况。
         self._release_concurrency_slot("close_browser收尾")
@@ -10824,6 +10976,7 @@ class XianyuSliderStealth:
 
             if not browser:
                 browser = context.browser
+            self._browser_pid = self._extract_browser_pid(browser or context, playwright)
             page = context.new_page()
             self._apply_headless_network_fingerprint(page, browser_features)
             observed_set_cookie_updates: Dict[str, str] = {}
@@ -11726,12 +11879,15 @@ class XianyuSliderStealth:
 
                     if close_thread.is_alive():
                         logger.warning(f"【{self.pure_user_id}】关闭浏览器超时，改为后台继续清理，避免阻塞密码登录会话收尾")
+                        self._force_kill_browser_process_tree("password_login_close_timeout")
                     elif close_errors:
                         logger.warning(f"【{self.pure_user_id}】关闭浏览器时出现异常: {close_errors}")
+                        self._force_kill_browser_process_tree("password_login_close_error")
                     elif effective_clean_context:
                         logger.info(f"【{self.pure_user_id}】浏览器已关闭，干净上下文已销毁")
                     else:
                         logger.info(f"【{self.pure_user_id}】浏览器已关闭，缓存已保存")
+                        self._browser_pid = None
                 except Exception as e:
                     logger.warning(f"【{self.pure_user_id}】关闭浏览器时出错: {e}")
 
