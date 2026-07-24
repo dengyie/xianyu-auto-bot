@@ -53,7 +53,7 @@ def test_extract_login_tokens_from_url():
 def test_apply_external_callback_url_rejects_bad_domain():
     manager = QRLoginManager()
     session = _session(manager)
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         manager.apply_external_callback_url(
             session.session_id,
             "https://evil.example.com/callback?token=x",
@@ -67,7 +67,7 @@ def test_apply_external_callback_url_rejects_bad_domain():
 def test_apply_external_callback_url_rejects_empty():
     manager = QRLoginManager()
     session = _session(manager)
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         manager.apply_external_callback_url(session.session_id, "   ")
     )
     assert result["success"] is False
@@ -83,7 +83,7 @@ def test_apply_external_callback_url_login_token_success():
         return {"unb": "u-100", "cookie2": "ck2", "sgcookie": "sg1"}
 
     with patch.object(manager, "_exchange_login_token", side_effect=fake_exchange):
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             manager.apply_external_callback_url(
                 session.session_id,
                 "https://passport.goofish.com/done?token=tok-ok",
@@ -107,7 +107,7 @@ def test_apply_external_callback_url_already_success_is_idempotent():
     session.unb = "u-1"
     session.cookies = {"unb": "u-1", "cookie2": "ck-old"}
 
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         manager.apply_external_callback_url(
             session.session_id,
             "https://passport.goofish.com/done?token=other",
@@ -124,7 +124,7 @@ def test_apply_external_callback_url_rejects_expired():
     session = _session(manager)
     session.created_time = 0
 
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         manager.apply_external_callback_url(
             session.session_id,
             "https://passport.goofish.com/done?token=x",
@@ -214,7 +214,7 @@ def test_apply_external_callback_url_browser_fallback_success():
     with patch.object(manager, "_exchange_login_token", side_effect=fake_exchange), \
          patch.object(manager, "_probe_browser_login_success", side_effect=fake_probe), \
          patch("playwright.async_api.async_playwright", return_value=FakeAsyncPlaywright()):
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             manager.apply_external_callback_url(
                 session.session_id,
                 "https://passport.goofish.com/done?token=partial",

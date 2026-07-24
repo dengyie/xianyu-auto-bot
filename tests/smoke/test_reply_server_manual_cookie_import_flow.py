@@ -82,9 +82,17 @@ class TestReplyServerManualCookieImportFlow:
                 current_user={"user_id": 1, "username": "admin"},
             )
 
-        mocker.patch("utils.xianyu_slider_stealth.XianyuSliderStealth", return_value=fake_slider)
-        mocker.patch("utils.xianyu_slider_stealth.probe_cookie_verification_from_cookie", return_value=probe_result)
-        mocker.patch("utils.xianyu_slider_stealth.concurrency_manager.unregister_instance")
+        # 生产优先加载 slidex；必须 mock _load_slider_runtime，避免落到真实 Playwright
+        mocker.patch.object(
+            reply_server,
+            "_load_slider_runtime",
+            return_value=(
+                lambda *a, **k: fake_slider,
+                lambda *a, **k: probe_result,
+                SimpleNamespace,
+                SimpleNamespace(unregister_instance=mocker.Mock()),
+            ),
+        )
         mocker.patch("XianyuAutoAsync.XianyuLive.protected_merge_cookie_dicts", return_value={
             "incoming_missing_protected_fields": [],
             "preserved_protected_fields": [],
@@ -163,9 +171,16 @@ class TestReplyServerManualCookieImportFlow:
                 current_user={"user_id": 1, "username": "admin"},
             )
 
-        mocker.patch("utils.xianyu_slider_stealth.XianyuSliderStealth", return_value=fake_slider)
-        mocker.patch("utils.xianyu_slider_stealth.probe_cookie_verification_from_cookie", return_value=probe_result)
-        mocker.patch("utils.xianyu_slider_stealth.concurrency_manager.unregister_instance")
+        mocker.patch.object(
+            reply_server,
+            "_load_slider_runtime",
+            return_value=(
+                lambda *a, **k: fake_slider,
+                lambda *a, **k: probe_result,
+                SimpleNamespace,
+                SimpleNamespace(unregister_instance=mocker.Mock()),
+            ),
+        )
         mocker.patch("XianyuAutoAsync.XianyuLive.protected_merge_cookie_dicts", return_value={
             "incoming_missing_protected_fields": [],
             "preserved_protected_fields": [],
