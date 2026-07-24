@@ -107,15 +107,15 @@ RUN playwright install chromium && \
     ln -sf "$CHROME_BIN" /usr/bin/google-chrome
 
 # 创建必要的目录并设置权限
-RUN mkdir -p /app/logs /app/data /app/backups /app/static/uploads/images && \
-    chmod 777 /app/logs /app/data /app/backups /app/static/uploads /app/static/uploads/images
+RUN mkdir -p /app/logs /app/data /app/backups /app/static/uploads/images /app/trajectory_history && \
+    chmod 777 /app/logs /app/data /app/backups /app/static/uploads /app/static/uploads/images /app/trajectory_history
 
 # 配置系统限制，防止core文件生成
 RUN echo "ulimit -c 0" >> /etc/profile
 
 RUN groupadd -g 1000 appuser && \
     useradd -m -u 1000 -g appuser appuser && \
-    mkdir -p /app/data /app/logs /app/backups /app/static/uploads/images && \
+    mkdir -p /app/data /app/logs /app/backups /app/static/uploads/images /app/trajectory_history && \
     chown -R appuser:appuser /app
 
 # 暴露端口

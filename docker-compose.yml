@@ -35,6 +35,7 @@ services:
       - ./backups:/app/backups:rw
       # 上传图片持久化，并与运行时 UID/GID 保持一致
       - ./static/uploads:/app/static/uploads:rw
+      - ./trajectory_history:/app/trajectory_history:rw
       # Development only: mount source with docker-compose.override.yml when needed.
       # - .:/app:rw
     environment:

@@ -19,8 +19,11 @@ echo "✓ 已禁用 core dumps"
 
 # 创建必要的目录
 echo "创建必要的目录..."
-mkdir -p /app/data /app/logs /app/backups /app/static/uploads/images
-mkdir -p /app/trajectory_history
+# data/logs/backups/uploads 通常有 volume 挂载；trajectory_history 在镜像层内，
+# 生产若以非 appuser UID 运行（如 host mango=1001），mkdir 可能 Permission denied。
+# set -e 下必须吞掉可选目录失败，否则容器会重启风暴。
+mkdir -p /app/data /app/logs /app/backups /app/static/uploads/images || true
+mkdir -p /app/trajectory_history || true
 echo "✓ 目录创建完成"
 
 # 设置目录权限
