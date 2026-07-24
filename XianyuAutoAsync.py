@@ -7277,8 +7277,10 @@ class XianyuLive:
 
             logger.info(f"【{self.cookie_id}】验证URL: {verification_url}")
 
-            # 使用 slidex SliderSolver（独立包）
+            # 使用 SliderSolver + 严格 x5sec 编排（远程/Drission 兜底可选）
             try:
+                from utils.slider_orchestrator import run_slider_async_with_fallback
+
                 SlidexConfig, SliderSolver, slider_runtime = _load_token_refresh_slider_runtime()
                 logger.info(f"[{self.cookie_id}] SliderSolver imported ({slider_runtime})")
 
@@ -7294,16 +7296,36 @@ class XianyuLive:
                     proxy=self.proxy_config,
                     config=cfg,
                 )
-                success, cookies = await solver.solve(verification_url)
+                # 兼容 orchestrator 读取 user_id/initial_cookies
+                if not getattr(solver, 'user_id', None):
+                    try:
+                        solver.user_id = self.cookie_id
+                    except Exception:
+                        pass
+                if not getattr(solver, 'initial_cookies', None):
+                    try:
+                        solver.initial_cookies = self.cookies_str
+                    except Exception:
+                        pass
+                if not hasattr(solver, 'headless'):
+                    try:
+                        solver.headless = True
+                    except Exception:
+                        pass
 
-                if success and cookies:
-                    logger.info(f"[{self.cookie_id}] slider success")
+                strict_result = await run_slider_async_with_fallback(
+                    solver,
+                    verification_url,
+                    engine="playwright",
+                )
+                self.last_slider_captcha_engine = getattr(strict_result, 'engine', None)
+                self.last_slider_result_message = getattr(strict_result, 'message', None)
+
+                if strict_result.success and strict_result.cookies:
+                    cookies = strict_result.cookies
+                    logger.info(f"[{self.cookie_id}] slider success via {strict_result.engine}")
                     current_cookies_dict = trans_cookies(self.cookies_str)
-                    x5sec_cookies = {}
-                    for cookie_name, cookie_value in cookies.items():
-                        cookie_name_lower = cookie_name.lower()
-                        if cookie_name_lower.startswith("x5") or "x5sec" in cookie_name_lower:
-                            x5sec_cookies[cookie_name] = cookie_value
+                    x5sec_cookies = dict(strict_result.x5_cookies or {})
 
                     merge_result = self.protected_merge_cookie_dicts(current_cookies_dict, cookies)
                     updated_cookies = merge_result["merged_cookies_dict"]
@@ -7336,8 +7358,12 @@ class XianyuLive:
                         self._mark_pending_slider_success_notice("token_refresh")
                         XianyuLive.clear_password_login_failure_backoff(self.cookie_id)
                         x5_str = "; ".join([f"{k}={v}" for k, v in x5sec_cookies.items()]) if x5sec_cookies else "none"
-                        log_captcha_event(self.cookie_id, "slider_success_v2", True,
-                            f"cookies: {len(current_cookies_dict)}->{len(updated_cookies)}, x5: {x5_str}")
+                        log_captcha_event(
+                            self.cookie_id,
+                            "slider_success_v2",
+                            True,
+                            f"engine={strict_result.engine}, cookies: {len(current_cookies_dict)}->{len(updated_cookies)}, x5: {x5_str}",
+                        )
                     except Exception as update_e:
                         logger.error(f"[{self.cookie_id}] cookie update failed: {self._safe_str(update_e)}")
                         self._set_runtime_cookie_state(
@@ -7346,13 +7372,22 @@ class XianyuLive:
                         )
                         return None
                     return cookies_str
-                    if solver.last_fallback_used == "remote":
-                        logger.warning(f"[{self.cookie_id}] remote fallback timed out or failed")
-                        log_captcha_event(self.cookie_id, "slider_remote_timeout", False, "remote fallback timed out")
-                    logger.error(f"[{self.cookie_id}] SliderSolver failed (fallback={solver.last_fallback_used})")
-                    logger.error(f"[{self.cookie_id}] SliderSolver failed")
-                    log_captcha_event(self.cookie_id, "slider_fail_v2", False, "solve returned False")
-                    return None
+
+                fallback_used = getattr(solver, 'last_fallback_used', None)
+                if fallback_used == "remote" or strict_result.engine == "remote":
+                    logger.warning(f"[{self.cookie_id}] remote fallback timed out or failed: {strict_result.message}")
+                    log_captcha_event(self.cookie_id, "slider_remote_timeout", False, strict_result.message or "remote failed")
+                logger.error(
+                    f"[{self.cookie_id}] SliderSolver failed "
+                    f"(engine={strict_result.engine}, fallback={fallback_used}, msg={strict_result.message})"
+                )
+                log_captcha_event(
+                    self.cookie_id,
+                    "slider_fail_v2",
+                    False,
+                    strict_result.message or "solve returned False",
+                )
+                return None
             except ImportError as import_e:
                 logger.error(f"[{self.cookie_id}] SliderSolver import failed: {import_e}")
                 log_captcha_event(self.cookie_id, "solver_import_fail", False, str(import_e))
