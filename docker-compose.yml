@@ -24,6 +24,8 @@ services:
       - "9000:8090"
       # Enable only for trusted local debugging, with VNC_PASSWORD set.
       # - "127.0.0.1:5900:5900"
+      # noVNC Web 端口（浏览器手动接管滑块/风控）；同样仅建议本机回环暴露
+      # - "127.0.0.1:6080:6080"
     volumes:
       # 数据持久化
       - ./data:/app/data:rw

@@ -421,6 +421,8 @@ function renderAboutRuntimeStatus(runtimeStatus) {
             </div>
             ${buildAboutMonitoringNotice(runtimeStatus)}
             ${buildAboutRiskControlNotice(runtimeStatus)}
+            ${typeof buildManualInterventionAlert === 'function' ? buildManualInterventionAlert(selectedAccount?.status_note || '', runtimeStatus) : ''}
+            ${typeof buildAboutVncAccessPanel === 'function' ? buildAboutVncAccessPanel(runtimeStatus) : ''}
             <div class="account-diagnostics-status-body">
                 <div class="account-diagnostics-status-primary">
                     <div class="account-diagnostics-status-grid">
@@ -935,6 +937,7 @@ async function loadCookies() {
             ${runtimeBadge}
             ${statusNoteBadge}
             </div>
+            ${typeof buildManualInterventionAlert === 'function' ? buildManualInterventionAlert(cookie.status_note || '', cookie.runtime_status, { compact: true }) : ''}
         </td>
         <td class="align-middle">
             ${defaultReplyBadge}

@@ -72,6 +72,8 @@ RUN apt-get -o Acquire::Retries=5 update && \
         xdg-utils \
         xvfb \
         x11vnc \
+        novnc \
+        websockify \
         fluxbox \
         # OpenCV运行时依赖
         libgl1 \
@@ -120,6 +122,7 @@ RUN groupadd -g 1000 appuser && \
 
 # 暴露端口
 EXPOSE 8090
+EXPOSE 6080
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

@@ -129,6 +129,21 @@ if [ "${USE_XVFB}" = "true" ] || [ "${ENABLE_HEADFUL}" = "true" ]; then
     done
     
     if [ "$XVFB_STARTED" = "true" ]; then
+        if command -v fluxbox >/dev/null 2>&1; then
+            echo "启动窗口管理器 fluxbox..."
+            fluxbox > /tmp/fluxbox.log 2>&1 &
+            FLUXBOX_PID=$!
+            sleep 1
+
+            if ps -p $FLUXBOX_PID > /dev/null 2>&1; then
+                echo "✓ fluxbox 启动成功 (PID: $FLUXBOX_PID)"
+            else
+                echo "⚠ fluxbox 启动失败，查看日志: /tmp/fluxbox.log"
+            fi
+        else
+            echo "⚠ fluxbox 未安装，跳过窗口管理器"
+        fi
+
         # 可选：启动 VNC 服务器用于远程查看（如果需要）
         if [ "${ENABLE_VNC}" = "true" ]; then
             if [ -z "${VNC_PASSWORD}" ]; then
@@ -139,12 +154,28 @@ if [ "${USE_XVFB}" = "true" ] || [ "${ENABLE_HEADFUL}" = "true" ]; then
             x11vnc -display $DISPLAY -forever -shared -rfbport 5900 -passwd "$VNC_PASSWORD" > /tmp/x11vnc.log 2>&1 &
             VNC_PID=$!
             sleep 1
-            
+
             if ps -p $VNC_PID > /dev/null 2>&1; then
                 echo "✓ VNC 服务器启动成功 (PID: $VNC_PID, 端口: 5900)"
                 echo "  可以通过 VNC 客户端连接到 <容器IP>:5900 查看浏览器界面"
             else
                 echo "⚠ VNC 服务器启动失败，查看日志: /tmp/x11vnc.log"
+            fi
+
+            if command -v websockify >/dev/null 2>&1 && [ -d "/usr/share/novnc" ]; then
+                echo "启动 noVNC Web 代理..."
+                websockify --web=/usr/share/novnc 6080 localhost:5900 > /tmp/novnc.log 2>&1 &
+                NOVNC_PID=$!
+                sleep 1
+
+                if ps -p $NOVNC_PID > /dev/null 2>&1; then
+                    echo "✓ noVNC 启动成功 (PID: $NOVNC_PID, 端口: 6080)"
+                    echo "  可通过浏览器访问 http://localhost:6080/vnc.html?autoconnect=1&resize=scale"
+                else
+                    echo "⚠ noVNC 启动失败，查看日志: /tmp/novnc.log"
+                fi
+            else
+                echo "⚠ noVNC 未安装，跳过 Web VNC 代理"
             fi
             fi
         fi
