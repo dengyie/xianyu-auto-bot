@@ -1430,11 +1430,13 @@ function showVerificationRequired(data) {
     const verificationUrl = data.verification_url || '';
     const endedElsewhere = !!data.verification_ended_elsewhere;
     const serverMessage = data.message || '';
-    // 结构级 renderKey：不含动态 message，避免轮询时整页重绘清空用户已粘贴 Cookie
+    // 结构级 renderKey：不含动态 message，避免轮询时整页重绘清空用户已粘贴内容
     const structureKey = `${screenshotPath}|${verificationUrl}|${endedElsewhere ? '1' : '0'}`;
-    const existingInput = document.getElementById('qrUserCookieInput');
-    const preservedCookieText = existingInput ? existingInput.value : '';
-    const preservedHint = (document.getElementById('qrUserCookieHint') || {}).textContent || '';
+    const existingUrlInput = document.getElementById('qrUserCallbackUrlInput');
+    const existingCookieInput = document.getElementById('qrUserCookieInput');
+    const preservedUrlText = existingUrlInput ? existingUrlInput.value : '';
+    const preservedCookieText = existingCookieInput ? existingCookieInput.value : '';
+    const preservedHint = (document.getElementById('qrUserHandoffHint') || {}).textContent || '';
     const sameStructure = qrCodeVerificationState.renderKey === structureKey && structureKey;
 
     // 隐藏二维码区域
@@ -1468,25 +1470,35 @@ function showVerificationRequired(data) {
         screenshotPath ? `${normalizeStaticAssetPath(screenshotPath)}?t=${Date.now()}` : ''
     );
 
-    const userCookiePanel = `
+    const userHandoffPanel = `
         <div class="mt-4 text-start border rounded p-3 bg-light">
           <h6 class="mb-2">
-            <i class="bi bi-key me-1"></i>
-            已在手机/浏览器完成验证？以你的成功为准
+            <i class="bi bi-link-45deg me-1"></i>
+            已在手机/浏览器完成验证？把网址给我即可
           </h6>
           <p class="small text-muted mb-2">
-            若人脸是在你本机浏览器或手机完成的，成功 Cookie 在你那边。
-            请从已登录的 goofish/闲鱼 页面导出 Cookie（需含 <code>unb</code> 与
-            <code>cookie2</code>/<code>sgcookie</code> 等），粘贴后提交，系统按用户成功收口。
+            验证成功后浏览器地址栏或跳转页上的链接（goofish/淘宝相关）粘贴到下方。
+            项目会在服务端会话里打开该 URL 并自动拿 Cookie，不必再手抠 Cookie。
           </p>
-          <textarea id="qrUserCookieInput" class="form-control font-monospace mb-2" rows="4"
-            placeholder="unb=...; cookie2=...; sgcookie=...; _tb_token_=... 或 JSON"></textarea>
-          <div class="d-flex gap-2 align-items-center">
-            <button type="button" class="btn btn-primary btn-sm" id="qrSubmitUserCookieBtn">
-              <i class="bi bi-check2-circle me-1"></i>提交成功侧 Cookie
+          <textarea id="qrUserCallbackUrlInput" class="form-control font-monospace mb-2" rows="2"
+            placeholder="https://passport.goofish.com/... 或验证成功后的跳转链接"></textarea>
+          <div class="d-flex gap-2 align-items-center mb-3">
+            <button type="button" class="btn btn-primary btn-sm" id="qrSubmitUserUrlBtn">
+              <i class="bi bi-check2-circle me-1"></i>提交回调网址
             </button>
-            <small id="qrUserCookieHint" class="text-muted"></small>
+            <small id="qrUserHandoffHint" class="text-muted"></small>
           </div>
+          <details class="small">
+            <summary class="text-muted" style="cursor:pointer">备用：直接粘贴完整 Cookie</summary>
+            <p class="text-muted mt-2 mb-2">
+              需含 <code>unb</code> 与 <code>cookie2</code>/<code>sgcookie</code> 等完整登录 Cookie。
+            </p>
+            <textarea id="qrUserCookieInput" class="form-control font-monospace mb-2" rows="3"
+              placeholder="unb=...; cookie2=...; sgcookie=...; _tb_token_=... 或 JSON"></textarea>
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="qrSubmitUserCookieBtn">
+              <i class="bi bi-key me-1"></i>提交成功侧 Cookie
+            </button>
+          </details>
         </div>
     `;
 
@@ -1506,10 +1518,10 @@ function showVerificationRequired(data) {
             <strong>验证步骤：</strong><br>
             1. 优先用手机闲鱼 APP 扫描服务端截图二维码并完成验证<br>
             2. 保持当前弹窗打开，系统会自动继续登录<br>
-            3. 若你已在其它浏览器完成验证：粘贴该浏览器 Cookie 提交（以你成功为准）
+            3. 若你已在其它浏览器完成验证：粘贴成功后的回调网址（推荐）
             </small>
         </div>
-        ${userCookiePanel}
+        ${userHandoffPanel}
         </div>
     `;
 
@@ -1534,10 +1546,10 @@ function showVerificationRequired(data) {
             <strong>验证步骤：</strong><br>
             1. 扫描上方二维码并完成验证（人脸落在服务端会话，可自动回调）<br>
             2. 保持当前弹窗打开，系统会自动继续登录<br>
-            3. 若你已在其它浏览器完成验证：下方粘贴该浏览器 Cookie 提交
+            3. 若你已在其它浏览器完成验证：下方粘贴成功后的回调网址
             </small>
         </div>
-        ${userCookiePanel}
+        ${userHandoffPanel}
         </div>
     `;
     } else if (verificationUrl) {
@@ -1552,7 +1564,7 @@ function showVerificationRequired(data) {
             <strong data-role="verification-message">${escapeHtml(serverMessage || '系统正在准备验证二维码，当前先保留一个兜底链接')}</strong>
         </div>
         <div class="mb-4">
-            <p class="text-muted mb-3">二维码通常会自动出现。若你用兜底链接在本机完成了验证，请把该浏览器 Cookie 贴回来：</p>
+            <p class="text-muted mb-3">二维码通常会自动出现。若你用兜底链接在本机完成了验证，把成功后的网址贴回来：</p>
             <a href="${safeVerificationUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-outline-warning">
             <i class="bi bi-box-arrow-up-right me-2"></i>
             打开兜底验证页面
@@ -1561,10 +1573,10 @@ function showVerificationRequired(data) {
         <div class="alert alert-info border-0">
             <i class="bi bi-lightbulb me-2"></i>
             <small>
-            兜底页在你浏览器完成验证时，成功 Cookie 在你那边；请用下方表单提交，以你的成功为准。
+            兜底页在你浏览器完成验证后，把地址栏/跳转链接贴到下方即可，以你的成功为准。
             </small>
         </div>
-        ${userCookiePanel}
+        ${userHandoffPanel}
         </div>
     `;
     }
@@ -1572,15 +1584,23 @@ function showVerificationRequired(data) {
     verificationContainer.innerHTML = verificationHtml;
     verificationContainer.style.display = 'block';
 
+    const urlInputEl = document.getElementById('qrUserCallbackUrlInput');
+    if (urlInputEl && preservedUrlText) {
+        urlInputEl.value = preservedUrlText;
+    }
     const inputEl = document.getElementById('qrUserCookieInput');
     if (inputEl && preservedCookieText) {
         inputEl.value = preservedCookieText;
     }
-    const hintEl = document.getElementById('qrUserCookieHint');
+    const hintEl = document.getElementById('qrUserHandoffHint');
     if (hintEl && preservedHint) {
         hintEl.textContent = preservedHint;
     }
 
+    const submitUrlBtn = document.getElementById('qrSubmitUserUrlBtn');
+    if (submitUrlBtn) {
+        submitUrlBtn.addEventListener('click', submitQrUserCallbackUrl);
+    }
     const submitBtn = document.getElementById('qrSubmitUserCookieBtn');
     if (submitBtn) {
         submitBtn.addEventListener('click', submitQrUserCookies);
@@ -1589,17 +1609,95 @@ function showVerificationRequired(data) {
     // 显示Toast提示
     if (!qrCodeVerificationState.toastShown) {
     const toastMsg = endedElsewhere
-        ? '服务端验证页已结束；若你已在手机完成人脸，请粘贴成功侧 Cookie'
-        : '账号需要闲鱼验证：优先扫服务端二维码，或粘贴你侧成功 Cookie';
+        ? '服务端验证页已结束；请粘贴成功后的回调网址（推荐）'
+        : '账号需要闲鱼验证：优先扫服务端二维码，或粘贴回调网址';
     showToast(toastMsg, 'warning');
     qrCodeVerificationState.toastShown = true;
+    }
+}
+
+async function submitQrUserCallbackUrl() {
+    const sessionId = qrCodeSessionId || qrCodeVerificationState.activeSessionId;
+    const input = document.getElementById('qrUserCallbackUrlInput');
+    const hint = document.getElementById('qrUserHandoffHint');
+    const btn = document.getElementById('qrSubmitUserUrlBtn');
+    const urlText = (input && input.value || '').trim();
+    if (!sessionId) {
+        showToast('会话已失效，请重新发起扫码登录', 'danger');
+        return;
+    }
+    if (!urlText) {
+        showToast('请先粘贴验证成功后的回调网址', 'warning');
+        return;
+    }
+    if (btn && btn.dataset.submitting === '1') {
+        return;
+    }
+
+    if (btn) {
+        btn.dataset.submitting = '1';
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>换取中...';
+    }
+    if (hint) hint.textContent = '正在用回调网址换取登录态...';
+
+    try {
+        const response = await fetch(`${apiBase}/qr-login/submit-url/${sessionId}`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${authToken}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ url: urlText }),
+        });
+        const result = await response.json().catch(() => ({}));
+
+        if (!response.ok && !result.message) {
+            const msg = `提交失败（HTTP ${response.status}）`;
+            if (hint) hint.textContent = msg;
+            showToast(msg, 'danger');
+            return;
+        }
+
+        if (!result.success) {
+            const msg = result.message || '提交失败';
+            if (hint) hint.textContent = msg;
+            showToast(msg, 'danger');
+            return;
+        }
+
+        if (hint) hint.textContent = result.message || '已接收，等待账号落地...';
+        showToast(result.message || '已使用回调网址完成登录', 'success');
+        document.getElementById('statusText').textContent = '已收到回调网址，正在完成登录...';
+        document.getElementById('statusSpinner').style.display = 'inline-block';
+
+        if (result.account_info) {
+            qrCodeVerificationState.completed = true;
+            clearQRCodeCheck();
+            handleQRCodeSuccess(result);
+            return;
+        }
+
+        if (typeof checkQRCodeStatus === 'function') {
+            checkQRCodeStatus();
+        }
+    } catch (err) {
+        console.error('提交回调网址失败:', err);
+        if (hint) hint.textContent = '网络错误，请重试';
+        showToast('提交回调网址失败: ' + (err.message || err), 'danger');
+    } finally {
+        if (btn) {
+            btn.dataset.submitting = '0';
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-check2-circle me-1"></i>提交回调网址';
+        }
     }
 }
 
 async function submitQrUserCookies() {
     const sessionId = qrCodeSessionId || qrCodeVerificationState.activeSessionId;
     const input = document.getElementById('qrUserCookieInput');
-    const hint = document.getElementById('qrUserCookieHint');
+    const hint = document.getElementById('qrUserHandoffHint');
     const btn = document.getElementById('qrSubmitUserCookieBtn');
     const cookieText = (input && input.value || '').trim();
     if (!sessionId) {
@@ -1671,7 +1769,7 @@ async function submitQrUserCookies() {
         if (btn) {
             btn.dataset.submitting = '0';
             btn.disabled = false;
-            btn.innerHTML = '<i class="bi bi-check2-circle me-1"></i>提交成功侧 Cookie';
+            btn.innerHTML = '<i class="bi bi-key me-1"></i>提交成功侧 Cookie';
         }
     }
 }

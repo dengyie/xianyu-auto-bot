@@ -16,7 +16,7 @@ import qrcode
 import qrcode.constants
 from loguru import logger
 import hashlib
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from utils.image_utils import image_manager
 
@@ -212,6 +212,342 @@ class QRLoginManager:
             '/iv/' not in current_url
         )
 
+    def _extract_first_url(self, text: str) -> Optional[str]:
+        """从用户粘贴内容中提取第一个 http(s) URL。"""
+        raw = str(text or '').replace('﻿', '').strip()
+        if not raw:
+            return None
+        # 整段就是 URL
+        if raw.startswith('http://') or raw.startswith('https://'):
+            return raw.split()[0].strip('\'"<>')
+        match = re.search(r'https?://[^\s\'"<>]+', raw)
+        if not match:
+            return None
+        return match.group(0).rstrip('.,;)]}')
+
+    def _is_allowed_callback_url(self, url: str) -> bool:
+        """只允许闲鱼/淘宝登录相关域名，避免开放代理。"""
+        try:
+            parsed = urlparse(str(url or '').strip())
+        except Exception:
+            return False
+        if parsed.scheme not in ('http', 'https'):
+            return False
+        host = (parsed.hostname or '').lower()
+        if not host:
+            return False
+        allowed_suffixes = (
+            'goofish.com',
+            'taobao.com',
+            'tmall.com',
+            'alipay.com',
+            'alibaba.com',
+            'alicdn.com',
+            'mmstat.com',
+        )
+        return any(host == suffix or host.endswith('.' + suffix) for suffix in allowed_suffixes)
+
+    def _extract_login_tokens_from_url(self, url: str) -> Dict[str, str]:
+        """从回调/跳转 URL 中提取可用于换登录态的 token 参数。"""
+        tokens: Dict[str, str] = {}
+        raw = str(url or '').strip()
+        if not raw:
+            return tokens
+        try:
+            parsed = urlparse(raw)
+        except Exception:
+            return tokens
+
+        query = parse_qs(parsed.query, keep_blank_values=False)
+        # 部分回调把参数塞在 fragment
+        fragment_query = parse_qs(parsed.fragment, keep_blank_values=False) if parsed.fragment else {}
+
+        def _pick(mapping: Dict[str, list], *names: str) -> Optional[str]:
+            for name in names:
+                values = mapping.get(name) or mapping.get(name.lower()) or mapping.get(name.upper())
+                if values and str(values[0]).strip():
+                    return unquote(str(values[0]).strip())
+            return None
+
+        login_token = _pick(query, 'token', 'lgToken', 'login_token', 'loginToken') or _pick(
+            fragment_query, 'token', 'lgToken', 'login_token', 'loginToken'
+        )
+        if login_token:
+            tokens['login_token'] = login_token
+
+        havana_iv = _pick(query, 'havana_iv_token', 'havanaIvToken') or _pick(
+            fragment_query, 'havana_iv_token', 'havanaIvToken'
+        )
+        if havana_iv:
+            tokens['havana_iv_token'] = havana_iv
+
+        stoken = _pick(query, 'stoken', 's_token', 'ssoToken') or _pick(
+            fragment_query, 'stoken', 's_token', 'ssoToken'
+        )
+        if stoken:
+            tokens['stoken'] = stoken
+
+        return tokens
+
+    async def _exchange_login_token(
+        self,
+        session: QRLoginSession,
+        login_token: str,
+    ) -> Dict[str, str]:
+        """用 login_token 换取登录 Cookie（与 qr_login_lite 同路径）。"""
+        if not login_token:
+            return {}
+        params = {
+            'token': login_token,
+            'subFlow': 'DIALOG_CHECK_LOGIN_RPC',
+            'nextCode': '0018',
+            'bizScene': 'qrcode',
+            'confirm': 'true',
+        }
+        data = {}
+        device_id = session.cookies.get('cna') or session.params.get('deviceId') or ''
+        if device_id:
+            data['deviceId'] = device_id
+
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=self.timeout,
+            proxy=self.proxy,
+        ) as client:
+            resp = await client.post(
+                f'{self.host}/login_token/login.do',
+                params=params,
+                data=data or None,
+                cookies=session.cookies,
+                headers=self.headers,
+            )
+            cookie_dict = {k: v for k, v in resp.cookies.items()}
+            # 再访问主站一次，尽量把 goofish 域 Cookie 拉全
+            try:
+                im_resp = await client.get(
+                    'https://www.goofish.com/im',
+                    cookies={**session.cookies, **cookie_dict},
+                    headers={
+                        **self.headers,
+                        'Referer': 'https://www.goofish.com/',
+                        'Origin': 'https://www.goofish.com',
+                    },
+                )
+                cookie_dict.update({k: v for k, v in im_resp.cookies.items()})
+            except Exception as e:
+                logger.debug(f"login_token 换取后访问 /im 失败: {session.session_id}, {e}")
+            logger.info(
+                f"login_token 换取完成: {session.session_id}, "
+                f"status={resp.status_code}, cookie_keys={list(cookie_dict.keys())}"
+            )
+            return cookie_dict
+
+    async def apply_external_callback_url(
+        self,
+        session_id: str,
+        callback_url: str,
+        source: str = 'user_url',
+    ) -> Dict[str, Any]:
+        """用户侧验证完成后，用回调/跳转 URL 在服务端会话里换 Cookie。
+
+        产品目标：用户只需粘贴成功后的网址，不必再手抠 Cookie。
+        实现：允许域名校验 → 解析 token → login_token 换 Cookie →
+        Playwright 打开 URL（带当前会话 Cookie）→ 探测完整登录态。
+        """
+        session = self.sessions.get(session_id)
+        if not session:
+            return {'success': False, 'status': 'not_found', 'message': '会话不存在或已过期'}
+
+        if session.is_expired() and session.status not in {'success'}:
+            session.status = 'expired'
+            return {
+                'success': False,
+                'status': 'expired',
+                'message': '会话已过期，请重新发起扫码登录后再提交回调URL',
+            }
+
+        if session.status == 'success' and session.unb and self._has_completed_login_cookies(session.cookies):
+            return {
+                'success': True,
+                'status': 'success',
+                'message': '会话已是登录成功状态',
+                'already_success': True,
+                'unb': session.unb,
+            }
+
+        if session.status not in {
+            'verification_required', 'scanned', 'waiting', 'processing', 'success'
+        }:
+            return {
+                'success': False,
+                'status': session.status,
+                'message': f'当前会话状态不允许提交回调URL: {session.status}',
+            }
+
+        url = self._extract_first_url(callback_url) or str(callback_url or '').strip()
+        if not url:
+            return {'success': False, 'status': session.status, 'message': '回调URL为空'}
+        if not self._is_allowed_callback_url(url):
+            return {
+                'success': False,
+                'status': session.status,
+                'message': 'URL域名不允许。请粘贴 goofish/淘宝登录相关跳转链接',
+            }
+        if len(url) > 8000:
+            return {'success': False, 'status': session.status, 'message': 'URL过长'}
+
+        session.user_hint = '正在用你提供的回调URL换取登录态...'
+        tokens = self._extract_login_tokens_from_url(url)
+        merged: Dict[str, str] = {}
+
+        # 1) 若 URL 带 login_token / lgToken，优先 API 换 Cookie（轻量）
+        login_token = tokens.get('login_token')
+        if login_token:
+            try:
+                exchanged = await self._exchange_login_token(session, login_token)
+                merged.update(exchanged)
+                self._merge_session_cookies(session, exchanged)
+            except Exception as e:
+                logger.warning(f"login_token 换取失败: {session_id}, {e}")
+
+        if self._has_completed_login_cookies({**session.cookies, **merged}):
+            if self._mark_session_success(
+                session, {**session.cookies, **merged}, source, require_complete_cookies=True
+            ):
+                session.user_hint = None
+                session.verification_ended_elsewhere = True
+                logger.info(
+                    f"扫码登录已按回调URL(token换取)成功收口: {session_id}, "
+                    f"source={source}, UNB={session.unb}"
+                )
+                return {
+                    'success': True,
+                    'status': 'success',
+                    'message': '已使用回调URL中的token完成登录',
+                    'unb': session.unb,
+                    'via': 'login_token',
+                }
+
+        # 2) Playwright 打开回调 URL，在同一会话 Cookie 上下文中收口
+        playwright = None
+        browser = None
+        context = None
+        page = None
+        try:
+            from playwright.async_api import async_playwright
+
+            playwright = await async_playwright().start()
+            browser = await playwright.chromium.launch(
+                headless=True,
+                args=[
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--lang=zh-CN',
+                ],
+            )
+            context = await browser.new_context(
+                viewport={'width': 540, 'height': 960},
+                locale='zh-CN',
+                user_agent=(
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                    '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                ),
+                ignore_https_errors=True,
+                extra_http_headers={
+                    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
+                },
+            )
+            browser_cookies = self._build_browser_cookies(url, session.cookies)
+            if browser_cookies:
+                await context.add_cookies(browser_cookies)
+
+            page = await context.new_page()
+            await page.goto(url, wait_until='domcontentloaded', timeout=60000)
+            await page.wait_for_timeout(2000)
+
+            # 页面若再次给出 token 链接，尝试提取
+            try:
+                current_url = page.url
+                page_tokens = self._extract_login_tokens_from_url(current_url)
+                page_login_token = page_tokens.get('login_token')
+                if page_login_token and page_login_token != login_token:
+                    exchanged = await self._exchange_login_token(session, page_login_token)
+                    merged.update(exchanged)
+                    self._merge_session_cookies(session, exchanged)
+            except Exception as e:
+                logger.debug(f"从当前页URL提取token失败: {session_id}, {e}")
+
+            cookie_dict = await self._context_cookie_dict(context)
+            merged.update(cookie_dict)
+            self._merge_session_cookies(session, cookie_dict)
+
+            # 完整 Cookie 或登录后 URL → 成功；否则再探 /im
+            if await self._probe_browser_login_success(session, page, context):
+                session.user_hint = None
+                session.verification_ended_elsewhere = True
+                return {
+                    'success': True,
+                    'status': 'success',
+                    'message': '已使用回调URL在服务端会话中完成登录',
+                    'unb': session.unb,
+                    'via': 'browser_url',
+                }
+
+            # 再显式判断一次合并后的 Cookie
+            final_cookies = {**session.cookies, **merged}
+            if self._mark_session_success(
+                session, final_cookies, source, require_complete_cookies=True
+            ):
+                session.user_hint = None
+                session.verification_ended_elsewhere = True
+                return {
+                    'success': True,
+                    'status': 'success',
+                    'message': '已使用回调URL完成登录',
+                    'unb': session.unb,
+                    'via': 'browser_cookies',
+                }
+
+            await self._detect_verification_ended_elsewhere(session, page)
+            session.user_hint = (
+                '已打开回调URL，但服务端仍未拿到完整登录Cookie。'
+                '请确认该链接来自「已验证成功」的页面；'
+                '若仍失败，可改贴成功侧完整Cookie（含 unb）。'
+            )
+            logger.warning(
+                f"回调URL未能换取完整Cookie: {session_id}, url_host={urlparse(url).hostname}, "
+                f"cookie_keys={list(final_cookies.keys())}"
+            )
+            return {
+                'success': False,
+                'status': session.status,
+                'message': session.user_hint,
+                'cookie_keys': sorted(final_cookies.keys()),
+            }
+        except Exception as e:
+            logger.error(f"回调URL换取Cookie失败: {session_id}, 错误: {e}")
+            return {
+                'success': False,
+                'status': session.status,
+                'message': f'打开回调URL失败: {e}',
+            }
+        finally:
+            for closer in (
+                (page, 'close'),
+                (context, 'close'),
+                (browser, 'close'),
+                (playwright, 'stop'),
+            ):
+                obj, method = closer
+                if not obj:
+                    continue
+                try:
+                    await getattr(obj, method)()
+                except Exception:
+                    pass
+
     def _mark_session_success(
         self,
         session: QRLoginSession,
@@ -270,7 +606,8 @@ class QRLoginManager:
                 session.verification_ended_elsewhere = True
                 session.user_hint = (
                     "服务端验证页显示流程已结束：说明人脸多半已在你的手机/浏览器完成。"
-                    "请把成功侧浏览器的 Cookie 粘贴回系统，以用户成功为准完成登录。"
+                    "请把验证成功后的回调/跳转网址粘贴回来（推荐），"
+                    "或粘贴成功侧完整 Cookie，以你的成功为准完成登录。"
                 )
                 logger.warning(
                     f"扫码登录验证页已结束（疑似用户侧完成）: {session.session_id}, URL: {page.url}"
@@ -857,16 +1194,18 @@ class QRLoginManager:
             result['screenshot_path'] = session.screenshot_path
             result['verification_ended_elsewhere'] = bool(session.verification_ended_elsewhere)
             result['accept_user_cookies'] = True
+            result['accept_user_url'] = True
             if session.user_hint:
                 result['message'] = session.user_hint
             elif session.verification_ended_elsewhere:
                 result['message'] = (
-                    '服务端验证页已结束。若你已在手机完成人脸，请粘贴成功侧浏览器Cookie完成登录'
+                    '服务端验证页已结束。若你已在手机/浏览器完成验证，'
+                    '请粘贴成功后的回调/跳转网址（推荐），或粘贴完整 Cookie'
                 )
             else:
                 result['message'] = (
                     '账号被风控：优先扫服务端截图二维码；'
-                    '若你已在其它浏览器完成验证，可直接粘贴该浏览器Cookie以用户成功为准'
+                    '若你已在其它浏览器完成验证，可粘贴成功后的回调网址或完整 Cookie'
                 ) if session.screenshot_path else '账号被风控，正在准备验证二维码'
 
         # 如果登录成功，返回Cookie信息
