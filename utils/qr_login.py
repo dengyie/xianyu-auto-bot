@@ -1149,14 +1149,17 @@ class QRLoginManager:
                         if session.status == 'waiting':
                             session.status = 'scanned'
                             logger.info(f"二维码已扫描，等待确认: {session_id}")
-                    else:
-                        # 用户取消确认
+                    elif qrcode_status in ("CANCELED", "CANCELLED", "CANCEL"):
+                        # 只在显式取消状态下终止会话
                         if session.status == 'verification_required':
                             logger.info(f"扫码状态 {qrcode_status}，但验证流程仍在进行，继续等待: {session_id}")
                         else:
                             session.status = 'cancelled'
                             logger.info(f"用户取消登录: {session_id}")
                             break
+                    else:
+                        # 未知/空状态（网络抖动、服务端新增状态码），继续轮询而不是当作取消
+                        logger.debug(f"未知扫码状态 {qrcode_status!r}，继续轮询: {session_id}")
 
                     await asyncio.sleep(0.8)  # 每0.8秒检查一次
 
