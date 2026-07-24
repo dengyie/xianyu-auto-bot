@@ -22,9 +22,12 @@ jobs:
         with:
           version: '0.11.28'
           enable-cache: true
+          python-version: '3.11'
 
-      - name: Set up Python
-        run: uv python install 3.11
+      - name: Create virtual environment
+        run: |
+          uv venv .venv --python 3.11
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Verify dependency lock
         run: |
@@ -38,8 +41,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --system --require-hashes -r requirements.lock
-          uv pip install --system --no-deps "slidex @ git+https://github.com/dengyie/slidex.git@d4d372ba7554795bed8cb71c31b4d481366db99f"
+          # 必须装进项目 venv，禁止 --system（runner 系统 Python 受 PEP 668 保护）
+          uv pip install --python .venv/bin/python --require-hashes -r requirements.lock
+          uv pip install --python .venv/bin/python --no-deps \
+            "slidex @ git+https://github.com/dengyie/slidex.git@d4d372ba7554795bed8cb71c31b4d481366db99f"
+          python -c "import sys; print(sys.executable); assert sys.version_info[:2] == (3, 11), sys.version"
 
       - name: Prepare runtime directories
         run: mkdir -p logs data backups static/uploads/images
