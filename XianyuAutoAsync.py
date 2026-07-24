@@ -11008,6 +11008,271 @@ class XianyuLive:
                 logger.error(f"【{self.cookie_id}】获取订单详情异常: {self._safe_str(e)}")
                 return None
 
+    async def _send_recovered_delivery_without_sid(
+        self,
+        order: Dict[str, Any],
+        *,
+        order_id: str,
+        item_id: str,
+        buyer_id: str,
+        source: str,
+    ) -> bool:
+        from db_manager import db_manager
+
+        lock_key = order_id
+        if not self.can_auto_delivery(order_id):
+            logger.info(f"【{self.cookie_id}】{source} 订单已处理或处于冷却期，跳过补偿发货: {order_id}")
+            return False
+        if self.is_lock_held(lock_key):
+            logger.info(f"【{self.cookie_id}】{source} 订单延迟锁持有中，跳过补偿发货: {order_id}")
+            return False
+
+        order_lock = self._order_locks[lock_key]
+        self._lock_usage_times[lock_key] = time.time()
+
+        async with order_lock:
+            if self.is_lock_held(lock_key) or not self.can_auto_delivery(order_id):
+                logger.info(f"【{self.cookie_id}】{source} 获取锁后发现订单已处理，跳过补偿发货: {order_id}")
+                return False
+
+            pending_finalize_meta = self._get_pending_delivery_finalization_meta(order_id, 1)
+            if pending_finalize_meta:
+                finalize_result = await self._finalize_delivery_after_send(
+                    delivery_meta=pending_finalize_meta,
+                    order_id=order_id,
+                    item_id=item_id,
+                )
+                if not finalize_result.get('success'):
+                    self._persist_delivery_finalization_state(
+                        order_id=order_id,
+                        item_id=item_id,
+                        buyer_id=buyer_id,
+                        delivery_meta=pending_finalize_meta,
+                        channel='auto',
+                        status='sent',
+                        last_error=finalize_result.get('error') or '补偿发货补完成 finalize 失败',
+                    )
+                    self._record_delivery_log(
+                        order_id=order_id,
+                        item_id=item_id,
+                        buyer_id=buyer_id,
+                        status='failed',
+                        reason=finalize_result.get('error') or '补偿发货检测到已发送记录，但补完成发货收尾失败',
+                        channel='auto',
+                        rule_meta=pending_finalize_meta,
+                    )
+                    return False
+
+                self._persist_delivery_finalization_state(
+                    order_id=order_id,
+                    item_id=item_id,
+                    buyer_id=buyer_id,
+                    delivery_meta=pending_finalize_meta,
+                    channel='auto',
+                    status='finalized',
+                )
+                self._sync_order_delivery_progress(
+                    order_id=order_id,
+                    cookie_id=self.cookie_id,
+                    expected_quantity=1,
+                    context=f"{source} 补完成收尾成功",
+                )
+                self._activate_delivery_lock(lock_key, delay_minutes=10)
+                self._record_delivery_log(
+                    order_id=order_id,
+                    item_id=item_id,
+                    buyer_id=buyer_id,
+                    status='success',
+                    reason=f'{source} 检测到发货消息已发送，本次补完成收尾成功',
+                    channel='auto',
+                    rule_meta=pending_finalize_meta,
+                )
+                return True
+
+            delivery_result = await self._auto_delivery(
+                item_id,
+                "待获取商品信息",
+                order_id,
+                buyer_id,
+                '',
+                include_meta=True,
+            )
+            if isinstance(delivery_result, dict):
+                delivery_content = delivery_result.get('content')
+                delivery_steps = delivery_result.get('delivery_steps') or []
+                delivery_error = delivery_result.get('error')
+                delivery_meta = delivery_result
+            else:
+                delivery_content = delivery_result
+                delivery_steps = []
+                delivery_error = None
+                delivery_meta = {}
+
+            if not delivery_content:
+                self._record_delivery_log(
+                    order_id=order_id,
+                    item_id=item_id,
+                    buyer_id=buyer_id,
+                    status='failed',
+                    reason=delivery_error or f'{source} 未匹配到发货内容',
+                    channel='auto',
+                    rule_meta=delivery_meta,
+                )
+                return False
+
+            if not delivery_steps:
+                delivery_steps = self._build_delivery_steps(
+                    delivery_content,
+                    delivery_meta.get('card_description', '') if isinstance(delivery_meta, dict) else '',
+                )
+
+            try:
+                await self.send_delivery_steps_once(buyer_id, item_id, delivery_steps)
+
+                if not self._mark_data_reservation_sent_if_needed(delivery_meta):
+                    self._release_data_reservation_if_needed(delivery_meta, error='补偿发货发送成功后标记预占已发送失败')
+                    raise Exception('批量数据预占标记已发送失败')
+
+                self._persist_delivery_finalization_state(
+                    order_id=order_id,
+                    item_id=item_id,
+                    buyer_id=buyer_id,
+                    delivery_meta=delivery_meta,
+                    channel='auto',
+                    status='sent',
+                )
+
+                finalize_result = await self._finalize_delivery_after_send(
+                    delivery_meta=delivery_meta,
+                    order_id=order_id,
+                    item_id=item_id,
+                )
+                if not finalize_result.get('success'):
+                    self._persist_delivery_finalization_state(
+                        order_id=order_id,
+                        item_id=item_id,
+                        buyer_id=buyer_id,
+                        delivery_meta=delivery_meta,
+                        channel='auto',
+                        status='sent',
+                        last_error=finalize_result.get('error') or '补偿发货发送成功但提交发货副作用失败',
+                    )
+                    self._record_delivery_log(
+                        order_id=order_id,
+                        item_id=item_id,
+                        buyer_id=buyer_id,
+                        status='failed',
+                        reason=finalize_result.get('error') or '补偿发货发送成功但提交发货副作用失败',
+                        channel='auto',
+                        rule_meta=delivery_meta,
+                    )
+                    return False
+
+                self._persist_delivery_finalization_state(
+                    order_id=order_id,
+                    item_id=item_id,
+                    buyer_id=buyer_id,
+                    delivery_meta=delivery_meta,
+                    channel='auto',
+                    status='finalized',
+                )
+                self._sync_order_delivery_progress(
+                    order_id=order_id,
+                    cookie_id=self.cookie_id,
+                    expected_quantity=int(order.get('quantity') or 1),
+                    context=f"{source} 自动发货成功",
+                )
+                self._activate_delivery_lock(lock_key, delay_minutes=10)
+                self._record_delivery_log(
+                    order_id=order_id,
+                    item_id=item_id,
+                    buyer_id=buyer_id,
+                    status='success',
+                    reason=f'{source} 自动发货步骤发送成功',
+                    channel='auto',
+                    rule_meta=delivery_meta,
+                )
+                logger.warning(f"【{self.cookie_id}】{source} 已完成补偿自动发货: order_id={order_id}")
+                return True
+            except Exception as send_error:
+                self._release_data_reservation_if_needed(delivery_meta, error=self._safe_str(send_error))
+                self._persist_delivery_finalization_state(
+                    order_id=order_id,
+                    item_id=item_id,
+                    buyer_id=buyer_id,
+                    delivery_meta=delivery_meta,
+                    channel='auto',
+                    status='failed',
+                    last_error=self._safe_str(send_error),
+                )
+                self._record_delivery_log(
+                    order_id=order_id,
+                    item_id=item_id,
+                    buyer_id=buyer_id,
+                    status='failed',
+                    reason=f'{source} 自动发货消息发送失败: {self._safe_str(send_error)}',
+                    channel='auto',
+                    rule_meta=delivery_meta,
+                )
+                return False
+
+
+    async def _auto_deliver_recovered_pending_order(
+        self,
+        order: Dict[str, Any],
+        *,
+        fallback_order: Optional[Dict[str, Any]] = None,
+        source: str = 'order_recovery',
+    ) -> bool:
+        from db_manager import db_manager
+
+        fallback_order = fallback_order or {}
+        order_id = str(order.get('order_id') or fallback_order.get('order_id') or '').strip()
+        item_id = str(order.get('item_id') or fallback_order.get('item_id') or '').strip()
+        buyer_id = str(order.get('buyer_id') or fallback_order.get('buyer_id') or '').strip()
+        sid = str(order.get('sid') or fallback_order.get('sid') or '').strip()
+
+        if not order_id:
+            return False
+        if db_manager._normalize_order_status(order.get('order_status')) != 'pending_ship':
+            logger.info(f"【{self.cookie_id}】{source} 订单不是待发货，跳过自动发货: order_id={order_id}, status={order.get('order_status')}")
+            return False
+        if not self.is_auto_confirm_enabled():
+            logger.info(f"【{self.cookie_id}】{source} 发现订单待发货，但自动发货未启用: {order_id}")
+            return False
+        if not item_id or not buyer_id:
+            logger.warning(
+                f"【{self.cookie_id}】{source} 发现订单待发货，但缺少商品或买家信息，无法补偿发货: "
+                f"order_id={order_id}, item_id={item_id or '-'}, buyer_id={buyer_id or '-'}"
+            )
+            return False
+
+        websocket = getattr(self, 'ws', None)
+        chat_id = sid.replace('@goofish', '')
+        if websocket and chat_id:
+            await self._handle_simple_message_auto_delivery(
+                websocket,
+                order_id,
+                item_id,
+                buyer_id,
+                chat_id,
+                time.strftime('%Y-%m-%d %H:%M:%S'),
+                source,
+            )
+            return True
+
+        logger.warning(
+            f"【{self.cookie_id}】{source} 待发货订单缺少可用会话ID，尝试通过买家和商品建立会话补偿发货: "
+            f"order_id={order_id}, buyer_id={buyer_id}, item_id={item_id}"
+        )
+        return await self._send_recovered_delivery_without_sid(
+            order,
+            order_id=order_id,
+            item_id=item_id,
+            buyer_id=buyer_id,
+            source=source,
+        )
+
     async def _auto_delivery(self, item_id: str, item_title: str = None, order_id: str = None, send_user_id: str = None,
                              chat_id: str = None, send_user_name: str = None, include_meta: bool = False,
                              data_preview_index: int = 0, delivery_unit_index: int = 1):
