@@ -209,6 +209,11 @@ function showSection(sectionName) {
     case 'online-im':        // 【在线客服菜单】
         loadOnlineIm();
         break;
+    case 'blacklist':        // 【黑名单管理菜单】
+        if (typeof loadBlacklistPage === 'function') {
+            loadBlacklistPage();
+        }
+        break;
     case 'data-management':  // 【数据管理菜单】
         loadDataManagement();
         break;

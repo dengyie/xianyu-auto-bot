@@ -180,6 +180,12 @@
           <span>在线客服</span>
         </a>
       </div>
+      <div class="nav-item" data-menu-id="blacklist">
+        <a href="javascript:void(0)" class="nav-link" onclick="showSection('blacklist')">
+          <i class="bi bi-person-x"></i>
+          <span>黑名单管理</span>
+        </a>
+      </div>
       <div class="nav-item" data-menu-id="system-settings">
         <a href="javascript:void(0)" class="nav-link" onclick="showSection('system-settings')">
           <i class="bi bi-gear"></i>
@@ -3107,6 +3113,154 @@
       </div>
     </div>
 
+    <!-- 黑名单管理内容 -->
+    <div id="blacklist-section" class="content-section">
+      <div class="content-header">
+        <div class="d-flex justify-content-between align-items-center w-100 flex-wrap gap-2">
+          <div>
+            <h2 class="mb-0">
+              <i class="bi bi-person-x me-2"></i>
+              黑名单管理
+            </h2>
+            <p class="text-muted mb-0">按用户、账号或商品范围拦截指定买家的自动回复、客服发送和自动发货</p>
+          </div>
+          <div class="d-flex gap-2 flex-wrap">
+            <button type="button" class="btn btn-outline-primary" onclick="document.getElementById('blacklistImportFile').click()">
+              <i class="bi bi-upload me-1"></i>导入
+            </button>
+            <button type="button" class="btn btn-outline-success" onclick="exportPersonalBlacklist()">
+              <i class="bi bi-download me-1"></i>导出
+            </button>
+            <input type="file" id="blacklistImportFile" accept=".xlsx" class="d-none" onchange="importPersonalBlacklistFile()">
+          </div>
+        </div>
+      </div>
+      <div class="content-body">
+        <div class="row g-4">
+          <div class="col-lg-4">
+            <div class="card h-100">
+              <div class="card-header">
+                <i class="bi bi-plus-circle me-2"></i>新增个人黑名单
+              </div>
+              <div class="card-body">
+                <form id="personalBlacklistForm" onsubmit="event.preventDefault(); createPersonalBlacklist(); return false;">
+                  <div class="mb-3">
+                    <label for="blacklistBuyerIds" class="form-label">买家ID <span class="text-danger">*</span></label>
+                    <textarea class="form-control" id="blacklistBuyerIds" rows="4" placeholder="每行一个买家ID，也支持逗号分隔" required></textarea>
+                  </div>
+                  <div class="mb-3">
+                    <label for="blacklistCookieId" class="form-label">作用账号</label>
+                    <select class="form-select" id="blacklistCookieId">
+                      <option value="">全部账号</option>
+                    </select>
+                    <div class="form-text">选择账号后仅拦截该账号；留空为用户级。</div>
+                  </div>
+                  <div class="mb-3">
+                    <label for="blacklistItemId" class="form-label">商品ID</label>
+                    <input type="text" class="form-control" id="blacklistItemId" placeholder="可选，填写后仅拦截该商品">
+                  </div>
+                  <div class="mb-3">
+                    <label for="blacklistBuyerNick" class="form-label">买家昵称</label>
+                    <input type="text" class="form-control" id="blacklistBuyerNick" placeholder="可选，便于识别">
+                  </div>
+                  <div class="mb-3">
+                    <label for="blacklistReason" class="form-label">拉黑原因</label>
+                    <textarea class="form-control" id="blacklistReason" rows="2" placeholder="可选，会显示在拦截提示和发货日志中"></textarea>
+                  </div>
+                  <div class="form-check form-switch mb-3">
+                    <input class="form-check-input" type="checkbox" id="blacklistEnabled" checked>
+                    <label class="form-check-label" for="blacklistEnabled">立即启用</label>
+                  </div>
+                  <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-primary flex-fill">
+                      <i class="bi bi-check-circle me-1"></i>保存
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary" onclick="resetPersonalBlacklistForm()">
+                      <i class="bi bi-arrow-counterclockwise"></i>
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-lg-8">
+            <div class="card">
+              <div class="card-header">
+                <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                  <div>
+                    <i class="bi bi-list-check me-2"></i>个人黑名单
+                    <span class="text-muted small ms-2" id="blacklistTotalText">共 0 条</span>
+                  </div>
+                  <button type="button" class="btn btn-outline-danger btn-sm" id="blacklistBatchDeleteBtn" onclick="batchDeletePersonalBlacklist()" disabled>
+                    <i class="bi bi-trash me-1"></i>批量删除
+                  </button>
+                </div>
+              </div>
+              <div class="card-body">
+                <div class="row g-2 align-items-end mb-3">
+                  <div class="col-md-4">
+                    <label for="blacklistFilterBuyerId" class="form-label small mb-1">买家ID</label>
+                    <input type="text" class="form-control form-control-sm" id="blacklistFilterBuyerId" placeholder="搜索买家ID" onkeydown="handleBlacklistFilterKeydown(event)">
+                  </div>
+                  <div class="col-md-4">
+                    <label for="blacklistFilterBuyerNick" class="form-label small mb-1">买家昵称</label>
+                    <input type="text" class="form-control form-control-sm" id="blacklistFilterBuyerNick" placeholder="搜索昵称" onkeydown="handleBlacklistFilterKeydown(event)">
+                  </div>
+                  <div class="col-md-2">
+                    <label for="blacklistPageSize" class="form-label small mb-1">每页</label>
+                    <select class="form-select form-select-sm" id="blacklistPageSize" onchange="loadPersonalBlacklist(1)">
+                      <option value="10">10</option>
+                      <option value="20" selected>20</option>
+                      <option value="50">50</option>
+                      <option value="100">100</option>
+                    </select>
+                  </div>
+                  <div class="col-md-2 d-flex gap-2">
+                    <button type="button" class="btn btn-primary btn-sm flex-fill" onclick="loadPersonalBlacklist(1)">
+                      <i class="bi bi-search"></i>
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="resetBlacklistFilters()">
+                      <i class="bi bi-x-circle"></i>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="table-responsive">
+                  <table class="table table-hover align-middle">
+                    <thead>
+                      <tr>
+                        <th style="width: 36px;"><input class="form-check-input" type="checkbox" id="blacklistSelectAll" onchange="toggleBlacklistSelectAll(this.checked)"></th>
+                        <th>范围</th>
+                        <th>买家</th>
+                        <th>目标</th>
+                        <th>原因</th>
+                        <th>状态</th>
+                        <th>创建时间</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody id="blacklistTableBody">
+                      <tr>
+                        <td colspan="8" class="text-center py-4 text-muted">
+                          <i class="bi bi-person-x fs-1 d-block mb-3"></i>
+                          暂无黑名单记录
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mt-3">
+                  <div class="small text-muted" id="blacklistPageText">第 1 页</div>
+                  <div class="btn-group" id="blacklistPagination" role="group" aria-label="黑名单分页"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 系统设置内容 -->
     <div id="system-settings-section" class="content-section">
       <div class="content-header">
@@ -4710,6 +4864,7 @@
   <script src="/static/js/app-orders.js?v=1.0.0"></script>
   <script src="/static/js/app-settings.js?v=1.0.0"></script>
   <script src="/static/js/app-logs.js?v=1.0.0"></script>
+  <script src="/static/js/app-blacklist.js?v=1.0.0"></script>
   <script src="/static/js/app-users.js?v=1.0.0"></script>
   <script src="/static/js/app-im.js?v=1.0.0"></script>
   <script src="/static/js/app-auth.js?v=1.0.0"></script>
