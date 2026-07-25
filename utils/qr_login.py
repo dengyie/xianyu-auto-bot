@@ -276,14 +276,18 @@ class QRLoginManager:
                     return unquote(str(values[0]).strip())
             return None
 
-        login_token = _pick(query, 'token', 'lgToken', 'login_token', 'loginToken') or _pick(
-            fragment_query, 'token', 'lgToken', 'login_token', 'loginToken'
+        login_token = _pick(
+            query,
+            'token', 'lgToken', 'login_token', 'loginToken', 'loginTicket', 'ticket',
+        ) or _pick(
+            fragment_query,
+            'token', 'lgToken', 'login_token', 'loginToken', 'loginTicket', 'ticket',
         )
         if login_token:
             tokens['login_token'] = login_token
 
-        havana_iv = _pick(query, 'havana_iv_token', 'havanaIvToken') or _pick(
-            fragment_query, 'havana_iv_token', 'havanaIvToken'
+        havana_iv = _pick(query, 'havana_iv_token', 'havanaIvToken', 'iv_token') or _pick(
+            fragment_query, 'havana_iv_token', 'havanaIvToken', 'iv_token'
         )
         if havana_iv:
             tokens['havana_iv_token'] = havana_iv
@@ -294,7 +298,38 @@ class QRLoginManager:
         if stoken:
             tokens['stoken'] = stoken
 
+        # 部分成功页把 token 塞在 path 末段（极少见，兜底）
+        if not tokens.get('login_token') and parsed.path:
+            path_parts = [p for p in parsed.path.split('/') if p]
+            for part in reversed(path_parts[-2:]):
+                if 16 <= len(part) <= 128 and re.fullmatch(r'[A-Za-z0-9_=\-]+', part):
+                    # 太像普通路径名则跳过
+                    if part.lower() in {
+                        'login', 'callback', 'iv', 'verify', 'qrcode', 'mini_login', 'im',
+                    }:
+                        continue
+                    tokens.setdefault('login_token_guess', part)
+                    break
+
         return tokens
+
+    def _cookies_from_httpx_response(self, resp) -> Dict[str, str]:
+        """从 httpx 响应提取 cookie（含 set-cookie 多域）。"""
+        cookie_dict: Dict[str, str] = {}
+        try:
+            cookie_dict.update({k: v for k, v in resp.cookies.items()})
+        except Exception:
+            pass
+        # httpx Cookies 有时只暴露部分；再从 jar 扫一遍
+        try:
+            jar = getattr(resp, 'cookies', None)
+            if jar is not None:
+                for c in jar.jar:
+                    if c.name and c.value is not None:
+                        cookie_dict[str(c.name)] = str(c.value)
+        except Exception:
+            pass
+        return cookie_dict
 
     async def _exchange_login_token(
         self,
@@ -316,19 +351,57 @@ class QRLoginManager:
         if device_id:
             data['deviceId'] = device_id
 
+        cookie_dict: Dict[str, str] = {}
+        # 换 token 用更短超时，避免前端卡在「换取登录态」数分钟
+        exchange_timeout = httpx.Timeout(connect=15.0, read=25.0, write=15.0, pool=25.0)
         async with httpx.AsyncClient(
             follow_redirects=True,
-            timeout=self.timeout,
+            timeout=exchange_timeout,
             proxy=self.proxy,
         ) as client:
+            headers = {
+                **self.headers,
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Origin': 'https://passport.goofish.com',
+                'Referer': 'https://passport.goofish.com/mini_login.htm',
+            }
             resp = await client.post(
                 f'{self.host}/login_token/login.do',
                 params=params,
-                data=data or None,
+                data=data or {'deviceId': device_id or 'unknown'},
                 cookies=session.cookies,
-                headers=self.headers,
+                headers=headers,
             )
-            cookie_dict = {k: v for k, v in resp.cookies.items()}
+            cookie_dict.update(self._cookies_from_httpx_response(resp))
+
+            # 登录后刷新用户态 mtop（部分批次 unb 在此之后才落下）
+            try:
+                nav_resp = await client.post(
+                    'https://h5api.m.goofish.com/h5/mtop.idle.web.user.page.nav/1.0/',
+                    params={
+                        'jsv': '2.7.2',
+                        'appKey': '34839810',
+                        't': str(int(time.time() * 1000)),
+                        'sign': '',
+                        'v': '1.0',
+                        'type': 'originaljson',
+                        'dataType': 'json',
+                        'timeout': '20000',
+                        'api': 'mtop.idle.web.user.page.nav',
+                        'sessionOption': 'AutoLoginOnly',
+                    },
+                    data='data=%7B%7D',
+                    cookies={**session.cookies, **cookie_dict},
+                    headers={
+                        **self.headers,
+                        'Referer': 'https://www.goofish.com/',
+                        'Origin': 'https://www.goofish.com',
+                    },
+                )
+                cookie_dict.update(self._cookies_from_httpx_response(nav_resp))
+            except Exception as e:
+                logger.debug(f"login_token 换取后刷新 nav 失败: {session.session_id}, {e}")
+
             # 再访问主站一次，尽量把 goofish 域 Cookie 拉全
             try:
                 im_resp = await client.get(
@@ -340,12 +413,14 @@ class QRLoginManager:
                         'Origin': 'https://www.goofish.com',
                     },
                 )
-                cookie_dict.update({k: v for k, v in im_resp.cookies.items()})
+                cookie_dict.update(self._cookies_from_httpx_response(im_resp))
             except Exception as e:
                 logger.debug(f"login_token 换取后访问 /im 失败: {session.session_id}, {e}")
+
             logger.info(
                 f"login_token 换取完成: {session.session_id}, "
-                f"status={resp.status_code}, cookie_keys={list(cookie_dict.keys())}"
+                f"status={resp.status_code}, cookie_keys={list(cookie_dict.keys())}, "
+                f"has_unb={bool(cookie_dict.get('unb'))}"
             )
             return cookie_dict
 
@@ -407,9 +482,11 @@ class QRLoginManager:
         tokens = self._extract_login_tokens_from_url(url)
         merged: Dict[str, str] = {}
 
-        # 1) 若 URL 带 login_token / lgToken，优先 API 换 Cookie（轻量）
-        login_token = tokens.get('login_token')
+        # 1) 若 URL 带 login_token / lgToken，优先 API 换 Cookie（轻量、短超时）
+        login_token = tokens.get('login_token') or tokens.get('login_token_guess')
+        tried_tokens = set()
         if login_token:
+            tried_tokens.add(login_token)
             try:
                 exchanged = await self._exchange_login_token(session, login_token)
                 merged.update(exchanged)
@@ -436,6 +513,7 @@ class QRLoginManager:
                 }
 
         # 2) Playwright 打开回调 URL，在同一会话 Cookie 上下文中收口
+        #    用更短 goto 超时，避免前端卡在「正在用回调网址换取登录态」数分钟
         playwright = None
         browser = None
         context = None
@@ -466,20 +544,32 @@ class QRLoginManager:
                     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
                 },
             )
+            # 同时挂 passport + goofish 域 cookie，提高 unb 落盘概率
             browser_cookies = self._build_browser_cookies(url, session.cookies)
-            if browser_cookies:
-                await context.add_cookies(browser_cookies)
+            browser_cookies += self._build_browser_cookies('https://www.goofish.com/', session.cookies)
+            # 去重 (name,url)
+            seen_ck = set()
+            deduped = []
+            for ck in browser_cookies:
+                key = (ck.get('name'), ck.get('url'))
+                if key in seen_ck:
+                    continue
+                seen_ck.add(key)
+                deduped.append(ck)
+            if deduped:
+                await context.add_cookies(deduped)
 
             page = await context.new_page()
-            await page.goto(url, wait_until='domcontentloaded', timeout=60000)
-            await page.wait_for_timeout(2000)
+            await page.goto(url, wait_until='domcontentloaded', timeout=25000)
+            await page.wait_for_timeout(1500)
 
             # 页面若再次给出 token 链接，尝试提取
             try:
                 current_url = page.url
                 page_tokens = self._extract_login_tokens_from_url(current_url)
-                page_login_token = page_tokens.get('login_token')
-                if page_login_token and page_login_token != login_token:
+                page_login_token = page_tokens.get('login_token') or page_tokens.get('login_token_guess')
+                if page_login_token and page_login_token not in tried_tokens:
+                    tried_tokens.add(page_login_token)
                     exchanged = await self._exchange_login_token(session, page_login_token)
                     merged.update(exchanged)
                     self._merge_session_cookies(session, exchanged)
@@ -518,27 +608,38 @@ class QRLoginManager:
                 }
 
             await self._detect_verification_ended_elsewhere(session, page)
+            missing = []
+            if not final_cookies.get('unb'):
+                missing.append('unb')
+            if not any(final_cookies.get(k) for k in ('cookie2', 'havana_lgc2_77', '_tb_token_', 'sgcookie')):
+                missing.append('cookie2/sgcookie')
             session.user_hint = (
-                '已打开回调URL，但服务端仍未拿到完整登录Cookie。'
-                '请确认该链接来自「已验证成功」的页面；'
-                '若仍失败，可改贴成功侧完整Cookie（含 unb）。'
+                '已打开回调URL，但服务端仍未拿到完整登录Cookie'
+                + (f'（缺 {", ".join(missing)}）' if missing else '')
+                + '。常见原因：1) 粘贴的是验证中/过期页而非成功后跳转链接；'
+                '2) 成功 Cookie 只落在你的手机浏览器，服务端打不开同一会话。'
+                '请改贴成功侧完整 Cookie（必须含 unb）。'
             )
             logger.warning(
                 f"回调URL未能换取完整Cookie: {session_id}, url_host={urlparse(url).hostname}, "
-                f"cookie_keys={list(final_cookies.keys())}"
+                f"cookie_keys={list(final_cookies.keys())}, missing={missing}"
             )
             return {
                 'success': False,
                 'status': session.status,
                 'message': session.user_hint,
                 'cookie_keys': sorted(final_cookies.keys()),
+                'missing_keys': missing,
             }
         except Exception as e:
             logger.error(f"回调URL换取Cookie失败: {session_id}, 错误: {e}")
             return {
                 'success': False,
                 'status': session.status,
-                'message': f'打开回调URL失败: {e}',
+                'message': (
+                    f'打开回调URL失败: {e}。'
+                    '若网络超时，请直接粘贴成功侧完整 Cookie（含 unb）。'
+                ),
             }
         finally:
             for closer in (
@@ -593,12 +694,53 @@ class QRLoginManager:
         return self._normalize_cookie_dict(cookies)
 
     async def _detect_verification_ended_elsewhere(self, session: QRLoginSession, page) -> bool:
-        """检测服务端验证页是否已变成「流程结束」（常见于用户在其它浏览器完成人脸）。"""
+        """检测服务端验证页是否已变成「流程结束」（常见于用户在其它浏览器完成人脸）。
+
+        注意：mini_expired.htm / 二维码过期页 ≠ 用户已完成验证，绝不能误判。
+        """
+        try:
+            current_url = str(page.url or '')
+        except Exception:
+            current_url = ''
+
+        # 过期/失效页：不是「用户侧完成」，而是需要重新出码
+        expired_url_markers = (
+            'mini_expired',
+            'qrcode_expired',
+            'expired.htm',
+            'timeout.htm',
+        )
+        if any(marker in current_url.lower() for marker in expired_url_markers):
+            session.user_hint = (
+                '服务端验证页已过期/失效，无法再扫。请关闭弹窗后重新发起扫码登录。'
+            )
+            logger.info(
+                f"扫码登录验证页为过期页（非用户完成）: {session.session_id}, URL: {current_url}"
+            )
+            return False
+
         try:
             text = await page.evaluate("() => (document.body && document.body.innerText) || ''")
         except Exception:
             text = ""
         text = str(text or "")
+
+        # 纯过期文案也不算「用户完成」
+        expired_text_markers = (
+            "二维码已失效",
+            "二维码已过期",
+            "请重新获取",
+            "验证超时",
+            "页面已过期",
+        )
+        if any(marker in text for marker in expired_text_markers) and not any(
+            m in text for m in ("身份校验流程已经结束", "校验流程已经结束", "验证已完成")
+        ):
+            session.user_hint = (
+                '服务端验证二维码已过期。请关闭弹窗后重新发起扫码登录。'
+            )
+            return False
+
         # 避免单独匹配「请关闭页面」等泛化文案，降低误报
         ended_markers = (
             "身份校验流程已经结束",
@@ -617,10 +759,76 @@ class QRLoginManager:
                     "或粘贴成功侧完整 Cookie，以你的成功为准完成登录。"
                 )
                 logger.warning(
-                    f"扫码登录验证页已结束（疑似用户侧完成）: {session.session_id}, URL: {page.url}"
+                    f"扫码登录验证页已结束（疑似用户侧完成）: {session.session_id}, URL: {current_url}"
                 )
             return True
         return False
+
+    async def _page_has_scannable_qr(self, page) -> bool:
+        """判断验证页是否已渲染出可供手机扫的二维码（canvas/img/二维码容器）。"""
+        try:
+            return bool(await page.evaluate(
+                """() => {
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const style = window.getComputedStyle(el);
+                        return r.width >= 80 && r.height >= 80
+                            && style.visibility !== 'hidden'
+                            && style.display !== 'none'
+                            && style.opacity !== '0';
+                    };
+                    const canvases = Array.from(document.querySelectorAll('canvas'));
+                    if (canvases.some(isVisible)) return true;
+                    const imgs = Array.from(document.querySelectorAll('img'));
+                    for (const img of imgs) {
+                        if (!isVisible(img)) continue;
+                        const src = (img.currentSrc || img.src || '').toLowerCase();
+                        const alt = (img.alt || '').toLowerCase();
+                        if (src.includes('qr') || src.includes('code') || src.startsWith('data:image')
+                            || alt.includes('二维码') || alt.includes('qr')) {
+                            return true;
+                        }
+                        // 常见方形验证码图
+                        const r = img.getBoundingClientRect();
+                        if (Math.abs(r.width - r.height) < 30 && r.width >= 120) return true;
+                    }
+                    const selectors = [
+                        '[class*="qrcode" i]', '[id*="qrcode" i]',
+                        '[class*="qr-code" i]', '[id*="qr-code" i]',
+                        '[class*="qr_code" i]', '[class*="scan" i]',
+                    ];
+                    for (const sel of selectors) {
+                        try {
+                            const nodes = document.querySelectorAll(sel);
+                            if (Array.from(nodes).some(isVisible)) return true;
+                        } catch (e) {}
+                    }
+                    return false;
+                }"""
+            ))
+        except Exception as e:
+            logger.debug(f"检测验证页二维码失败: {e}")
+            return False
+
+    async def _capture_verification_screenshot(self, session: QRLoginSession, page) -> bool:
+        """截取验证页并写入 session.screenshot_path，供前端展示给手机扫。"""
+        try:
+            screenshot_bytes = await page.screenshot(full_page=True, type='png')
+        except Exception as e:
+            logger.warning(f"截取验证页失败: {session.session_id}, {e}")
+            return False
+        if not screenshot_bytes:
+            return False
+        screenshot_path = image_manager.save_image(screenshot_bytes)
+        if not screenshot_path:
+            logger.warning(f"扫码登录验证截图保存失败: {session.session_id}")
+            return False
+        if session.screenshot_path and session.screenshot_path != screenshot_path:
+            image_manager.delete_image(session.screenshot_path)
+        session.screenshot_path = screenshot_path
+        logger.info(f"扫码登录验证截图已保存: {session.session_id}, 路径: {screenshot_path}")
+        return True
 
     async def _probe_browser_login_success(self, session: QRLoginSession, page, context) -> bool:
         """在浏览器侧兜底判断验证是否已经完成。
@@ -755,7 +963,13 @@ class QRLoginManager:
         }
 
     async def _launch_verification_page(self, session_id: str):
-        """在服务端打开验证页面并截取二维码，保持原始会话存活"""
+        """在服务端打开验证页面，截取「可扫二维码」给前端展示。
+
+        设计原则（VPS 无摄像头）：
+        - 打开 iframeRedirect 验证页只是为了把二维码截出来给用户用手机闲鱼 APP 扫；
+        - 不假设服务端能自己过验证；
+        - 必须等到页面真正渲染出二维码再截图，避免截到空白/loading/过期页。
+        """
         session = self.sessions.get(session_id)
         if not session or not session.verification_url:
             return
@@ -768,7 +982,8 @@ class QRLoginManager:
         try:
             from playwright.async_api import async_playwright
 
-            logger.info(f"开始打开扫码登录验证页面: {session_id}")
+            logger.info(f"开始打开扫码登录验证页面（截图给前端）: {session_id}")
+            session.user_hint = '账号被风控：正在生成服务端验证二维码，请稍候…'
             playwright = await async_playwright().start()
             browser = await playwright.chromium.launch(
                 headless=True,
@@ -796,21 +1011,50 @@ class QRLoginManager:
 
             page = await context.new_page()
             await page.goto(session.verification_url, wait_until='domcontentloaded', timeout=60000)
-            await page.wait_for_timeout(2500)
 
-            screenshot_bytes = await page.screenshot(full_page=True)
-            if screenshot_bytes:
-                screenshot_path = image_manager.save_image(screenshot_bytes)
-                if screenshot_path:
-                    if session.screenshot_path and session.screenshot_path != screenshot_path:
-                        image_manager.delete_image(session.screenshot_path)
-                    session.screenshot_path = screenshot_path
-                    logger.info(f"扫码登录验证截图已保存: {session_id}, 路径: {screenshot_path}")
-                else:
-                    logger.warning(f"扫码登录验证截图保存失败: {session_id}")
+            # 轮询等待可扫二维码出现（最多 ~20s），避免 2.5s 固定等待截到空白页
+            qr_ready = False
+            for attempt in range(20):
+                current = self.sessions.get(session_id)
+                if not current or current.status not in {
+                    'verification_required', 'scanned', 'waiting', 'processing'
+                }:
+                    return
+                # 过期页直接提示，不再空等
+                try:
+                    cur_url = str(page.url or '')
+                except Exception:
+                    cur_url = ''
+                if any(m in cur_url.lower() for m in ('mini_expired', 'expired.htm', 'timeout.htm')):
+                    session.user_hint = (
+                        '服务端验证页已过期，无法展示可扫二维码。请关闭后重新扫码登录。'
+                    )
+                    logger.warning(f"验证页打开即为过期页: {session_id}, URL: {cur_url}")
+                    # 仍截一帧，方便用户看见「已过期」
+                    await self._capture_verification_screenshot(session, page)
+                    return
+
+                if await self._page_has_scannable_qr(page):
+                    qr_ready = True
+                    break
+                await page.wait_for_timeout(1000)
+
+            if not qr_ready:
+                logger.warning(
+                    f"验证页未在时限内检测到二维码，仍截取当前页供前端展示: {session_id}, URL: {page.url}"
+                )
+                session.user_hint = (
+                    '服务端验证页已打开，但尚未检测到清晰二维码；'
+                    '请查看下方截图，若无法扫码请重新发起登录。'
+                )
             else:
-                logger.warning(f"扫码登录验证截图为空: {session_id}")
+                session.user_hint = (
+                    '账号被风控：请用手机闲鱼 APP 扫描下方服务端二维码完成验证（本机无摄像头，勿等自动过验证）。'
+                )
 
+            await self._capture_verification_screenshot(session, page)
+
+            last_resnapshot = time.time()
             while True:
                 current_session = self.sessions.get(session_id)
                 if not current_session:
@@ -840,10 +1084,37 @@ class QRLoginManager:
                     )
                     break
 
-                if await self._probe_browser_login_success(current_session, page, context):
-                    break
+                # 若二维码后出/刷新，周期性重截，保证前端能拿到可扫图
+                if time.time() - last_resnapshot >= 12:
+                    if await self._page_has_scannable_qr(page):
+                        await self._capture_verification_screenshot(current_session, page)
+                        if not current_session.user_hint or '正在生成' in str(current_session.user_hint):
+                            current_session.user_hint = (
+                                '账号被风控：请用手机闲鱼 APP 扫描下方服务端二维码完成验证。'
+                            )
+                    last_resnapshot = time.time()
 
-                # 探测失败次数越多，间隔越长（3s → 最长 15s），降低网络不通时的 Chromium 空转
+                # 轻量探测：仅读当前页 cookie/文案，避免每次都新开 /im 打满 CPU
+                # 完整 /im 探测放在失败次数较低时偶尔做
+                try:
+                    cookie_dict = await self._context_cookie_dict(context)
+                    if self._has_completed_login_cookies(cookie_dict):
+                        if self._mark_session_success(
+                            current_session, cookie_dict, 'browser', require_complete_cookies=True
+                        ):
+                            break
+                    await self._detect_verification_ended_elsewhere(current_session, page)
+                except Exception as e:
+                    logger.debug(f"验证页轻量探测异常: {session_id}, {e}")
+
+                # 仅当轻量探测未成功且失败不多时，再做完整 probe（含 /im）
+                if current_session.probe_fail_count < 3:
+                    if await self._probe_browser_login_success(current_session, page, context):
+                        break
+                else:
+                    # 失败较多时拉长间隔，主要靠用户扫码 / 粘贴回调 URL
+                    pass
+
                 backoff = min(3000 * (current_session.probe_fail_count + 1), 15000)
                 await page.wait_for_timeout(backoff)
 
@@ -852,6 +1123,12 @@ class QRLoginManager:
             raise
         except Exception as e:
             logger.error(f"打开扫码登录验证页面失败: {session_id}, 错误: {e}")
+            latest = self.sessions.get(session_id)
+            if latest and latest.status == 'verification_required' and not latest.screenshot_path:
+                latest.user_hint = (
+                    f'打开服务端验证页失败: {e}。'
+                    '可使用下方兜底验证链接，或粘贴成功后的回调网址/完整 Cookie。'
+                )
         finally:
             try:
                 if page:

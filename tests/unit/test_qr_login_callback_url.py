@@ -49,6 +49,18 @@ def test_extract_login_tokens_from_url():
     )
     assert tokens2["login_token"] == "lg456"
 
+    tokens3 = manager._extract_login_tokens_from_url(
+        "https://passport.goofish.com/done?loginTicket=lt-789&stoken=st1"
+    )
+    assert tokens3["login_token"] == "lt-789"
+    assert tokens3["stoken"] == "st1"
+
+    # path 末段兜底猜测（仅当 query 无 token）
+    tokens4 = manager._extract_login_tokens_from_url(
+        "https://passport.goofish.com/iv/AbCdEfGhIjKlMnOpQrStUv"
+    )
+    assert tokens4.get("login_token_guess") == "AbCdEfGhIjKlMnOpQrStUv"
+
 
 def test_apply_external_callback_url_rejects_bad_domain():
     manager = QRLoginManager()
@@ -225,3 +237,111 @@ def test_apply_external_callback_url_browser_fallback_success():
     assert result["success"] is True
     assert result["via"] == "browser_url"
     assert session.status == "success"
+
+
+def test_detect_verification_ended_elsewhere_rejects_mini_expired():
+    """mini_expired.htm 不是用户完成验证，不能当 ended_elsewhere。"""
+    manager = QRLoginManager()
+    session = _session(manager)
+
+    class FakePage:
+        url = "https://passport.goofish.com/iv/static/mini_expired.htm"
+
+        async def evaluate(self, *_a, **_k):
+            return "二维码已失效，请重新获取"
+
+    ended = asyncio.run(manager._detect_verification_ended_elsewhere(session, FakePage()))
+    assert ended is False
+    assert session.verification_ended_elsewhere is False
+    assert "过期" in (session.user_hint or "")
+
+
+def test_detect_verification_ended_elsewhere_accepts_real_end_text():
+    manager = QRLoginManager()
+    session = _session(manager)
+
+    class FakePage:
+        url = "https://passport.goofish.com/iv/done"
+
+        async def evaluate(self, *_a, **_k):
+            return "身份校验流程已经结束，请关闭页面"
+
+    ended = asyncio.run(manager._detect_verification_ended_elsewhere(session, FakePage()))
+    assert ended is True
+    assert session.verification_ended_elsewhere is True
+
+
+def test_apply_external_callback_url_reports_missing_unb():
+    """token 与浏览器都拿不到 unb 时，明确提示缺 unb，且别拖太久。"""
+    manager = QRLoginManager()
+    session = _session(manager)
+
+    async def fake_exchange(sess, token):
+        return {"cookie2": "ck-only", "XSRF-TOKEN": "x"}
+
+    async def fake_probe(sess, page, context):
+        return False
+
+    class FakePage:
+        url = "https://passport.goofish.com/iv/static/mini_expired.htm"
+
+        async def goto(self, *a, **k):
+            return None
+
+        async def wait_for_timeout(self, *a, **k):
+            return None
+
+        async def close(self):
+            return None
+
+        async def evaluate(self, *_a, **_k):
+            return "二维码已失效"
+
+    class FakeContext:
+        async def add_cookies(self, *a, **k):
+            return None
+
+        async def new_page(self):
+            return FakePage()
+
+        async def cookies(self):
+            return [{"name": "cookie2", "value": "ck-only"}]
+
+        async def close(self):
+            return None
+
+    class FakeBrowser:
+        async def new_context(self, **k):
+            return FakeContext()
+
+        async def close(self):
+            return None
+
+    class FakePlaywright:
+        class chromium:
+            @staticmethod
+            async def launch(**k):
+                return FakeBrowser()
+
+        async def stop(self):
+            return None
+
+    class FakeAsyncPlaywright:
+        async def start(self):
+            return FakePlaywright()
+
+    with patch.object(manager, "_exchange_login_token", side_effect=fake_exchange), \
+         patch.object(manager, "_probe_browser_login_success", side_effect=fake_probe), \
+         patch("playwright.async_api.async_playwright", return_value=FakeAsyncPlaywright()):
+        result = asyncio.run(
+            manager.apply_external_callback_url(
+                session.session_id,
+                "https://passport.goofish.com/done?token=no-unb",
+                source="user_url",
+            )
+        )
+
+    assert result["success"] is False
+    assert "unb" in result.get("missing_keys", [])
+    assert "unb" in result["message"]
+    assert session.status == "verification_required"

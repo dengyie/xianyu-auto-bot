@@ -1452,13 +1452,28 @@ function showVerificationRequired(data) {
     }
 
     if (sameStructure) {
-        // 只更新提示文案，不重建表单
+        // 只更新提示文案，不重建表单；截图从无到有时强制整页重建
         const msgEl = verificationContainer.querySelector('[data-role="verification-message"]');
         if (msgEl && serverMessage) {
             msgEl.textContent = serverMessage;
         }
-        verificationContainer.style.display = 'block';
-        return;
+        const shotImg = verificationContainer.querySelector('img[alt="闲鱼验证二维码"]');
+        if (!shotImg && screenshotPath) {
+            // 之前没有截图、现在有了：强制整页重建，让手机可扫二维码露出来
+            qrCodeVerificationState.renderKey = '';
+        } else {
+            if (shotImg && screenshotPath) {
+                const nextSrc = `${normalizeStaticAssetPath(screenshotPath)}?t=${Date.now()}`;
+                const currentPath = (shotImg.getAttribute('src') || '').split('?')[0];
+                const nextPath = nextSrc.split('?')[0];
+                // 路径变了或图片未加载成功时刷新；服务端每次截图路径不同，通常走整页重建
+                if (currentPath !== nextPath || !shotImg.complete || shotImg.naturalWidth === 0) {
+                    shotImg.src = nextSrc;
+                }
+            }
+            verificationContainer.style.display = 'block';
+            return;
+        }
     }
 
     qrCodeVerificationState.renderKey = structureKey;
