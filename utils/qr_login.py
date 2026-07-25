@@ -66,6 +66,8 @@ class QRLoginSession:
         self.verification_url = None  # 风控验证URL
         self.screenshot_path = None  # 风控验证截图
         self.verification_task = None  # 风控验证页面保持任务
+        self.verification_entered_at = None  # 进入风控验证流程的时间（用于兜底超时）
+        self.probe_fail_count = 0  # 浏览器侧探测连续失败次数（用于退避/中止）
         self.success_source = None  # 登录成功来源: api/browser/user
         # 服务端验证页已变成「流程结束」——通常表示用户在其它浏览器完成了人脸
         self.verification_ended_elsewhere = False
@@ -101,9 +103,14 @@ class QRLoginManager:
         # 配置代理（如果需要的话，取消注释并修改代理地址）
         # self.proxy = "http://127.0.0.1:7890"
         self.proxy = None
-        
+
         # 配置超时时间
         self.timeout = httpx.Timeout(connect=30.0, read=60.0, write=30.0, pool=60.0)
+
+        # 风控验证兜底：二维码 EXPIRED 后验证流程最多再等 5 分钟，防止监控循环无限空转烧 CPU
+        self.max_verification_wait = 300
+        # 浏览器侧探测连续失败上限（超时/DNS 不通时退避并最终放弃，防止 Chromium 空转）
+        self.max_probe_failures = 10
 
     def _cookie_marshal(self, cookies: dict) -> str:
         """将Cookie字典转换为字符串"""
@@ -631,6 +638,7 @@ class QRLoginManager:
             logger.info(
                 f"扫码登录浏览器侧检测成功（当前页）: {session.session_id}, URL: {current_url}"
             )
+            session.probe_fail_count = 0
             return self._mark_session_success(session, cookie_dict, 'browser', require_complete_cookies=True)
 
         # 服务端上下文里已经有完整登录 Cookie：以 Cookie 为准，不必死等 URL
@@ -638,6 +646,7 @@ class QRLoginManager:
             logger.info(
                 f"扫码登录浏览器侧已持有完整Cookie，按Cookie成功收口: {session.session_id}, URL: {current_url}"
             )
+            session.probe_fail_count = 0
             return self._mark_session_success(session, cookie_dict, 'browser', require_complete_cookies=True)
 
         # Cookie 尚不完整时，再探测 /im —— 部分风控页要跳转后才落全量登录 Cookie
@@ -661,7 +670,11 @@ class QRLoginManager:
                     session, probe_cookie_dict, 'browser', require_complete_cookies=True
                 )
         except Exception as e:
-            logger.debug(f"扫码登录浏览器侧探测未确认成功: {session.session_id}, 错误: {e}")
+            session.probe_fail_count += 1
+            logger.debug(
+                f"扫码登录浏览器侧探测未确认成功（连续失败 {session.probe_fail_count} 次）: "
+                f"{session.session_id}, 错误: {e}"
+            )
         finally:
             if probe_page:
                 try:
@@ -808,10 +821,31 @@ class QRLoginManager:
                 if current_session.status not in {'verification_required', 'scanned', 'waiting', 'processing'}:
                     break
 
+                # 兜底1：验证流程总时长封顶，避免二维码 EXPIRED 后仍无限探测烧 CPU
+                entered = current_session.verification_entered_at
+                if entered and time.time() - entered > self.max_verification_wait:
+                    current_session.status = 'expired'
+                    logger.warning(
+                        f"扫码登录验证流程超过{self.max_verification_wait}s未完成，"
+                        f"关闭验证页并标记过期: {session_id}"
+                    )
+                    break
+
+                # 兜底2：连续探测失败（goofish 超时/DNS 不通）退避并最终放弃
+                if current_session.probe_fail_count >= self.max_probe_failures:
+                    current_session.status = 'expired'
+                    logger.warning(
+                        f"扫码登录浏览器侧探测连续失败 {current_session.probe_fail_count} 次，"
+                        f"放弃验证页并标记过期: {session_id}"
+                    )
+                    break
+
                 if await self._probe_browser_login_success(current_session, page, context):
                     break
 
-                await page.wait_for_timeout(3000)
+                # 探测失败次数越多，间隔越长（3s → 最长 15s），降低网络不通时的 Chromium 空转
+                backoff = min(3000 * (current_session.probe_fail_count + 1), 15000)
+                await page.wait_for_timeout(backoff)
 
         except asyncio.CancelledError:
             logger.info(f"扫码登录验证页面任务已取消: {session_id}")
@@ -1112,6 +1146,8 @@ class QRLoginManager:
                         ):
                             # 账号被风控，需要手机验证
                             session.status = 'verification_required'
+                            if not session.verification_entered_at:
+                                session.verification_entered_at = time.time()
                             iframe_url = (
                                 resp.json()
                                 .get("content", {})
@@ -1138,6 +1174,16 @@ class QRLoginManager:
                     elif qrcode_status == "EXPIRED":
                         # 二维码已过期
                         if session.status == 'verification_required':
+                            entered = session.verification_entered_at or time.time()
+                            session.verification_entered_at = entered
+                            if time.time() - entered > self.max_verification_wait:
+                                # 验证流程已超出兜底时长仍未完成：不再无限等待，避免监控循环空转
+                                session.status = 'expired'
+                                logger.warning(
+                                    f"二维码已过期且验证流程超过{self.max_verification_wait}s未完成，"
+                                    f"标记过期并退出监控: {session_id}"
+                                )
+                                break
                             logger.info(f"二维码已过期，但会话已进入验证流程，继续等待: {session_id}")
                         else:
                             session.status = 'expired'
