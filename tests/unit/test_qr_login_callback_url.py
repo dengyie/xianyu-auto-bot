@@ -345,3 +345,48 @@ def test_apply_external_callback_url_reports_missing_unb():
     assert "unb" in result.get("missing_keys", [])
     assert "unb" in result["message"]
     assert session.status == "verification_required"
+
+
+def test_apply_external_callback_url_fast_fails_iv_or_expired_without_token():
+    """纯 IV/过期页没有 login_token 时必须快速失败，禁止再开 Playwright 空耗。"""
+    manager = QRLoginManager()
+    session = _session(manager)
+
+    result = asyncio.run(
+        manager.apply_external_callback_url(
+            session.session_id,
+            "https://passport.goofish.com/iv/remote/pc/mini_login_check.htm?havana_iv_token=CN-SPLIT-x",
+            source="user_url",
+        )
+    )
+    assert result["success"] is False
+    assert result.get("via") == "fast_fail_no_token"
+    assert "login_token" in result["message"] or "Cookie" in result["message"]
+
+
+def test_encode_verification_url_as_qr_does_not_open_page(tmp_path, monkeypatch):
+    """风控验证二维码必须 encode URL，不能 Playwright 打开令牌页。"""
+    manager = QRLoginManager()
+    session = _session(manager)
+    session.verification_url = (
+        "https://passport.goofish.com/iv/remote/pc/mini_login_check.htm?havana_iv_token=tok-1"
+    )
+
+    saved = {}
+
+    def fake_save(data):
+        saved["bytes"] = data
+        return "static/uploads/images/fake_qr.png"
+
+    def fake_delete(_path):
+        return None
+
+    monkeypatch.setattr("utils.qr_login.image_manager.save_image", fake_save)
+    monkeypatch.setattr("utils.qr_login.image_manager.delete_image", fake_delete)
+
+    ok = manager._encode_verification_url_as_qr(session)
+    assert ok is True
+    assert session.screenshot_path == "static/uploads/images/fake_qr.png"
+    assert session.verification_qr_encoded is True
+    assert saved.get("bytes")  # PNG bytes written
+    assert "闲鱼 APP" in (session.user_hint or "")

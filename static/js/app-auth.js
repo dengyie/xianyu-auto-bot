@@ -1552,16 +1552,16 @@ function showVerificationRequired(data) {
             <strong data-role="verification-message">${escapeHtml(serverMessage || '检测到账号存在风控，系统已在服务端保持原始会话并生成验证二维码')}</strong>
         </div>
         <div class="mb-4">
-            <p class="text-muted mb-3">优先使用手机闲鱼 APP 扫描下方<strong>服务端</strong>二维码完成验证：</p>
+            <p class="text-muted mb-3">请用手机闲鱼 APP 扫描下方验证二维码（勿用普通相机；扫后在 APP 内完成认证）：</p>
             <img src="${safeScreenshotSrc}" alt="闲鱼验证二维码" class="img-fluid rounded border" style="max-width: 360px; width: 100%; height: auto;">
         </div>
         <div class="alert alert-info border-0">
             <i class="bi bi-lightbulb me-2"></i>
             <small>
             <strong>验证步骤：</strong><br>
-            1. 扫描上方二维码并完成验证（人脸落在服务端会话，可自动回调）<br>
-            2. 保持当前弹窗打开，系统会自动继续登录<br>
-            3. 若你已在其它浏览器完成验证：下方粘贴成功后的回调网址
+            1. 手机闲鱼 APP 扫上方二维码并完成认证<br>
+            2. 保持当前弹窗打开，系统会自动检测登录态<br>
+            3. 若未自动成功：下方粘贴<strong>完整 Cookie（必须含 unb）</strong>；仅贴验证链接通常拿不到 unb
             </small>
         </div>
         ${userHandoffPanel}
