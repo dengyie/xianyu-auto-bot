@@ -1559,9 +1559,9 @@ function showVerificationRequired(data) {
             <i class="bi bi-lightbulb me-2"></i>
             <small>
             <strong>验证步骤：</strong><br>
-            1. 手机闲鱼 APP 扫上方二维码并完成认证<br>
-            2. 保持当前弹窗打开，系统会自动检测登录态<br>
-            3. 若未自动成功：下方粘贴<strong>完整 Cookie（必须含 unb）</strong>；仅贴验证链接通常拿不到 unb
+            1. 手机闲鱼 APP 扫上方「服务端验证页」二维码并完成认证<br>
+            2. 保持弹窗打开——成功 Cookie 会落在服务端会话，系统自动收口，一般<strong>不用</strong>粘贴 Cookie<br>
+            3. 若扫后仍无自动成功：粘贴成功后的<strong>回调/跳转网址</strong>（推荐）；完整 Cookie 仅作最后备用
             </small>
         </div>
         ${userHandoffPanel}

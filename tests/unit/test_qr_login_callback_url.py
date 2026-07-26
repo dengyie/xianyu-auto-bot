@@ -364,8 +364,8 @@ def test_apply_external_callback_url_fast_fails_iv_or_expired_without_token():
     assert "login_token" in result["message"] or "Cookie" in result["message"]
 
 
-def test_encode_verification_url_as_qr_does_not_open_page(tmp_path, monkeypatch):
-    """风控验证二维码必须 encode URL，不能 Playwright 打开令牌页。"""
+def test_encode_verification_url_as_qr_is_fallback_only(tmp_path, monkeypatch):
+    """encode URL 仅作 Playwright 失败时的兜底图；主路径应是 keep-alive 打开验证页。"""
     manager = QRLoginManager()
     session = _session(manager)
     session.verification_url = (
@@ -389,4 +389,9 @@ def test_encode_verification_url_as_qr_does_not_open_page(tmp_path, monkeypatch)
     assert session.screenshot_path == "static/uploads/images/fake_qr.png"
     assert session.verification_qr_encoded is True
     assert saved.get("bytes")  # PNG bytes written
-    assert "闲鱼 APP" in (session.user_hint or "")
+    # 主路径必须是 Playwright keep-alive（与 GuDong 一致），encode 只是兜底
+    import inspect
+    launch_src = inspect.getsource(manager._launch_verification_page)
+    assert "page.goto" in launch_src
+    assert "_encode_verification_url_as_qr" in launch_src
+    assert "GuDong" in launch_src or "keep-alive" in launch_src
