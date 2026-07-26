@@ -573,6 +573,14 @@ class QRLoginManager:
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
+                    # 1GB VPS 内存瘦身：多进程站点隔离/后台服务是 Chromium 内存大头，
+                    # 曾把宿主压进 swap 导致整个 Python 进程冻结 4 分半（会话 348f4026）
+                    '--disable-features=IsolateOrigins,site-per-process',
+                    '--renderer-process-limit=2',
+                    '--disable-extensions',
+                    '--disable-background-networking',
+                    '--mute-audio',
+                    '--js-flags=--max-old-space-size=256',
                     '--lang=zh-CN',
                 ],
             )
@@ -764,7 +772,11 @@ class QRLoginManager:
             return False
 
         try:
-            text = await page.evaluate("() => (document.body && document.body.innerText) || ''")
+            # wait_for 封顶：页面无响应时 evaluate 可能长挂，拖死 keep-alive 循环
+            text = await asyncio.wait_for(
+                page.evaluate("() => (document.body && document.body.innerText) || ''"),
+                timeout=5.0,
+            )
         except Exception:
             text = ""
         text = str(text or "")
@@ -811,7 +823,8 @@ class QRLoginManager:
     async def _page_has_scannable_qr(self, page) -> bool:
         """判断验证页是否已渲染出可供手机扫的二维码（canvas/img/二维码容器）。"""
         try:
-            return bool(await page.evaluate(
+            # wait_for 封顶：与 _detect_verification_ended_elsewhere 同理
+            return bool(await asyncio.wait_for(page.evaluate(
                 """() => {
                     const isVisible = (el) => {
                         if (!el) return false;
@@ -850,7 +863,7 @@ class QRLoginManager:
                     }
                     return false;
                 }"""
-            ))
+            ), timeout=5.0))
         except Exception as e:
             logger.debug(f"检测验证页二维码失败: {e}")
             return False
@@ -1248,6 +1261,14 @@ class QRLoginManager:
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
+                    # 1GB VPS 内存瘦身：多进程站点隔离/后台服务是 Chromium 内存大头，
+                    # 曾把宿主压进 swap 导致整个 Python 进程冻结 4 分半（会话 348f4026）
+                    '--disable-features=IsolateOrigins,site-per-process',
+                    '--renderer-process-limit=2',
+                    '--disable-extensions',
+                    '--disable-background-networking',
+                    '--mute-audio',
+                    '--js-flags=--max-old-space-size=256',
                     '--lang=zh-CN',
                 ]
             )
@@ -1379,7 +1400,24 @@ class QRLoginManager:
 
             last_resnapshot = time.time()
             last_cookie_log = 0.0
+            last_loop_tick = time.time()
             while True:
+                # 冻结补偿：1GB VPS 曾因 swap 把进程冻结 4 分半（348f4026），
+                # 恢复后瞬间判 300s 超时。相邻两轮间隔远超正常节奏（~2s+探测）
+                # 即视为冻结，把死掉的时间从超时预算里扣掉。
+                now_tick = time.time()
+                gap = now_tick - last_loop_tick
+                if gap > 30:
+                    frozen = gap - 30
+                    sess_f = self.sessions.get(session_id)
+                    if sess_f and sess_f.verification_entered_at:
+                        sess_f.verification_entered_at += frozen
+                    logger.warning(
+                        f"keep-alive 检测到进程冻结约 {gap:.0f}s（疑似内存/swap 压力），"
+                        f"已顺延验证超时预算: {session_id}"
+                    )
+                last_loop_tick = now_tick
+
                 current_session = self.sessions.get(session_id)
                 if not current_session:
                     break
@@ -1428,9 +1466,9 @@ class QRLoginManager:
                     current_session.status = 'expired'
                     break
 
-                # 周期性重截：无图时更勤（4s），有图 10s；禁止 encode。
+                # 周期性重截：无图时更勤（4s），有图 20s（降频省内存，1GB VPS 曾被截图+swap 压死）；禁止 encode。
                 # 截图用 wait_for 封顶，绝不阻塞 Cookie 探测（a0b72c6d：截图 30s 超时拖死循环）。
-                resnap_interval = 4 if not current_session.screenshot_path else 10
+                resnap_interval = 4 if not current_session.screenshot_path else 20
                 if time.time() - last_resnapshot >= resnap_interval:
                     try:
                         scannable = await self._page_has_scannable_qr(page)
