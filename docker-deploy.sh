@@ -370,6 +370,11 @@ update_deployment() {
         exit 1
     fi
 
+    # 回收上一版镜像：镜像 3.4G，不清理则每次发版都在 1GB VPS 上多堆一份悬空层
+    # （2026-07-26 曾累积 8 个悬空镜像，磁盘 80%）。仅清 dangling，不动 tagged 镜像。
+    print_info "清理旧版悬空镜像..."
+    docker image prune -f 2>/dev/null || print_warning "悬空镜像清理跳过"
+
     print_success "更新完成"
 }
 
