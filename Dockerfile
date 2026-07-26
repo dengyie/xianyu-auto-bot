@@ -141,5 +141,10 @@ RUN chmod +x /app/entrypoint.sh /app/debug-xvfb.sh && \
 
 USER appuser
 
+# 兜底 HOME：compose 的 user: 可指定镜像里不存在的 UID（如生产 1001），
+# 此时 glibc 查不到 home，HOME 会退化成 / 且不可写，slidex 落 ~/.slidex 必失败。
+# 该目录已 chmod 777，任何 UID 都能写。compose 里也显式设了同值。
+ENV HOME=/app/trajectory_history
+
 # 启动命令
 CMD ["/app/entrypoint.sh"]

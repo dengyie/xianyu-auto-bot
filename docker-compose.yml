@@ -33,6 +33,10 @@ services:
       # Development only: mount source with docker-compose.override.yml when needed.
       # - .:/app:rw
     environment:
+      # user: 指定的 UID 在镜像 /etc/passwd 里不存在（镜像只建了 appuser=1000），
+      # glibc 查不到 home 会让 HOME 退化成 /，slidex 写 ~/.slidex 直接 Permission denied，
+      # 滑块验证 100% 失败（2026-07-26）。显式给一个该 UID 可写的 HOME。
+      - HOME=/app/trajectory_history
       # 启用虚拟显示（有头模式）
       - USE_XVFB=true           # 启用 Xvfb 虚拟显示
       - ENABLE_HEADFUL=true     # 启用有头模式

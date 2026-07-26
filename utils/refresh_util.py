@@ -1215,8 +1215,12 @@ class DrissionHandler:
                         if listen_started:
                             try:
                                 # 使用正确的方式获取监听到的请求
+                                # timeout 必须显式给：DrissionPage 的 steps(timeout=None) 是
+                                # `while driver.is_running and listening` 死循环，凑不满 count 永不返回。
+                                # 滑块过完页面就静止了，根本不会再有 10 个 slide 包 —— 之前这里
+                                # 直接把 token 刷新协程挂死（2026-07-26 实测空转 14 分钟）。
                                 packet_count = 0
-                                for packet in self.page.listen.steps(count=10):  # 最多检查10个数据包
+                                for packet in self.page.listen.steps(count=10, timeout=5):  # 最多检查10个数据包，5s 无新包即收
                                     packet_count += 1
                                     if 'slide' in packet.url:
                                         # 获取响应头
