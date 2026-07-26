@@ -1429,9 +1429,10 @@ function showVerificationRequired(data) {
     const screenshotPath = data.screenshot_path || '';
     const verificationUrl = data.verification_url || '';
     const endedElsewhere = !!data.verification_ended_elsewhere;
+    const qrEncoded = !!data.verification_qr_encoded;
     const serverMessage = data.message || '';
     // 结构级 renderKey：不含动态 message，避免轮询时整页重绘清空用户已粘贴内容
-    const structureKey = `${screenshotPath}|${verificationUrl}|${endedElsewhere ? '1' : '0'}`;
+    const structureKey = `${screenshotPath}|${verificationUrl}|${endedElsewhere ? '1' : '0'}|${qrEncoded ? '1' : '0'}`;
     const existingUrlInput = document.getElementById('qrUserCallbackUrlInput');
     const existingCookieInput = document.getElementById('qrUserCookieInput');
     const preservedUrlText = existingUrlInput ? existingUrlInput.value : '';
@@ -1541,6 +1542,24 @@ function showVerificationRequired(data) {
     `;
 
     if (screenshotPath) {
+    const encodedBanner = qrEncoded
+        ? `<div class="alert alert-danger border-0 mb-3">
+            <i class="bi bi-exclamation-triangle me-2"></i>
+            <strong>当前是链接兜底码，不是服务端会话页。</strong>
+            扫它完成的认证<strong>不会</strong>自动登录本系统，还可能烧掉一次性验证令牌。
+            请优先「提交回调网址」，或关闭后重新扫码等待服务端截图。
+           </div>`
+        : '';
+    const scanHint = qrEncoded
+        ? '下方图<strong>不是</strong>服务端会话码；扫它无法自动收口。'
+        : '请用手机闲鱼 APP 扫描下方「服务端验证页」二维码（勿用普通相机；扫后在 APP 内完成认证）：';
+    const steps = qrEncoded
+        ? `1. <strong>不要</strong>指望扫上方兜底码自动登录<br>
+            2. 若你已在手机完成验证：粘贴成功后的<strong>回调/跳转网址</strong><br>
+            3. 或关闭弹窗重新扫码，等待出现「服务端验证页」截图后再扫`
+        : `1. 手机闲鱼 APP 扫上方「服务端验证页」二维码并完成认证<br>
+            2. 保持弹窗打开——成功 Cookie 会落在服务端会话，系统自动收口，一般<strong>不用</strong>粘贴 Cookie<br>
+            3. 若扫后仍无自动成功：粘贴成功后的<strong>回调/跳转网址</strong>（推荐）；完整 Cookie 仅作最后备用`;
     verificationHtml = `
         <div class="text-center">
         <div class="mb-4">
@@ -1549,19 +1568,18 @@ function showVerificationRequired(data) {
         <h5 class="text-warning mb-3">账号需要闲鱼验证</h5>
         <div class="alert alert-warning border-0 mb-4">
             <i class="bi bi-info-circle me-2"></i>
-            <strong data-role="verification-message">${escapeHtml(serverMessage || '检测到账号存在风控，系统已在服务端保持原始会话并生成验证二维码')}</strong>
+            <strong data-role="verification-message">${escapeHtml(serverMessage || (qrEncoded ? '当前为链接兜底码（非服务端会话）' : '检测到账号存在风控，系统已在服务端保持原始会话并生成验证二维码'))}</strong>
         </div>
+        ${encodedBanner}
         <div class="mb-4">
-            <p class="text-muted mb-3">请用手机闲鱼 APP 扫描下方验证二维码（勿用普通相机；扫后在 APP 内完成认证）：</p>
+            <p class="text-muted mb-3">${scanHint}</p>
             <img src="${safeScreenshotSrc}" alt="闲鱼验证二维码" class="img-fluid rounded border" style="max-width: 360px; width: 100%; height: auto;">
         </div>
         <div class="alert alert-info border-0">
             <i class="bi bi-lightbulb me-2"></i>
             <small>
             <strong>验证步骤：</strong><br>
-            1. 手机闲鱼 APP 扫上方「服务端验证页」二维码并完成认证<br>
-            2. 保持弹窗打开——成功 Cookie 会落在服务端会话，系统自动收口，一般<strong>不用</strong>粘贴 Cookie<br>
-            3. 若扫后仍无自动成功：粘贴成功后的<strong>回调/跳转网址</strong>（推荐）；完整 Cookie 仅作最后备用
+            ${steps}
             </small>
         </div>
         ${userHandoffPanel}

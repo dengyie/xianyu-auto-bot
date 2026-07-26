@@ -395,3 +395,90 @@ def test_encode_verification_url_as_qr_is_fallback_only(tmp_path, monkeypatch):
     assert "page.goto" in launch_src
     assert "_encode_verification_url_as_qr" in launch_src
     assert "GuDong" in launch_src or "keep-alive" in launch_src
+    # keep-alive 存活路径禁止「截图失败立刻 encode」；encode 应只在 except 完全失败分支
+    assert "禁止" in launch_src or "铁律" in launch_src or "keep-alive 存活" in launch_src
+    # 文案必须说明扫独立码不会自动登录
+    assert "不会" in (session.user_hint or "") or "兜底" in (session.user_hint or "")
+
+
+def test_probe_browser_login_success_skips_im_without_cookies():
+    """无完整 Cookie 时禁止 goto /im（a0b72c6d：/im 30s 超时拖死 keep-alive）。"""
+    manager = QRLoginManager()
+    session = _session(manager)
+
+    class FakePage:
+        url = "https://passport.goofish.com/iv/verify"
+
+        async def evaluate(self, *_a, **_k):
+            return ""
+
+    class FakeContext:
+        async def cookies(self):
+            return [{"name": "cna", "value": "only-device"}]
+
+        async def new_page(self):
+            raise AssertionError("无完整 Cookie 时不应 new_page 去 /im")
+
+    ok = asyncio.run(
+        manager._probe_browser_login_success(session, FakePage(), FakeContext())
+    )
+    assert ok is False
+    assert session.status == "verification_required"
+
+
+def test_probe_browser_login_success_marks_when_cookies_ready():
+    manager = QRLoginManager()
+    session = _session(manager)
+
+    class FakePage:
+        url = "https://passport.goofish.com/iv/verify"
+
+        async def evaluate(self, *_a, **_k):
+            return ""
+
+    class FakeContext:
+        async def cookies(self):
+            return [
+                {"name": "unb", "value": "u-1"},
+                {"name": "cookie2", "value": "ck-1"},
+                {"name": "sgcookie", "value": "sg-1"},
+            ]
+
+        async def new_page(self):
+            raise AssertionError("已有完整 Cookie 应直接收口，不必 /im")
+
+    ok = asyncio.run(
+        manager._probe_browser_login_success(session, FakePage(), FakeContext())
+    )
+    assert ok is True
+    assert session.status == "success"
+    assert session.unb == "u-1"
+
+
+def test_get_session_status_exposes_verification_qr_encoded():
+    manager = QRLoginManager()
+    session = _session(manager)
+    session.screenshot_path = "static/uploads/images/x.png"
+    session.verification_qr_encoded = True
+    session.user_hint = None
+
+    status = manager.get_session_status(session.session_id)
+    assert status["verification_qr_encoded"] is True
+    assert "兜底" in status["message"] or "不会" in status["message"]
+
+
+def test_launch_source_forbids_encode_on_capture_miss():
+    """launch 源码：截图失败路径不得调用 encode；仅 Playwright 全失败 except 可 encode。"""
+    import inspect
+
+    manager = QRLoginManager()
+    src = inspect.getsource(manager._launch_verification_page)
+    assert "page.goto" in src
+    assert "_capture_verification_screenshot" in src
+    # keep-alive 主路径不得在「截图失败」后立刻 encode（旧 bug）
+    assert "if not session.screenshot_path:\n                self._encode_verification_url_as_qr" not in src
+    assert "if not session.screenshot_path:\n                    self._encode_verification_url_as_qr" not in src
+    # encode 至多出现一次，且必须在「打开失败」分支附近
+    assert src.count("_encode_verification_url_as_qr") == 1
+    idx = src.index("_encode_verification_url_as_qr")
+    assert "打开服务端验证页失败" in src[max(0, idx - 250) : idx + 200]
