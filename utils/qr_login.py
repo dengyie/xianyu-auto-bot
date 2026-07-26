@@ -76,8 +76,13 @@ class QRLoginSession:
         self.pending_login_token = None
         # 是否已为 verification_url 生成过「不消耗令牌」的二维码图
         self.verification_qr_encoded = False
-        # 验证页结束后是否已尝试同 context 导航收割 Cookie（只做一次）
-        self.verification_harvest_attempted = False
+        # 服务端是否已用该 verification_url 打开过 Playwright 页
+        # （一次性 havana_iv_token 已绑定服务端会话，此后禁止再把 URL 交给前端）
+        self.verification_page_opened = False
+        # 验证页结束后同 context 收割 Cookie 的尝试次数/最近一次时间
+        # （同会话扫码成功后 unb 落盘有几秒延迟，单次机会不够）
+        self.verification_harvest_attempts = 0
+        self.last_harvest_at = 0.0
 
     def is_expired(self) -> bool:
         """检查是否过期"""
@@ -117,6 +122,9 @@ class QRLoginManager:
         self.max_verification_wait = 300
         # 浏览器侧探测连续失败上限（超时/DNS 不通时退避并最终放弃，防止 Chromium 空转）
         self.max_probe_failures = 10
+        # 验证结束后同 context 新开页收割 Cookie 的最大次数与最小间隔（unb 落盘有秒级延迟）
+        self.max_harvest_attempts = 3
+        self.harvest_retry_interval = 6.0
 
     def _cookie_marshal(self, cookies: dict) -> str:
         """将Cookie字典转换为字符串"""
@@ -933,35 +941,49 @@ class QRLoginManager:
         page,
         context,
     ) -> bool:
-        """验证页已结束但 Cookie 未齐时，在同一 Playwright context 内导航收割。
+        """验证页已结束但 Cookie 未齐时，在同一 Playwright context 内**新开页**收割。
 
         手机扫的是服务端页时，部分批次 unb/companion 要等跳转 goofish 后才落盘。
-        只尝试一次，短超时，避免像旧 probe 那样 30s 空挂。
+        铁律：
+        - 绝不导航 keep-alive 的验证页本身（ended 若误判，会把用户正在扫的码导航掉）；
+        - 用 context.new_page() 开临时页，用完必关，Cookie 仍落同一 context；
+        - 短超时 + 有限次重试（unb 落盘有秒级延迟，单次机会不够）。
         """
-        if not session or session.verification_harvest_attempted:
+        if not session:
             return False
         if session.status == 'success' and self._has_completed_login_cookies(session.cookies):
             return True
+        if session.verification_harvest_attempts >= self.max_harvest_attempts:
+            return False
+        now = time.time()
+        if now - session.last_harvest_at < self.harvest_retry_interval:
+            return False
 
-        session.verification_harvest_attempted = True
+        session.verification_harvest_attempts += 1
+        session.last_harvest_at = now
+        attempt = session.verification_harvest_attempts
         logger.info(
-            f"验证结束后尝试同会话导航收割 Cookie: {session.session_id}, "
-            f"url={getattr(page, 'url', '')}"
+            f"验证结束后同会话收割 Cookie（第 {attempt}/{self.max_harvest_attempts} 次）: "
+            f"{session.session_id}, keepalive_url={getattr(page, 'url', '')}"
         )
-        try:
-            await page.goto(
-                'https://www.goofish.com/im',
-                wait_until='domcontentloaded',
-                timeout=15000,
-            )
-            await page.wait_for_timeout(1500)
-        except Exception as e:
-            logger.info(
-                f"验证后导航 /im 未完成（继续读 context Cookie）: "
-                f"{session.session_id}, {e}"
-            )
 
+        harvest_page = None
         try:
+            # 关键：新开页，不动用户正在扫的验证页
+            harvest_page = await context.new_page()
+            try:
+                await harvest_page.goto(
+                    'https://www.goofish.com/im',
+                    wait_until='domcontentloaded',
+                    timeout=12000,
+                )
+                await harvest_page.wait_for_timeout(1500)
+            except Exception as e:
+                logger.info(
+                    f"验证后收割页导航未完成（继续读 context Cookie）: "
+                    f"{session.session_id}, {e}"
+                )
+
             cookie_dict = await self._context_cookie_dict(context)
             keys = sorted(cookie_dict.keys())
             logger.info(
@@ -974,6 +996,12 @@ class QRLoginManager:
                 )
         except Exception as e:
             logger.debug(f"验证后收割 Cookie 失败: {session.session_id}, {e}")
+        finally:
+            if harvest_page is not None:
+                try:
+                    await harvest_page.close()
+                except Exception:
+                    pass
         return False
 
     def apply_external_cookies(self, session_id: str, cookies: Any, source: str = 'user') -> Dict[str, Any]:
@@ -1251,6 +1279,8 @@ class QRLoginManager:
                 await context.add_cookies(deduped)
 
             page = await context.new_page()
+            # 令牌自此绑定服务端会话：即使后续 keep-alive 结束，也不得再把 URL 给前端
+            session.verification_page_opened = True
             await page.goto(session.verification_url, wait_until='domcontentloaded', timeout=60000)
 
             # GuDong 风格：先短等再首屏截图，避免等满 scannable 才出图（用户会空等/误扫 encode）
@@ -1442,11 +1472,24 @@ class QRLoginManager:
                         ):
                             break
                     ended = await self._detect_verification_ended_elsewhere(current_session, page)
-                    # 同会话扫码完成后页常变「流程结束」；立刻在同一 context 导航收割
-                    if ended and not self._has_completed_login_cookies(current_session.cookies):
-                        if await self._harvest_login_cookies_after_verification(
-                            current_session, page, context
-                        ):
+                    # 收割触发有两条：①页面文案显示「流程已结束」；
+                    # ②验证页已自行跳出 passport/iv（同会话扫码成功的典型表现），
+                    # 但 context 里 unb 还没落盘 —— 二者都要在同 context 新开页兜一次。
+                    need_harvest = (
+                        ended or self._is_logged_in_url(cur_url)
+                    ) and not self._has_completed_login_cookies(cookie_dict)
+                    if need_harvest:
+                        try:
+                            harvested = await asyncio.wait_for(
+                                self._harvest_login_cookies_after_verification(
+                                    current_session, page, context
+                                ),
+                                timeout=20.0,
+                            )
+                        except Exception as e:
+                            logger.debug(f"验证后收割超时/异常: {session_id}, {e}")
+                            harvested = False
+                        if harvested:
                             break
                 except Exception as e:
                     logger.debug(f"验证页轻量探测异常: {session_id}, {e}")
@@ -1886,17 +1929,18 @@ class QRLoginManager:
         logger.info(f"获取会话状态: {result}")
         # 如果需要验证，返回验证URL
         if session.status == 'verification_required':
-            # keep-alive 存活且非 encode 时：不把 iframeRedirectUrl 暴露给前端，
-            # 防止用户点开另开会话烧掉 havana_iv_token（与 encode 同源毒药）。
-            keep_alive_live = bool(
-                session.verification_task
-                and not session.verification_task.done()
-                and not session.verification_qr_encoded
+            # 一次性 havana_iv_token 一旦被服务端 context 打开就永久绑定该会话，
+            # 之后把 URL 交给前端只会让用户另开会话烧掉令牌（与 encode 同源毒药）。
+            # 因此：服务端页开过 → 永远不再暴露（keep-alive 结束后也不放行）；
+            # 仅 encode 兜底（Playwright 整体挂了、服务端从未持有会话）才给 URL。
+            task = session.verification_task
+            launching = bool(task and not task.done())
+            may_expose_url = bool(session.verification_qr_encoded) or (
+                not session.verification_page_opened and not launching
             )
-            if session.verification_qr_encoded or not keep_alive_live:
-                result['verification_url'] = session.verification_url
-            else:
-                result['verification_url'] = None
+            result['verification_url'] = (
+                session.verification_url if may_expose_url else None
+            )
             result['screenshot_path'] = session.screenshot_path
             result['verification_qr_encoded'] = bool(session.verification_qr_encoded)
             result['verification_ended_elsewhere'] = bool(session.verification_ended_elsewhere)

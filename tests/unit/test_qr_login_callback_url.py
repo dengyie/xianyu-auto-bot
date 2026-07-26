@@ -492,67 +492,134 @@ def test_probe_browser_login_success_no_im_branch_in_source():
     assert "if not cookies_ready" in src or "return False" in src
 
 
-def test_harvest_after_verification_marks_success_from_im_cookies():
-    """验证结束后同 context 导航收割：读到完整 Cookie 即 success。"""
+class _HarvestPage:
+    """keep-alive 的验证页替身：任何 goto 都视为把用户正在扫的码导航掉。"""
+
+    url = "https://passport.goofish.com/iv/done"
+
+    async def goto(self, *_a, **_k):
+        raise AssertionError("收割不得导航 keep-alive 验证页")
+
+    async def wait_for_timeout(self, *_a, **_k):
+        return None
+
+
+class _HarvestContext:
+    def __init__(self, cookies):
+        self._cookies = cookies
+        self.new_pages = 0
+        self.closed_pages = 0
+
+    async def cookies(self):
+        return self._cookies
+
+    async def new_page(self):
+        self.new_pages += 1
+        ctx = self
+
+        class TempPage:
+            url = "about:blank"
+
+            async def goto(self, *_a, **_k):
+                self.url = "https://www.goofish.com/im"
+
+            async def wait_for_timeout(self, *_a, **_k):
+                return None
+
+            async def close(self):
+                ctx.closed_pages += 1
+
+        return TempPage()
+
+
+def test_harvest_uses_new_page_not_keepalive_page():
+    """收割必须走 context.new_page()，绝不导航 keep-alive 验证页，且用完关闭。"""
     manager = QRLoginManager()
     session = _session(manager)
     session.verification_ended_elsewhere = True
 
-    class FakePage:
-        url = "https://passport.goofish.com/iv/done"
-
-        async def goto(self, *a, **k):
-            self.url = "https://www.goofish.com/im"
-
-        async def wait_for_timeout(self, *_a, **_k):
-            return None
-
-    class FakeContext:
-        async def cookies(self):
-            return [
-                {"name": "unb", "value": "u-harvest"},
-                {"name": "cookie2", "value": "ck-h"},
-                {"name": "sgcookie", "value": "sg-h"},
-            ]
+    ctx = _HarvestContext([
+        {"name": "unb", "value": "u-harvest"},
+        {"name": "cookie2", "value": "ck-h"},
+        {"name": "sgcookie", "value": "sg-h"},
+    ])
 
     ok = asyncio.run(
-        manager._harvest_login_cookies_after_verification(session, FakePage(), FakeContext())
+        manager._harvest_login_cookies_after_verification(session, _HarvestPage(), ctx)
     )
     assert ok is True
     assert session.status == "success"
     assert session.unb == "u-harvest"
-    assert session.verification_harvest_attempted is True
-
-    # 第二次不再重复导航
-    class BoomPage:
-        url = "x"
-
-        async def goto(self, *a, **k):
-            raise AssertionError("harvest 只应尝试一次")
-
-    ok2 = asyncio.run(
-        manager._harvest_login_cookies_after_verification(session, BoomPage(), FakeContext())
-    )
-    assert ok2 is False or session.status == "success"
+    assert ctx.new_pages == 1
+    assert ctx.closed_pages == 1
 
 
-def test_get_session_status_hides_verification_url_while_keepalive():
-    """keep-alive 存活且非 encode 时不向前端暴露 iframeRedirectUrl。"""
+def test_harvest_retries_until_cap_then_stops():
+    """unb 落盘有延迟：收割要可重试，但受 max_harvest_attempts 封顶。"""
+    manager = QRLoginManager()
+    manager.harvest_retry_interval = 0.0  # 测试里不等退避
+    session = _session(manager)
+    ctx = _HarvestContext([{"name": "cna", "value": "x"}])  # 永远没有 unb
+
+    for _ in range(manager.max_harvest_attempts):
+        assert asyncio.run(
+            manager._harvest_login_cookies_after_verification(session, _HarvestPage(), ctx)
+        ) is False
+    assert session.verification_harvest_attempts == manager.max_harvest_attempts
+    assert ctx.new_pages == manager.max_harvest_attempts
+
+    # 超过上限后不再开新页
+    assert asyncio.run(
+        manager._harvest_login_cookies_after_verification(session, _HarvestPage(), ctx)
+    ) is False
+    assert ctx.new_pages == manager.max_harvest_attempts
+
+
+def test_harvest_respects_retry_interval():
+    """两次收割之间必须有退避，避免 2s 轮询里连开新页。"""
+    manager = QRLoginManager()
+    session = _session(manager)
+    ctx = _HarvestContext([{"name": "cna", "value": "x"}])
+
+    assert asyncio.run(
+        manager._harvest_login_cookies_after_verification(session, _HarvestPage(), ctx)
+    ) is False
+    assert ctx.new_pages == 1
+    # 紧接着再来一次：被 harvest_retry_interval 挡住
+    assert asyncio.run(
+        manager._harvest_login_cookies_after_verification(session, _HarvestPage(), ctx)
+    ) is False
+    assert ctx.new_pages == 1
+
+
+def test_get_session_status_hides_verification_url_once_page_opened():
+    """服务端打开过验证页 → 令牌已绑定服务端会话，永不再暴露 URL 给前端。"""
     manager = QRLoginManager()
     session = _session(manager)
     session.verification_url = "https://passport.goofish.com/iv/remote/pc/mini_login_check.htm?havana_iv_token=tok"
     session.screenshot_path = "static/uploads/images/real.png"
     session.verification_qr_encoded = False
+    session.verification_page_opened = True
 
     class AliveTask:
         def done(self):
             return False
+
+    class DeadTask:
+        def done(self):
+            return True
 
     session.verification_task = AliveTask()
     status = manager.get_session_status(session.session_id)
     assert status["status"] == "verification_required"
     assert status.get("verification_url") in (None, "")
     assert status["screenshot_path"] == session.screenshot_path
+
+    # keep-alive 结束（task 置空/done）后仍不得放行——令牌已被服务端会话绑定
+    session.verification_task = DeadTask()
+    assert manager.get_session_status(session.session_id).get("verification_url") in (None, "")
+    session.verification_task = None
+    assert manager.get_session_status(session.session_id).get("verification_url") in (None, "")
 
     # encode 兜底时可以暴露（前端要警告）
     session.verification_qr_encoded = True
@@ -561,11 +628,27 @@ def test_get_session_status_hides_verification_url_while_keepalive():
 
 
 def test_launch_source_uses_nonblocking_capture_and_harvest():
-    """launch 循环必须：wait_for 包截图 + 验证结束后 harvest。"""
+    """launch 循环必须：wait_for 包截图 + 收割（含超时封顶）+ 登录态 URL 也触发收割。"""
     import inspect
     manager = QRLoginManager()
     src = inspect.getsource(manager._launch_verification_page)
     assert "asyncio.wait_for" in src
     assert "_harvest_login_cookies_after_verification" in src
     assert "timeout_ms=4000" in src or "timeout_ms=4" in src
+    # ended 误判可能永不发生：URL 已跳出 passport 也必须触发收割
+    assert "_is_logged_in_url(cur_url)" in src
+    # 收割本身不得阻塞 keep-alive 循环
+    assert "timeout=20.0" in src
+    # 令牌绑定标记必须在打开验证页时落下
+    assert "verification_page_opened = True" in src
+
+
+def test_harvest_source_never_navigates_keepalive_page():
+    """铁律回归：收割方法源码不得对 keep-alive 的 page 调 goto。"""
+    import inspect
+    manager = QRLoginManager()
+    src = inspect.getsource(manager._harvest_login_cookies_after_verification)
+    assert "context.new_page()" in src
+    assert "await page.goto" not in src
+    assert "harvest_page.close()" in src
 
