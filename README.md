@@ -155,11 +155,33 @@ xianyu-auto-bot/
 |------|--------|------|
 | `ADMIN_PASSWORD` | 建议显式设置 | 首次初始化管理员密码；未设置时生成随机密码并仅写入启动日志 |
 | `XIANYU_REPLY_API_KEY` | 使用自动回复回调时必需 | 保护 `/xianyu/reply`，内部调用通过 `X-Internal-API-Key` 发送 |
-| `CAPTCHA_CONTROL_API_KEY` | 使用远程验证时必需 | 保护 `/api/captcha` 的 HTTP 和 WebSocket 控制入口 |
+| `CAPTCHA_CONTROL_API_KEY` | 使用远程验证时必需 | 保护 `/api/captcha` 管理入口；人工面板也可用会话级 `?token=` |
 | `SEND_MESSAGE_API_KEY` | 使用消息发送 API 时必需 | 保护 `/send-message` |
 | `SECRET_ENCRYPTION_KEY` | 生产建议固定 | 加密 Cookie、密码和代理凭据；更换会导致旧数据不可解密 |
 
 可用 `python -c "import secrets; print(secrets.token_urlsafe(32))"` 生成独立密钥。不同用途不得复用同一密钥。
+
+### Cookie 登录与滑块（推荐大众路径）
+
+开源默认路径对齐 GuDong 思路：**Cookie 登录为主**，自动滑块（严格要求拿到 `x5sec`）失败后再人工收口，而不是默认暴露 Chrome/VNC。
+
+1. **导入完整 Cookie**（含 `unb` / `cookie2` 等）到管理后台。
+2. **自动滑块链路**：可选远端 HTTP solver → 本地 strict 滑块 → Drission 兜底；**视觉通过但无 `x5sec` 仍算失败**。
+3. **人工面板**：自动仍失败时，服务会创建 `/api/captcha/control/{session_id}?token=...` 并通知；浏览器打开该 URL 即可滑动（无需把全局 `CAPTCHA_CONTROL_API_KEY` 塞进 header）。
+4. 人工完成后同样强制校验 `x5sec`，通过才合并 Cookie 并恢复账号。
+
+相关环境变量（详见 `.env.example`）：
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `API_PORT` | `8090` | 面板 URL 端口 |
+| `SERVER_HOST` / `PUBLIC_IP` | 自动探测 | 面板可达主机 |
+| `CAPTCHA_PUBLIC_BASE_URL` | 空 | 反代完整前缀时优先使用 |
+| `CAPTCHA_CONTROL_API_KEY` | 空 | 管理接口必需；会话 token 可打开单会话面板 |
+| `XY_SLIDER_HUMAN_FALLBACK` | `true` | 设为 `0/false` 可关闭人工兜底 |
+| `SLIDEX_REMOTE_TIMEOUT` | `180` | 人工等待超时（秒） |
+
+部署仍走 **Actions → GHCR → VPS `./docker-deploy.sh update`**，不要在 VPS 上 `compose build`。不要默认公网暴露 Chrome/noVNC。
 
 ### 健康检查与部署限制
 

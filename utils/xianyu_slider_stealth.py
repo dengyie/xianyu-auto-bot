@@ -12249,23 +12249,11 @@ class XianyuSliderStealth:
             if cookies:
                 logger.info(f"【{self.pure_user_id}】成功获取 {len(cookies)} 个Cookie")
                 logger.info(f"【{self.pure_user_id}】Cookie名称列表: {list(cookies.keys())}")
-                
-                # 打印完整的Cookie
-                logger.info(f"【{self.pure_user_id}】完整Cookie内容:")
-                for name, value in cookies.items():
-                    # 对长cookie值进行截断显示
-                    if len(value) > 50:
-                        display_value = f"{value[:25]}...{value[-25:]}"
-                    else:
-                        display_value = value
-                    logger.info(f"【{self.pure_user_id}】  {name} = {display_value}")
-                
-                # 将cookie转换为字符串格式
-                cookie_str = '; '.join([f"{k}={v}" for k, v in cookies.items()])
-                logger.info(f"【{self.pure_user_id}】Cookie字符串格式: {cookie_str[:200]}..." if len(cookie_str) > 200 else f"【{self.pure_user_id}】Cookie字符串格式: {cookie_str}")
-                
+                logger.info(
+                    f"【{self.pure_user_id}】Cookie摘要: keys={list(cookies.keys())}, "
+                    f"has_unb={'unb' in cookies}, count={len(cookies)}"
+                )
                 logger.info(f"【{self.pure_user_id}】登录成功，准备关闭浏览器")
-                
                 return cookies
             else:
                 logger.error(f"【{self.pure_user_id}】未获取到任何Cookie")

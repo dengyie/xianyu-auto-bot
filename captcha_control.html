@@ -342,6 +342,15 @@
                 document.body.style.padding = '0';
             }
 
+            // 从 URL ?token= 预填 session token（人工通知链接大众路径）
+            try {
+                const params = new URLSearchParams(window.location.search || '');
+                const urlToken = (params.get('token') || '').trim();
+                if (urlToken && !window.INITIAL_SESSION_TOKEN) {
+                    window.INITIAL_SESSION_TOKEN = urlToken;
+                }
+            } catch (e) {}
+
             // 检查是否有预设的会话ID
             if (window.INITIAL_SESSION_ID) {
                 document.getElementById('sessionIdInput').value = window.INITIAL_SESSION_ID;
@@ -390,9 +399,17 @@
             log(`正在连接会话: ${sessionId}`, 'info');
 
             try {
-                // 建立 WebSocket 连接
-                const wsUrl = `ws://${window.location.host}/api/captcha/ws/${sessionId}`;
-                log(`WebSocket URL: ${wsUrl}`, 'info');
+                // 建立 WebSocket 连接（带 session token，浏览器无法自定义 header）
+                const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+                const sessionToken = (
+                    window.INITIAL_SESSION_TOKEN
+                    || (new URLSearchParams(window.location.search || '').get('token') || '')
+                ).trim();
+                let wsUrl = `${scheme}://${window.location.host}/api/captcha/ws/${encodeURIComponent(sessionId)}`;
+                if (sessionToken) {
+                    wsUrl += `?token=${encodeURIComponent(sessionToken)}`;
+                }
+                log(`WebSocket URL: ${wsUrl.split('?')[0]}?token=***`, 'info');
                 
                 ws = new WebSocket(wsUrl);
 

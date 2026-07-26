@@ -7320,6 +7320,145 @@ class XianyuLive:
             logger.error(f"【{self.cookie_id}】检查是否需要滑块验证时出错: {self._safe_str(e)}")
             return False
 
+    async def _run_human_captcha_fallback(
+        self,
+        *,
+        verification_url: str,
+        prior_message: str = "",
+    ) -> str | None:
+        """自动滑块失败后统一走 /api/captcha 人工面板，成功则合并 cookie。"""
+        try:
+            from utils.slider_human_fallback import run_human_captcha_session
+        except Exception as import_e:
+            logger.error(f"[{self.cookie_id}] human captcha helper import failed: {import_e}")
+            log_captcha_event(self.cookie_id, "slider_human_import_fail", False, str(import_e))
+            return None
+
+        control_url_holder: dict = {"url": "", "session_id": ""}
+
+        async def _notify(control_url: str, session_id: str) -> None:
+            control_url_holder["url"] = control_url
+            control_url_holder["session_id"] = session_id
+            self.last_token_refresh_status = "verification_pending_manual"
+            self.last_token_refresh_error_message = (
+                f"自动滑块失败，等待人工 captcha。session={session_id}"
+            )
+            try:
+                await self.send_token_refresh_notification(
+                    error_message=(
+                        f"自动滑块验证失败，请打开人工验证面板完成滑块。"
+                        f" 原因: {prior_message or 'unknown'}"
+                    ),
+                    notification_type="captcha_manual_required",
+                    verification_url=control_url,
+                    verification_type="slider_captcha",
+                )
+            except Exception as notify_e:
+                logger.warning(
+                    f"[{self.cookie_id}] human captcha notification failed: {self._safe_str(notify_e)}"
+                )
+
+        try:
+            human_result = await run_human_captcha_session(
+                cookie_id=self.cookie_id,
+                cookies_str=self.cookies_str,
+                verification_url=verification_url,
+                headless=True,
+                proxy=getattr(self, "proxy_config", None),
+                notification_callback=_notify,
+            )
+        except Exception as human_e:
+            logger.error(f"[{self.cookie_id}] human captcha fallback exception: {self._safe_str(human_e)}")
+            log_captcha_event(
+                self.cookie_id,
+                "slider_human_exception",
+                False,
+                self._safe_str(human_e)[:120],
+            )
+            return None
+
+        self.last_slider_captcha_engine = getattr(human_result, "engine", "human_captcha")
+        self.last_slider_result_message = getattr(human_result, "message", None)
+
+        if not (human_result.success and human_result.cookies):
+            logger.error(
+                f"[{self.cookie_id}] human captcha failed: {getattr(human_result, 'message', None)}"
+            )
+            log_captcha_event(
+                self.cookie_id,
+                "slider_human_fail",
+                False,
+                getattr(human_result, "message", None) or "human captcha failed",
+            )
+            # 超时/失败：保持 verification_pending_manual，便于前端展示控制 URL
+            if control_url_holder.get("url"):
+                self.last_token_refresh_status = "verification_pending_manual"
+                self.last_token_refresh_error_message = (
+                    getattr(human_result, "message", None) or "human captcha failed"
+                )
+            return None
+
+        cookies = human_result.cookies
+        current_cookies_dict = trans_cookies(self.cookies_str)
+        x5sec_cookies = dict(human_result.x5_cookies or {})
+        merge_result = self.protected_merge_cookie_dicts(current_cookies_dict, cookies)
+        updated_cookies = merge_result["merged_cookies_dict"]
+        updated_fields = merge_result["updated_fields"]
+        changed_fields = merge_result["changed_fields"]
+        new_fields = merge_result["new_fields"]
+        preserved_protected_fields = merge_result["preserved_protected_fields"]
+        missing_required_fields = merge_result["missing_required_fields"]
+        cookies_str = "; ".join([f"{k}={v}" for k, v in updated_cookies.items()])
+
+        self._log_cookie_merge_summary(
+            updated_cookies,
+            updated_fields,
+            changed_fields,
+            new_fields,
+            context="human captcha cookie merge",
+            preserved_protected_fields=preserved_protected_fields,
+        )
+        if missing_required_fields:
+            logger.error(f"[{self.cookie_id}] cookie missing required fields after human captcha")
+            log_captcha_event(
+                self.cookie_id,
+                "slider_human_missing_fields",
+                False,
+                f"missing={missing_required_fields}",
+            )
+            return None
+
+        try:
+            old_cookies_str = self.cookies_str
+            old_cookies_dict = self.cookies.copy()
+            self._set_runtime_cookie_state(
+                cookies_str=cookies_str,
+                cookies_dict=updated_cookies,
+                source="slider_human_success",
+            )
+            await self.update_config_cookies()
+            self._mark_slider_success_recovery(cookies_str)
+            self._mark_pending_slider_success_notice("token_refresh")
+            XianyuLive.clear_password_login_failure_backoff(self.cookie_id)
+            self.last_token_refresh_status = "slider_human_success"
+            self.last_token_refresh_error_message = ""
+            x5_keys = list(x5sec_cookies.keys()) if x5sec_cookies else []
+            log_captcha_event(
+                self.cookie_id,
+                "slider_human_success",
+                True,
+                f"cookies: {len(current_cookies_dict)}->{len(updated_cookies)}, x5_keys={x5_keys}",
+            )
+            return cookies_str
+        except Exception as update_e:
+            logger.error(f"[{self.cookie_id}] human captcha cookie update failed: {self._safe_str(update_e)}")
+            self._set_runtime_cookie_state(
+                cookies_str=old_cookies_str,
+                cookies_dict=old_cookies_dict,
+                source="slider_human_success_rollback",
+            )
+            return None
+
     async def _handle_captcha_verification(self, res_json: dict) -> str:
         """处理滑块验证，返回新的cookies字符串"""
         try:
@@ -7430,12 +7569,12 @@ class XianyuLive:
                         self._mark_slider_success_recovery(cookies_str)
                         self._mark_pending_slider_success_notice("token_refresh")
                         XianyuLive.clear_password_login_failure_backoff(self.cookie_id)
-                        x5_str = "; ".join([f"{k}={v}" for k, v in x5sec_cookies.items()]) if x5sec_cookies else "none"
+                        x5_keys = list(x5sec_cookies.keys()) if x5sec_cookies else []
                         log_captcha_event(
                             self.cookie_id,
                             "slider_success_v2",
                             True,
-                            f"engine={strict_result.engine}, cookies: {len(current_cookies_dict)}->{len(updated_cookies)}, x5: {x5_str}",
+                            f"engine={strict_result.engine}, cookies: {len(current_cookies_dict)}->{len(updated_cookies)}, x5_keys={x5_keys}",
                         )
                     except Exception as update_e:
                         logger.error(f"[{self.cookie_id}] cookie update failed: {self._safe_str(update_e)}")
@@ -7460,6 +7599,14 @@ class XianyuLive:
                     False,
                     strict_result.message or "solve returned False",
                 )
+
+                # 自动/远程/Drission 全失败后：统一收口到 /api/captcha 人工面板（强制 x5sec）
+                human_cookies = await self._run_human_captcha_fallback(
+                    verification_url=verification_url,
+                    prior_message=strict_result.message or "solve returned False",
+                )
+                if human_cookies:
+                    return human_cookies
                 return None
             except ImportError as import_e:
                 logger.error(f"[{self.cookie_id}] SliderSolver import failed: {import_e}")
@@ -7967,18 +8114,22 @@ class XianyuLive:
             
             if result:
                 logger.info(f"【{self.cookie_id}】密码登录成功，获取到Cookie")
-                logger.info(f"【{self.cookie_id}】Cookie内容: {result}")
+                result_keys = list(result.keys()) if isinstance(result, dict) else []
+                has_unb = any(str(k).lower() == 'unb' for k in result_keys)
+                logger.info(
+                    f"【{self.cookie_id}】密码登录Cookie摘要: "
+                    f"count={len(result_keys)} keys={result_keys} has_unb={has_unb}"
+                )
                 XianyuLive.clear_password_login_failure_backoff(self.cookie_id)
                 
-                # 打印密码登录获取的Cookie字段详情
-                logger.info(f"【{self.cookie_id}】========== 密码登录Cookie字段详情 ==========")
-                logger.info(f"【{self.cookie_id}】Cookie字段数: {len(result)}")
-                logger.info(f"【{self.cookie_id}】Cookie字段列表:")
-                for i, (key, value) in enumerate(result.items(), 1):
-                    if len(str(value)) > 50:
-                        logger.info(f"【{self.cookie_id}】  {i:2d}. {key}: {str(value)[:30]}...{str(value)[-20:]} (长度: {len(str(value))})")
-                    else:
-                        logger.info(f"【{self.cookie_id}】  {i:2d}. {key}: {value}")
+                # 仅打印字段名与长度，禁止值
+                logger.info(f"【{self.cookie_id}】========== 密码登录Cookie字段摘要 ==========")
+                logger.info(f"【{self.cookie_id}】Cookie字段数: {len(result_keys)}")
+                for i, key in enumerate(result_keys, 1):
+                    val = result.get(key) if isinstance(result, dict) else None
+                    logger.info(
+                        f"【{self.cookie_id}】  {i:2d}. {key}: len={len(str(val or ''))}"
+                    )
                 
                 # 检查关键字段
                 important_keys = ['unb', '_m_h5_tk', '_m_h5_tk_enc', 'cookie2', 't', 'sgcookie', 'cna']
@@ -13510,10 +13661,13 @@ class XianyuLive:
             await context.add_cookies(cookies)
             logger.info(f"【{target_cookie_id}】已设置 {len(cookies)} 个扫码Cookie到浏览器")
 
-            # 打印设置的扫码Cookie详情
-            logger.info(f"【{target_cookie_id}】=== 设置到浏览器的扫码Cookie ===")
-            for i, cookie in enumerate(cookies, 1):
-                logger.info(f"【{target_cookie_id}】{i:2d}. {cookie['name']}: {cookie['value'][:50]}{'...' if len(cookie['value']) > 50 else ''}")
+            # 打印设置的扫码Cookie摘要（仅键名 + has_unb，禁止值）
+            cookie_names = [c.get('name', '') for c in cookies]
+            has_unb = any(str(n).lower() == 'unb' for n in cookie_names)
+            logger.info(
+                f"【{target_cookie_id}】=== 设置到浏览器的扫码Cookie摘要 === "
+                f"count={len(cookies)} keys={cookie_names} has_unb={has_unb}"
+            )
 
             # 创建页面
             page = await context.new_page()
@@ -13633,15 +13787,17 @@ class XianyuLive:
 
             logger.info(f"【{target_cookie_id}】真实Cookie已获取，包含 {len(real_cookies_dict)} 个字段")
             
-            # 打印扫码登录获取的真实Cookie字段详情
-            logger.info(f"【{target_cookie_id}】========== 扫码登录真实Cookie字段详情 ==========")
-            logger.info(f"【{target_cookie_id}】Cookie字段数: {len(real_cookies_dict)}")
-            logger.info(f"【{target_cookie_id}】Cookie字段列表:")
-            for i, (key, value) in enumerate(real_cookies_dict.items(), 1):
-                if len(str(value)) > 50:
-                    logger.info(f"【{target_cookie_id}】  {i:2d}. {key}: {str(value)[:30]}...{str(value)[-20:]} (长度: {len(str(value))})")
-                else:
-                    logger.info(f"【{target_cookie_id}】  {i:2d}. {key}: {value}")
+            # 打印扫码登录真实Cookie摘要（仅键名/长度/has_unb）
+            keys = list(real_cookies_dict.keys())
+            has_unb = any(str(k).lower() == 'unb' for k in keys)
+            logger.info(f"【{target_cookie_id}】========== 扫码登录真实Cookie摘要 ==========")
+            logger.info(
+                f"【{target_cookie_id}】count={len(keys)} keys={keys} has_unb={has_unb}"
+            )
+            for i, key in enumerate(keys, 1):
+                logger.info(
+                    f"【{target_cookie_id}】  {i:2d}. {key}: len={len(str(real_cookies_dict.get(key) or ''))}"
+                )
             
             # 检查关键字段
             important_keys = ['unb', '_m_h5_tk', '_m_h5_tk_enc', 'cookie2', 't', 'sgcookie', 'cna']
@@ -13654,20 +13810,9 @@ class XianyuLive:
                     logger.info(f"【{target_cookie_id}】  ❌ {key}: 缺失")
             logger.info(f"【{target_cookie_id}】==========================================")
 
-            # 打印完整的真实Cookie内容
             logger.info(f"【{target_cookie_id}】=== 真实Cookie摘要 ===")
             logger.info(f"【{target_cookie_id}】Cookie字符串长度: {len(real_cookies_str)}")
             logger.info(f"【{target_cookie_id}】Cookie摘要: {self._summarize_cookie_string(real_cookies_str)}")
-
-            # 打印所有Cookie字段的详细信息
-            logger.info(f"【{target_cookie_id}】=== Cookie字段详细信息 ===")
-            for i, (name, value) in enumerate(real_cookies_dict.items(), 1):
-                # 对于长值，显示前后部分
-                if len(value) > 50:
-                    display_value = f"{value[:20]}...{value[-20:]}"
-                else:
-                    display_value = value
-                logger.info(f"【{target_cookie_id}】{i:2d}. {name}: {display_value}")
 
             # 打印原始扫码Cookie对比
             logger.info(f"【{target_cookie_id}】=== 扫码Cookie对比 ===")
@@ -14321,21 +14466,16 @@ class XianyuLive:
             # 打印完整的更新后Cookie（可选择性启用）
             logger.info(f"【{self.cookie_id}】更新后的Cookie摘要: {self._summarize_cookie_string(self.cookies_str)}")
 
-            # 打印主要的Cookie字段详情
+            # 打印主要的Cookie字段摘要（键名 + 长度 + 变更标记，禁止值）
             important_cookies = ['_m_h5_tk', '_m_h5_tk_enc', 'cookie2', 't', 'sgcookie', 'unb', 'uc1', 'uc3', 'uc4']
-            logger.info(f"【{self.cookie_id}】重要Cookie字段详情:")
+            logger.info(f"【{self.cookie_id}】重要Cookie字段摘要:")
             for cookie_name in important_cookies:
                 if cookie_name in new_cookies_dict:
                     cookie_value = new_cookies_dict[cookie_name]
-                    # 对于敏感信息，只显示前后几位
-                    if len(cookie_value) > 20:
-                        display_value = f"{cookie_value[:8]}...{cookie_value[-8:]}"
-                    else:
-                        display_value = cookie_value
-
-                    # 标记是否发生了变化
                     change_mark = " [已变化]" if cookie_name in changed_cookies else " [新增]" if cookie_name in new_cookies else ""
-                    logger.info(f"【{self.cookie_id}】  {cookie_name}: {display_value}{change_mark}")
+                    logger.info(
+                        f"【{self.cookie_id}】  {cookie_name}: len={len(str(cookie_value or ''))}{change_mark}"
+                    )
 
             # 更新数据库中的Cookie
             await self.update_config_cookies()
