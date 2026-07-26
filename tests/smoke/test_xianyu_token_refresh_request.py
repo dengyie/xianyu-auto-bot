@@ -198,6 +198,18 @@ class TestXianyuTokenRefreshRequest:
             assert kwargs.get("engine") == "playwright"
             return orchestrator_result
 
+        human_calls = []
+
+        async def fake_human_fallback(*, verification_url, prior_message=""):
+            # 本用例只校验编排层接线；人工兜底另测，禁止在 CI 拉真浏览器。
+            human_calls.append(
+                {
+                    "verification_url": verification_url,
+                    "prior_message": prior_message,
+                }
+            )
+            return None
+
         with mock.patch("XianyuAutoAsync.db_manager.get_cookie_details", return_value={}), \
              mock.patch("XianyuAutoAsync.log_captcha_event"), \
              mock.patch.object(
@@ -208,6 +220,11 @@ class TestXianyuTokenRefreshRequest:
              mock.patch(
                  "utils.slider_orchestrator.run_slider_async_with_fallback",
                  side_effect=fake_orchestrator,
+             ), \
+             mock.patch.object(
+                 live,
+                 "_run_human_captcha_fallback",
+                 side_effect=fake_human_fallback,
              ):
             result = await live._handle_captcha_verification(
                 {"data": {"url": "https://example.com/punish?action=captcha"}}
@@ -218,6 +235,9 @@ class TestXianyuTokenRefreshRequest:
         assert created_sliders[0].cookie_id == "token_refresh_captcha_scene_test"
         assert live.last_slider_captcha_engine == "playwright"
         assert "mocked primary failure" in (live.last_slider_result_message or "")
+        assert len(human_calls) == 1
+        assert "punish" in human_calls[0]["verification_url"]
+        assert "mocked primary failure" in human_calls[0]["prior_message"]
 
     @pytest.mark.asyncio
     async def test_handle_captcha_verification_merges_strict_success_cookies(self):

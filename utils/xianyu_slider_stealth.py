@@ -3380,17 +3380,20 @@ class XianyuSliderStealth:
                 # 单独记录x5相关cookie，便于排查风控链路
                 x5_cookies = {}
 
-                # 筛选出x5相关的cookies（包括x5sec, x5step等）
+                # 筛选出x5相关的cookies（包括x5sec, x5step等）；日志只记 key/len，不记 value
                 for cookie_name, cookie_value in new_cookies.items():
                     cookie_name_lower = cookie_name.lower()
                     if cookie_name_lower.startswith('x5') or 'x5sec' in cookie_name_lower:
                         x5_cookies[cookie_name] = cookie_value
-                        logger.info(f"【{self.pure_user_id}】x5相关cookie已获取: {cookie_name} = {cookie_value}")
+                        logger.info(
+                            f"【{self.pure_user_id}】x5相关cookie已获取: {cookie_name} "
+                            f"(len={len(str(cookie_value or ''))})"
+                        )
 
                 logger.info(f"【{self.pure_user_id}】找到{len(x5_cookies)}个x5相关cookies: {list(x5_cookies.keys())}")
 
                 if x5_cookies:
-                    logger.info(f"【{self.pure_user_id}】返回完整cookie集合，并保留x5相关cookie日志: {list(x5_cookies.keys())}")
+                    logger.info(f"【{self.pure_user_id}】返回完整cookie集合，x5_keys={list(x5_cookies.keys())}")
                 else:
                     logger.warning(f"【{self.pure_user_id}】未找到x5相关cookie")
 
