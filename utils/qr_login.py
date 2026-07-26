@@ -76,6 +76,8 @@ class QRLoginSession:
         self.pending_login_token = None
         # 是否已为 verification_url 生成过「不消耗令牌」的二维码图
         self.verification_qr_encoded = False
+        # 验证页结束后是否已尝试同 context 导航收割 Cookie（只做一次）
+        self.verification_harvest_attempted = False
 
     def is_expired(self) -> bool:
         """检查是否过期"""
@@ -788,9 +790,9 @@ class QRLoginManager:
             if not session.verification_ended_elsewhere:
                 session.verification_ended_elsewhere = True
                 session.user_hint = (
-                    "服务端验证页显示流程已结束：说明人脸多半已在你的手机/浏览器完成。"
-                    "请把验证成功后的回调/跳转网址粘贴回来（推荐），"
-                    "或粘贴成功侧完整 Cookie，以你的成功为准完成登录。"
+                    "服务端验证页显示流程已结束。若你扫的是服务端截图码，"
+                    "系统正在同会话收割登录 Cookie，请保持弹窗等待自动收口；"
+                    "仅当长时间无结果时再粘贴回调网址。"
                 )
                 logger.warning(
                     f"扫码登录验证页已结束（疑似用户侧完成）: {session.session_id}, URL: {current_url}"
@@ -851,11 +853,11 @@ class QRLoginManager:
         page,
         *,
         full_page: bool = False,
-        timeout_ms: int = 10000,
+        timeout_ms: int = 5000,
     ) -> bool:
         """截取验证页并写入 session.screenshot_path，供前端展示给手机扫。
 
-        默认 viewport 截图 + 短超时：full_page 在慢机器上易 30s 超时，导致错误地走 encode 兜底。
+        默认 viewport 截图 + 短超时：full_page/长超时会卡住 keep-alive 循环，延误 Cookie 探测。
         成功截到真页面后清除 verification_qr_encoded，避免前端仍当「链接码」展示。
         """
         try:
@@ -863,7 +865,19 @@ class QRLoginManager:
                 full_page=full_page,
                 type='png',
                 timeout=timeout_ms,
+                animations='disabled',
             )
+        except TypeError:
+            # 旧版 Playwright 无 animations 参数
+            try:
+                screenshot_bytes = await page.screenshot(
+                    full_page=full_page,
+                    type='png',
+                    timeout=timeout_ms,
+                )
+            except Exception as e:
+                logger.warning(f"截取验证页失败: {session.session_id}, {e}")
+                return False
         except Exception as e:
             logger.warning(f"截取验证页失败: {session.session_id}, {e}")
             return False
@@ -911,6 +925,55 @@ class QRLoginManager:
             return self._mark_session_success(session, cookie_dict, 'browser', require_complete_cookies=True)
 
         # GuDong: if not cookies_ready: return False —— 禁止无 Cookie 时 goto /im
+        return False
+
+    async def _harvest_login_cookies_after_verification(
+        self,
+        session: QRLoginSession,
+        page,
+        context,
+    ) -> bool:
+        """验证页已结束但 Cookie 未齐时，在同一 Playwright context 内导航收割。
+
+        手机扫的是服务端页时，部分批次 unb/companion 要等跳转 goofish 后才落盘。
+        只尝试一次，短超时，避免像旧 probe 那样 30s 空挂。
+        """
+        if not session or session.verification_harvest_attempted:
+            return False
+        if session.status == 'success' and self._has_completed_login_cookies(session.cookies):
+            return True
+
+        session.verification_harvest_attempted = True
+        logger.info(
+            f"验证结束后尝试同会话导航收割 Cookie: {session.session_id}, "
+            f"url={getattr(page, 'url', '')}"
+        )
+        try:
+            await page.goto(
+                'https://www.goofish.com/im',
+                wait_until='domcontentloaded',
+                timeout=15000,
+            )
+            await page.wait_for_timeout(1500)
+        except Exception as e:
+            logger.info(
+                f"验证后导航 /im 未完成（继续读 context Cookie）: "
+                f"{session.session_id}, {e}"
+            )
+
+        try:
+            cookie_dict = await self._context_cookie_dict(context)
+            keys = sorted(cookie_dict.keys())
+            logger.info(
+                f"验证后收割 cookie keys: {session.session_id}, "
+                f"n={len(keys)}, has_unb={'unb' in cookie_dict}"
+            )
+            if self._has_completed_login_cookies(cookie_dict):
+                return self._mark_session_success(
+                    session, cookie_dict, 'browser', require_complete_cookies=True
+                )
+        except Exception as e:
+            logger.debug(f"验证后收割 Cookie 失败: {session.session_id}, {e}")
         return False
 
     def apply_external_cookies(self, session_id: str, cookies: Any, source: str = 'user') -> Dict[str, Any]:
@@ -1212,11 +1275,25 @@ class QRLoginManager:
                 # keep-alive 已打开：禁止 encode 覆盖；无图就保持提示
                 return
 
-            # 首屏：viewport 快截；失败再重试，绝不立刻 encode
-            captured = await self._capture_verification_screenshot(session, page)
+            # 首屏：viewport 快截；失败再重试，绝不立刻 encode；截图失败不得拖死 keep-alive
+            try:
+                captured = await asyncio.wait_for(
+                    self._capture_verification_screenshot(session, page, timeout_ms=4000),
+                    timeout=6.0,
+                )
+            except Exception as e:
+                logger.warning(f"首屏截图超时/失败，继续 keep-alive: {session_id}, {e}")
+                captured = False
             if not captured:
-                await page.wait_for_timeout(1500)
-                captured = await self._capture_verification_screenshot(session, page)
+                await page.wait_for_timeout(1000)
+                try:
+                    captured = await asyncio.wait_for(
+                        self._capture_verification_screenshot(session, page, timeout_ms=4000),
+                        timeout=6.0,
+                    )
+                except Exception as e:
+                    logger.warning(f"首屏截图重试失败: {session_id}, {e}")
+                    captured = False
 
             # 再等可扫二维码（最多 ~12s），出码后升级截图
             qr_ready = await self._page_has_scannable_qr(page)
@@ -1248,7 +1325,13 @@ class QRLoginManager:
                     '账号被风控：请用手机闲鱼 APP 扫描下方「服务端验证页」二维码。'
                     '扫的是服务端会话，成功后系统会自动收口，无需粘贴 Cookie。'
                 )
-                await self._capture_verification_screenshot(session, page)
+                try:
+                    await asyncio.wait_for(
+                        self._capture_verification_screenshot(session, page, timeout_ms=4000),
+                        timeout=6.0,
+                    )
+                except Exception as e:
+                    logger.warning(f"可扫态升级截图失败: {session_id}, {e}")
             elif session.screenshot_path:
                 session.user_hint = (
                     '服务端验证页已打开，但尚未检测到清晰二维码；'
@@ -1315,12 +1398,25 @@ class QRLoginManager:
                     current_session.status = 'expired'
                     break
 
-                # 周期性重截：无图时更勤（4s），有图 10s；禁止 encode
+                # 周期性重截：无图时更勤（4s），有图 10s；禁止 encode。
+                # 截图用 wait_for 封顶，绝不阻塞 Cookie 探测（a0b72c6d：截图 30s 超时拖死循环）。
                 resnap_interval = 4 if not current_session.screenshot_path else 10
                 if time.time() - last_resnapshot >= resnap_interval:
-                    scannable = await self._page_has_scannable_qr(page)
+                    try:
+                        scannable = await self._page_has_scannable_qr(page)
+                    except Exception:
+                        scannable = False
                     if scannable or not current_session.screenshot_path:
-                        ok = await self._capture_verification_screenshot(current_session, page)
+                        try:
+                            ok = await asyncio.wait_for(
+                                self._capture_verification_screenshot(
+                                    current_session, page, timeout_ms=4000
+                                ),
+                                timeout=6.0,
+                            )
+                        except Exception as e:
+                            logger.debug(f"验证页周期截图跳过: {session_id}, {e}")
+                            ok = False
                         if ok and scannable:
                             current_session.user_hint = (
                                 '账号被风控：请用手机闲鱼 APP 扫描下方「服务端验证页」二维码。'
@@ -1345,7 +1441,13 @@ class QRLoginManager:
                             current_session, cookie_dict, 'browser', require_complete_cookies=True
                         ):
                             break
-                    await self._detect_verification_ended_elsewhere(current_session, page)
+                    ended = await self._detect_verification_ended_elsewhere(current_session, page)
+                    # 同会话扫码完成后页常变「流程结束」；立刻在同一 context 导航收割
+                    if ended and not self._has_completed_login_cookies(current_session.cookies):
+                        if await self._harvest_login_cookies_after_verification(
+                            current_session, page, context
+                        ):
+                            break
                 except Exception as e:
                     logger.debug(f"验证页轻量探测异常: {session_id}, {e}")
 
@@ -1369,7 +1471,7 @@ class QRLoginManager:
                     except Exception as e:
                         logger.debug(f"验证页期间 login_token 换取失败: {session_id}, {e}")
 
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(2000)
 
         except asyncio.CancelledError:
             logger.info(f"扫码登录验证页面任务已取消: {session_id}")
@@ -1784,7 +1886,17 @@ class QRLoginManager:
         logger.info(f"获取会话状态: {result}")
         # 如果需要验证，返回验证URL
         if session.status == 'verification_required':
-            result['verification_url'] = session.verification_url
+            # keep-alive 存活且非 encode 时：不把 iframeRedirectUrl 暴露给前端，
+            # 防止用户点开另开会话烧掉 havana_iv_token（与 encode 同源毒药）。
+            keep_alive_live = bool(
+                session.verification_task
+                and not session.verification_task.done()
+                and not session.verification_qr_encoded
+            )
+            if session.verification_qr_encoded or not keep_alive_live:
+                result['verification_url'] = session.verification_url
+            else:
+                result['verification_url'] = None
             result['screenshot_path'] = session.screenshot_path
             result['verification_qr_encoded'] = bool(session.verification_qr_encoded)
             result['verification_ended_elsewhere'] = bool(session.verification_ended_elsewhere)
@@ -1794,8 +1906,8 @@ class QRLoginManager:
                 result['message'] = session.user_hint
             elif session.verification_ended_elsewhere:
                 result['message'] = (
-                    '服务端验证页已结束。若你已在手机/浏览器完成验证，'
-                    '请粘贴成功后的回调/跳转网址（推荐），或粘贴完整 Cookie'
+                    '服务端验证页已结束。若扫的是服务端截图码，请保持弹窗等待自动收口；'
+                    '仅当长时间无结果时再粘贴回调网址或完整 Cookie'
                 )
             elif session.verification_qr_encoded:
                 result['message'] = (
@@ -1804,8 +1916,8 @@ class QRLoginManager:
                 )
             else:
                 result['message'] = (
-                    '账号被风控：优先扫服务端截图二维码；'
-                    '若你已在其它浏览器完成验证，可粘贴成功后的回调网址或完整 Cookie'
+                    '账号被风控：请用手机闲鱼 APP 扫描下方「服务端验证页」二维码；'
+                    '保持弹窗打开，系统会自动收口，一般无需粘贴 Cookie'
                 ) if session.screenshot_path else '账号被风控，正在准备服务端验证页截图…'
 
         # 如果登录成功，返回Cookie信息

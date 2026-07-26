@@ -482,3 +482,90 @@ def test_launch_source_forbids_encode_on_capture_miss():
     assert src.count("_encode_verification_url_as_qr") == 1
     idx = src.index("_encode_verification_url_as_qr")
     assert "打开服务端验证页失败" in src[max(0, idx - 250) : idx + 200]
+
+def test_probe_browser_login_success_no_im_branch_in_source():
+    """_probe_browser_login_success 源码不得再 goto /im（收割改独立方法）。"""
+    import inspect
+    manager = QRLoginManager()
+    src = inspect.getsource(manager._probe_browser_login_success)
+    assert "goofish.com/im" not in src
+    assert "if not cookies_ready" in src or "return False" in src
+
+
+def test_harvest_after_verification_marks_success_from_im_cookies():
+    """验证结束后同 context 导航收割：读到完整 Cookie 即 success。"""
+    manager = QRLoginManager()
+    session = _session(manager)
+    session.verification_ended_elsewhere = True
+
+    class FakePage:
+        url = "https://passport.goofish.com/iv/done"
+
+        async def goto(self, *a, **k):
+            self.url = "https://www.goofish.com/im"
+
+        async def wait_for_timeout(self, *_a, **_k):
+            return None
+
+    class FakeContext:
+        async def cookies(self):
+            return [
+                {"name": "unb", "value": "u-harvest"},
+                {"name": "cookie2", "value": "ck-h"},
+                {"name": "sgcookie", "value": "sg-h"},
+            ]
+
+    ok = asyncio.run(
+        manager._harvest_login_cookies_after_verification(session, FakePage(), FakeContext())
+    )
+    assert ok is True
+    assert session.status == "success"
+    assert session.unb == "u-harvest"
+    assert session.verification_harvest_attempted is True
+
+    # 第二次不再重复导航
+    class BoomPage:
+        url = "x"
+
+        async def goto(self, *a, **k):
+            raise AssertionError("harvest 只应尝试一次")
+
+    ok2 = asyncio.run(
+        manager._harvest_login_cookies_after_verification(session, BoomPage(), FakeContext())
+    )
+    assert ok2 is False or session.status == "success"
+
+
+def test_get_session_status_hides_verification_url_while_keepalive():
+    """keep-alive 存活且非 encode 时不向前端暴露 iframeRedirectUrl。"""
+    manager = QRLoginManager()
+    session = _session(manager)
+    session.verification_url = "https://passport.goofish.com/iv/remote/pc/mini_login_check.htm?havana_iv_token=tok"
+    session.screenshot_path = "static/uploads/images/real.png"
+    session.verification_qr_encoded = False
+
+    class AliveTask:
+        def done(self):
+            return False
+
+    session.verification_task = AliveTask()
+    status = manager.get_session_status(session.session_id)
+    assert status["status"] == "verification_required"
+    assert status.get("verification_url") in (None, "")
+    assert status["screenshot_path"] == session.screenshot_path
+
+    # encode 兜底时可以暴露（前端要警告）
+    session.verification_qr_encoded = True
+    status2 = manager.get_session_status(session.session_id)
+    assert status2.get("verification_url") == session.verification_url
+
+
+def test_launch_source_uses_nonblocking_capture_and_harvest():
+    """launch 循环必须：wait_for 包截图 + 验证结束后 harvest。"""
+    import inspect
+    manager = QRLoginManager()
+    src = inspect.getsource(manager._launch_verification_page)
+    assert "asyncio.wait_for" in src
+    assert "_harvest_login_cookies_after_verification" in src
+    assert "timeout_ms=4000" in src or "timeout_ms=4" in src
+

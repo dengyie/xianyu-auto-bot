@@ -1490,11 +1490,11 @@ function showVerificationRequired(data) {
         <div class="mt-4 text-start border rounded p-3 bg-light">
           <h6 class="mb-2">
             <i class="bi bi-link-45deg me-1"></i>
-            已在手机/浏览器完成验证？把网址给我即可
+            扫服务端码后仍未自动登录？再粘贴回调网址
           </h6>
           <p class="small text-muted mb-2">
-            验证成功后浏览器地址栏或跳转页上的链接（goofish/淘宝相关）粘贴到下方。
-            项目会在服务端会话里打开该 URL 并自动拿 Cookie，不必再手抠 Cookie。
+            优先扫上方「服务端验证页」截图码并保持弹窗打开；成功 Cookie 会落在服务端会话。
+            仅当长时间无自动收口时，再粘贴验证成功后的回调/跳转链接。
           </p>
           <textarea id="qrUserCallbackUrlInput" class="form-control font-monospace mb-2" rows="2"
             placeholder="https://passport.goofish.com/... 或验证成功后的跳转链接"></textarea>
@@ -1586,6 +1586,7 @@ function showVerificationRequired(data) {
         </div>
     `;
     } else if (verificationUrl) {
+    // 仅在服务端明确给出 verification_url（encode 兜底 / keep-alive 已死）时展示可点链接
     verificationHtml = `
         <div class="text-center">
         <div class="mb-4">
@@ -1594,20 +1595,18 @@ function showVerificationRequired(data) {
         <h5 class="text-warning mb-3">账号需要闲鱼验证</h5>
         <div class="alert alert-warning border-0 mb-4">
             <i class="bi bi-info-circle me-2"></i>
-            <strong data-role="verification-message">${escapeHtml(serverMessage || '系统正在准备验证二维码，当前先保留一个兜底链接')}</strong>
+            <strong data-role="verification-message">${escapeHtml(serverMessage || '系统正在准备服务端验证页截图…')}</strong>
+        </div>
+        <div class="alert alert-danger border-0 mb-3">
+            <i class="bi bi-exclamation-triangle me-2"></i>
+            <strong>下方链接会打开独立会话，扫/点它通常不会让本系统自动登录。</strong>
+            优先等待服务端截图出现后再用闲鱼 APP 扫描。
         </div>
         <div class="mb-4">
-            <p class="text-muted mb-3">二维码通常会自动出现。若你用兜底链接在本机完成了验证，把成功后的网址贴回来：</p>
             <a href="${safeVerificationUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-outline-warning">
             <i class="bi bi-box-arrow-up-right me-2"></i>
-            打开兜底验证页面
+            打开兜底验证页面（不推荐）
             </a>
-        </div>
-        <div class="alert alert-info border-0">
-            <i class="bi bi-lightbulb me-2"></i>
-            <small>
-            兜底页在你浏览器完成验证后，把地址栏/跳转链接贴到下方即可，以你的成功为准。
-            </small>
         </div>
         ${userHandoffPanel}
         </div>
@@ -1642,8 +1641,8 @@ function showVerificationRequired(data) {
     // 显示Toast提示
     if (!qrCodeVerificationState.toastShown) {
     const toastMsg = endedElsewhere
-        ? '服务端验证页已结束；请粘贴成功后的回调网址（推荐）'
-        : '账号需要闲鱼验证：优先扫服务端二维码，或粘贴回调网址';
+        ? '服务端验证页已结束；请保持弹窗等待自动收口'
+        : '账号需要闲鱼验证：请扫服务端截图二维码并保持弹窗打开';
     showToast(toastMsg, 'warning');
     qrCodeVerificationState.toastShown = true;
     }
