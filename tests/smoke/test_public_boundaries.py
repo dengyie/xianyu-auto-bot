@@ -110,6 +110,20 @@ def test_compose_persists_upload_directory_for_runtime_uid():
         assert "- ./static/uploads:/app/static/uploads:rw" in compose
 
 
+def test_compose_app_ports_are_bound_to_loopback_only():
+    project_root = Path(__file__).resolve().parents[2]
+    expected_bindings = {
+        "docker-compose.yml": "127.0.0.1:9000:8090",
+        "docker-compose-cn.yml": "127.0.0.1:8000:8090",
+    }
+
+    for compose_name, expected_binding in expected_bindings.items():
+        compose = (project_root / compose_name).read_text(encoding="utf-8")
+        assert f'- "{expected_binding}"' in compose
+        assert '- "0.0.0.0:9000:8090"' not in compose
+        assert '- "0.0.0.0:8000:8090"' not in compose
+
+
 def test_docker_build_context_includes_dependency_lock():
     project_root = Path(__file__).resolve().parents[2]
     dockerignore = (project_root / ".dockerignore").read_text(encoding="utf-8")
