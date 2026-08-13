@@ -130,7 +130,8 @@ def test_novnc_source_contract():
     assert 'function isVncManualActionAvailable' in dashboard_js
     assert 'function buildManualInterventionAlert' in dashboard_js
     assert 'function buildAboutVncAccessPanel' in dashboard_js
-    assert '6080/vnc.html' in dashboard_js
+    assert 'vnc.html?autoconnect=1&resize=scale' in dashboard_js
+    assert 'window.location.origin' in dashboard_js
 
     accounts_js = Path('static/js/app-accounts.js').read_text(encoding='utf-8')
     assert 'buildManualInterventionAlert' in accounts_js
