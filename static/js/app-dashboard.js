@@ -521,7 +521,7 @@ function renderStatusNoteBadge(statusNote, className) {
 
 function getNoVncUrl() {
     const hostname = window.location.hostname || 'localhost';
-    return `http://${hostname}:6080/vnc.html?autoconnect=1&resize=scale`;
+    return `${window.location.origin}/vnc.html?autoconnect=1&resize=scale`;
 }
 
 function isVncManualActionAvailable(runtimeStatus) {
