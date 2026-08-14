@@ -156,9 +156,6 @@ def test_source_has_task_log_contract():
 
     base = Path("db_manager/base.py").read_text(encoding="utf-8")
     orders = Path("db_manager/orders.py").read_text(encoding="utf-8")
-    mono = Path("db_manager.py").read_text(encoding="utf-8")
     assert "_ensure_scheduled_task_logs_table" in base
     assert "def add_scheduled_task_log" in orders
     assert "def get_scheduled_task_logs" in orders
-    assert "def add_scheduled_task_log" in mono
-    assert "def get_scheduled_task_logs" in mono
