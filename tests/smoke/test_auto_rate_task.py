@@ -1,5 +1,6 @@
 """Scheduled auto-rate batch: DB schema, pending query, task loop contract."""
 
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -7,6 +8,11 @@ import pytest
 
 import reply_server
 from utils.auto_rate_task import rate_order_once, run_auto_rate_batch
+
+
+def _recent_completed_at() -> str:
+    """platform_completed_at within the query lookback window (relative to now)."""
+    return (datetime.now() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _primary_user_id(db) -> int:
@@ -52,7 +58,7 @@ def test_orders_auto_comment_schema_and_pending_query(_db):
         buyer_nick="nick1",
         order_status="completed",
         cookie_id=cookie_id,
-        platform_completed_at="2026-07-24 12:00:00",
+        platform_completed_at=_recent_completed_at(),
     ) is True
 
     assert db.insert_or_update_order(
@@ -61,7 +67,7 @@ def test_orders_auto_comment_schema_and_pending_query(_db):
         buyer_id="buyer-2",
         order_status="completed",
         cookie_id=cookie_id,
-        platform_completed_at="2026-07-24 12:00:00",
+        platform_completed_at=_recent_completed_at(),
     ) is True
     db.mark_order_rated("o-rated-1", True)
 
@@ -150,7 +156,7 @@ async def test_run_auto_rate_batch_skips_disabled_and_rates_enabled(_db):
             buyer_id="buyer",
             order_status="completed",
             cookie_id=cid,
-            platform_completed_at="2026-07-24 12:00:00",
+            platform_completed_at=_recent_completed_at(),
         ) is True
 
     called = []
