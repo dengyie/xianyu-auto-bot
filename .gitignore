@@ -536,8 +536,8 @@ tmp_*.py
 quick_*.py
 fix_*.py
 test_*.py
-check_*.py
 debug_*.py
+# check_upstream.py 是正式同步工具，单独豁免
 
 # 数据导出文件（避免提交用户数据）
 export_*.xlsx
