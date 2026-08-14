@@ -65,3 +65,35 @@ jobs:
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy-to-hk:
+    # 镜像构建成功后自动部署到 hk 生产（仅 push to main 触发）
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SSH_HOST: ${{ secrets.XIANYU_DEPLOY_HOST }}
+    steps:
+      - name: Setup deploy key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.XIANYU_DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Pull image on hk
+        run: |
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
+            'sudo docker compose -f /home/mango/xianyu-auto-bot/docker-compose.yml pull'
+
+      - name: Recreate container on hk
+        run: |
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
+            'sudo docker compose -f /home/mango/xianyu-auto-bot/docker-compose.yml up -d --no-build --force-recreate'
+
+      - name: Health check
+        run: |
+          sleep 20
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
+            'curl -sS --noproxy "*" http://127.0.0.1:9000/health'
