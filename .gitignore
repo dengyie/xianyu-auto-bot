@@ -354,7 +354,6 @@ stats.log
 # 加密相关文件（保留项目核心文件，只忽略临时解密文件）
 # *_decrypted.py  # 注释掉，因为项目中有重要的解密文件
 # *_ultra.py      # 注释掉，因为项目中有重要的ultra文件
-item_polish_module.py
 
 # 临时脚本文件
 temp_*.py
