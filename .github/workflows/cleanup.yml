@@ -1,9 +1,7 @@
 name: HK Docker Cleanup
 
-# 悬空镜像清理（发版后旧 latest 变 dangling，1GB 级 VPS 需定期回收）。
-# hk sudoers 仅对 `docker compose` 免密（`docker image prune` 需 TTY 密码），
-# 因此通过一次性 override compose 定义 cleanup 服务（挂载 docker.sock 的 docker:cli），
-# 用 `docker compose run` 在白名单内执行 daemon 级 prune。
+# 悬空镜像清理。hk sudoers 仅免密白名单内的 `docker compose` 命令形态，
+# 本 job 同时充当形态探测（PROBE 步骤逐个尝试，|| true 不阻断）。
 on:
   workflow_dispatch:
   schedule:
@@ -19,6 +17,7 @@ jobs:
     timeout-minutes: 10
     env:
       SSH_HOST: ${{ secrets.XIANYU_DEPLOY_HOST }}
+      DIR: /home/mango/xianyu-auto-bot
     steps:
       - name: Setup deploy key
         run: |
@@ -30,7 +29,7 @@ jobs:
       - name: Write one-off cleanup override
         run: |
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
-            'cat > /home/mango/xianyu-auto-bot/cleanup-override.yml <<'"'"'EOF'"'"'
+            'cat > $DIR/cleanup-override.yml <<'"'"'EOF'"'"'
           services:
             cleanup:
               image: docker:cli
@@ -40,13 +39,18 @@ jobs:
               command: ["docker image prune -f; echo \"--- dangling images remaining:\"; docker images -f dangling=true -q | wc -l"]
           EOF'
 
-      - name: Run prune via compose (sudoers-safe)
+      - name: PROBE sudoers shapes
         run: |
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
-            'cd /home/mango/xianyu-auto-bot && sudo docker compose -f docker-compose.yml -f cleanup-override.yml run --rm -T cleanup'
+          SSH="ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no $SSH_HOST"
+          echo "=== probe1: deploy 原形态 pull（应通过）==="
+          $SSH "sudo -n docker compose -f $DIR/docker-compose.yml pull" || echo "PROBE1=FAIL"
+          echo "=== probe2: 绝对路径 + 追加 -f override run ==="
+          $SSH "sudo -n docker compose -f $DIR/docker-compose.yml -f $DIR/cleanup-override.yml run --rm -T cleanup" || echo "PROBE2=FAIL"
+          echo "=== probe3: -f 覆盖在前的 run 形态 ==="
+          $SSH "cd $DIR && sudo -n docker compose -f cleanup-override.yml run --rm -T cleanup" || echo "PROBE3=FAIL"
 
       - name: Remove override
         if: always()
         run: |
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
-            'rm -f /home/mango/xianyu-auto-bot/cleanup-override.yml'
+            'rm -f $DIR/cleanup-override.yml'
