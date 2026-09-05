@@ -72,6 +72,10 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # 与 cleanup.yml 共用串行组：prune 与 pull 并发会撞 containerd ingest（2026-09-05 踩过）
+    concurrency:
+      group: hk-docker-serial
+      cancel-in-progress: false
     env:
       SSH_HOST: ${{ secrets.XIANYU_DEPLOY_HOST }}
     steps:

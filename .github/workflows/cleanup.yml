@@ -18,6 +18,10 @@ jobs:
   prune-dangling-images:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # 与 deploy-to-hk 共用串行组：prune 与 pull 并发会撞 containerd ingest
+    concurrency:
+      group: hk-docker-serial
+      cancel-in-progress: false
     env:
       SSH_HOST: ${{ secrets.XIANYU_DEPLOY_HOST }}
       SSH_CMD: ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no
