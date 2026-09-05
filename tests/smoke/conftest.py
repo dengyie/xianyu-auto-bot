@@ -1,4 +1,6 @@
 """Fixtures scoped to smoke tests — isolated :memory: DB, fake cookie manager, cleared sessions."""
+from pathlib import Path
+
 import pytest
 import time
 
@@ -72,3 +74,19 @@ def _clear_sessions():
     """Clear SESSION_TOKENS and DOWNLOAD_TOKENS between smoke tests."""
     reply_server.SESSION_TOKENS.clear()
     reply_server.DOWNLOAD_TOKENS.clear()
+
+
+@pytest.fixture
+def api_source() -> str:
+    """Aggregate backend API source text for source-contract tests.
+
+    The Strangler Fig split (P1/P2) relocates route handlers from
+    reply_server.py into app/api/routers/*; contracts guard the existence of
+    implementation markers, not which file they live in, so we aggregate.
+    """
+    parts = [(Path("reply_server.py")).read_text(encoding="utf-8")]
+    routers_dir = Path("app/api/routers")
+    if routers_dir.exists():
+        for f in sorted(routers_dir.glob("*.py")):
+            parts.append(f.read_text(encoding="utf-8"))
+    return "\n".join(parts)

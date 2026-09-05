@@ -354,8 +354,10 @@ def test_material_cross_user_isolation(_db):
     assert got.status_code == 404
 
 
-def test_product_publish_source_contract():
-    runtime = Path("reply_server.py").read_text(encoding="utf-8")
+def test_product_publish_source_contract(api_source):
+    # @router./@app. are equivalent for these contracts: the split moved handlers
+    # from the global app onto domain APIRouters; normalize before asserting.
+    runtime = api_source.replace("@router.", "@app.").replace("ctx.", "")
     assert "class ProductMaterialRequest" in runtime
     assert '@app.get("/product-materials")' in runtime
     assert '@app.post("/product-publish")' in runtime

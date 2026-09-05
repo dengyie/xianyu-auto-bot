@@ -154,8 +154,8 @@ def test_batch_rate_rejects_foreign_cookie(_db):
     assert details[0]["success"] is False
 
 
-def test_source_has_batch_rate_contract():
-    src = Path("reply_server.py").read_text(encoding="utf-8")
+def test_source_has_batch_rate_contract(api_source):
+    src = api_source.replace("@router.", "@app.").replace("ctx.", "")
     assert "AutoCommentBatchRateRequest" in src
     assert "/api/auto-comment/batch-rate" in src
     assert "fetch_merchant_rate_list" in src

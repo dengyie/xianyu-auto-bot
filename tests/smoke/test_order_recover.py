@@ -139,8 +139,10 @@ def test_order_recover_fetches_detail_and_auto_delivers(_db):
     assert stored["cookie_id"] == cookie_id
 
 
-def test_order_recover_source_contract():
-    runtime = Path("reply_server.py").read_text(encoding="utf-8")
+def test_order_recover_source_contract(api_source):
+    # @router./@app. and ctx.-indirection are equivalent for this contract: the
+    # split moved handlers onto domain APIRouters; normalize before asserting.
+    runtime = api_source.replace("@router.", "@app.").replace("ctx.", "")
     assert "class OrderRecoverRequest" in runtime
     assert "@app.post('/api/orders/recover')" in runtime
     assert "_auto_deliver_recovered_pending_order" in runtime

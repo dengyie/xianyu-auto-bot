@@ -1,62 +1,31 @@
 #!/usr/bin/env python3
-"""Strangler-Fig extractor: move a route domain out of reply_server.py (P1 pilot; kept as
-reference/tooling for the next domain batches - edit the *_ROUTES/*_HELPERS lists per batch.
+"""Route-domain batch extractor for reply_server.py (Strangler Fig, P2 batch mode).
 
-Generates:
-  app/api/state.py            (ctx proxy: request-time resolution of reply_server globals)
-  app/api/routers/login.py    (create_login_router: auth state/helpers/models + 15 routes)
-  app/api/routers/cookies.py  (create_cookies_router: 12 core cookies routes)
-  reply_server.new.py         (blocks removed + router wiring)
+Per batch: moves ONLY route handlers (helpers/models/state stay in reply_server;
+handlers resolve them via ctx at request time) into a domain router module.
 
-Identifier rewriting is AST-exact: only ast.Name nodes whose id resolves to a
-reply_server module-level global (and is not imported locally / builtin) become
-`ctx.<name>`. Kwarg names, attribute names, and builtins are never touched, because
-ast represents them outside ast.Name.
+Usage:
+  python tools/split_route_domain.py <repo_root> BATCH_KEY
+
+Batches are defined in BATCHES below. For each batch:
+  - route handlers are cut out of reply_server.py (AST-exact, byte-offset safe)
+  - identifiers resolving to reply_server globals are rewritten to ctx.<name>
+  - routes are appended (indented) into the target factory before `return router`
+    (target module must already exist with `def create_<x>_router(ctx)`)
+  - reply_server.new.py is written; caller reviews then replaces reply_server.py
+
+Notes carried over from P1 (do not regress):
+  - ast col_offset is a UTF-8 BYTE offset -> rewrite slices bytes, not str
+  - local bindings include function-level imports and nested def/class names
+  - decorator lines: `@app.` -> `@router.`; other decorator names go through ctx
+  - include_router at reply_server module END is required (decoration-time
+    resolution of late globals like CookieIn)
 """
 import ast
 import builtins
 import sys
 import symtable
 from pathlib import Path
-
-ROOT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
-SRC = ROOT / "reply_server.py"
-
-AUTH_STATE_TARGETS = [
-    "login_ip_tracker", "login_user_tracker", "ip_blacklist",
-    "username_rate_tracker", "captcha_storage",
-    "CAPTCHA_EXPIRE_SECONDS", "CAPTCHA_REQUIRE_AFTER_FAILURES",
-]
-AUTH_HELPERS = [
-    "cleanup_login_trackers", "check_ip_blocked", "check_user_locked",
-    "record_login_failure", "record_login_success", "check_username_rate_limit",
-    "record_username_rate", "get_response_delay", "is_captcha_required",
-    "generate_captcha_image", "generate_captcha_code", "cleanup_expired_captchas",
-    "verify_login_captcha", "get_ip_failure_count",
-]
-AUTH_MODELS = [
-    "LoginRequest", "LoginResponse", "ChangePasswordRequest", "RegisterRequest",
-    "RegisterResponse", "SendCodeRequest", "SendCodeResponse", "CaptchaRequest",
-    "CaptchaResponse", "VerifyCaptchaRequest", "VerifyCaptchaResponse",
-]
-AUTH_ROUTES = [
-    ("get", "/captcha/generate"), ("get", "/captcha/check-required"),
-    ("get", "/login.html"), ("get", "/register.html"), ("post", "/login"),
-    ("get", "/admin/security/login-stats"), ("post", "/admin/security/unblock-ip/{ip}"),
-    ("post", "/admin/security/unlock-user/{username}"), ("post", "/admin/security/blacklist-ip/{ip}"),
-    ("post", "/admin/security/update-config"), ("post", "/change-admin-password"),
-    ("post", "/generate-captcha"), ("post", "/verify-captcha"),
-    ("post", "/send-verification-code"), ("post", "/register"),
-]
-COOKIES_ROUTES = [
-    ("get", "/cookies"), ("get", "/cookies/details"), ("post", "/cookies"),
-    ("put", "/cookies/{cid}"), ("post", "/cookie/{cid}/account-info"),
-    ("get", "/cookie/{cid}/details"), ("get", "/cookies/{cid}/runtime-status"),
-    ("get", "/cookies/{cid}/conversations/{conversation_id}/history"),
-    ("post", "/cookies/{cid}/session-keepalive"),
-    ("get", "/cookie/{cid}/proxy"), ("post", "/cookie/{cid}/proxy"),
-    ("delete", "/cookies/{cid}"),
-]
 
 HEADER_IMPORTS = '''from typing import Any, Dict, List, Optional, Tuple, Callable, Awaitable
 from collections import defaultdict
@@ -86,31 +55,185 @@ from loguru import logger
 from pydantic import BaseModel
 '''
 
-STATE_PY = '''"""Strangler-Fig 迁移期上下文（P1 拆分中间层）。
-
-路由模块经 `ctx` 在**请求时**动态解析 reply_server 的模块级符号，保证：
-1. 不产生循环导入（router -> state -> (lazy) reply_server）；
-2. reply_server 侧的运行时替换依然生效 —— 尤其是测试 conftest 的
-   `reply_server.db_manager = ...` 这类补丁，对已迁出的路由同样可见。
-
-迁移收尾（共享 helper 全部下沉 app/api/common 之类）后，本模块应删除。
-"""
-
-
-class ApiContext:
-    """属性访问即转发到 reply_server 模块级名字（延迟到调用时解析）。"""
-
-    def __getattr__(self, name: str):
-        import reply_server
-
-        return getattr(reply_server, name)
-
-
-ctx = ApiContext()
-'''
-
-LOGIN_FACTORY_PARAMS = ("ctx", "session_service", "security", "verify_dependency",
-                        "admin_username", "router")
+# ---------------- batch definitions (edit per batch) ----------------
+# (method, path) as registered in reply_server; module = app/api/routers/<module>.py
+BATCHES = {
+    "B1_cookies_ext": {
+        "module": "cookies",
+        "routes": [
+            ("put", "/cookies/{cid}/status"),
+            ("put", "/cookies/{cid}/auto-confirm"), ("get", "/cookies/{cid}/auto-confirm"),
+            ("put", "/cookies/{cid}/auto-comment"), ("get", "/cookies/{cid}/auto-comment"),
+            ("get", "/cookies/{cid}/comment-templates"), ("post", "/cookies/{cid}/comment-templates"),
+            ("put", "/cookies/{cid}/comment-templates/{template_id}"),
+            ("delete", "/cookies/{cid}/comment-templates/{template_id}"),
+            ("put", "/cookies/{cid}/comment-templates/{template_id}/activate"),
+            ("put", "/cookies/{cid}/remark"), ("get", "/cookies/{cid}/remark"),
+            ("put", "/cookies/{cid}/pause-duration"), ("get", "/cookies/{cid}/pause-duration"),
+            ("get", "/cookies/check"),
+        ],
+    },
+    "B2_settings_notif_keywords": {
+        "module": "settings",
+        "new_module": ("settings", "create_settings_router",
+                       "Settings / registration / user-settings routes (Strangler Fig P2-B2)."),
+        "routes": [
+            ("get", "/system-settings"), ("put", "/system-settings/{key}"),
+            ("get", "/registration-status"), ("get", "/login-info-status"),
+            ("put", "/registration-settings"), ("put", "/login-info-settings"),
+            ("get", "/login-captcha-settings"), ("put", "/login-captcha-settings"),
+            ("get", "/api/login-captcha-enabled"),
+            ("get", "/user-settings"), ("put", "/user-settings/{key}"), ("get", "/user-settings/{key}"),
+            ("get", "/api/sales"), ("get", "/api/sales/summary"),
+        ],
+    },
+    "B2b_notifications": {
+        "module": "notifications",
+        "new_module": ("notifications", "create_notifications_router",
+                       "Notification channels / messages / templates routes (Strangler Fig P2-B2b)."),
+        "routes": [
+            ("get", "/notification-channels"), ("post", "/notification-channels"),
+            ("get", "/notification-channels/{channel_id}"), ("put", "/notification-channels/{channel_id}"),
+            ("delete", "/notification-channels/{channel_id}"),
+            ("get", "/message-notifications"), ("get", "/message-notifications/{cid}"),
+            ("post", "/message-notifications/{cid}"), ("delete", "/message-notifications/account/{cid}"),
+            ("delete", "/message-notifications/{notification_id}"),
+            ("get", "/notification-templates"), ("post", "/notification-templates/test"),
+            ("get", "/notification-templates/{template_type}"), ("put", "/notification-templates/{template_type}"),
+            ("post", "/notification-templates/{template_type}/reset"),
+            ("get", "/notification-templates/{template_type}/default"),
+        ],
+    },
+    "B2c_keywords_replies": {
+        "module": "keywords",
+        "new_module": ("keywords", "create_keywords_router",
+                       "Keywords + default-replies routes (Strangler Fig P2-B2c)."),
+        "routes": [
+            ("get", "/keywords/{cid}"), ("get", "/keywords-with-item-id/{cid}"),
+            ("post", "/keywords/{cid}"), ("post", "/keywords-with-item-id/{cid}"),
+            ("get", "/keywords-export/{cid}"), ("post", "/keywords-import/{cid}"),
+            ("post", "/keywords/{cid}/image"), ("post", "/keywords/{cid}/image-batch"),
+            ("get", "/keywords-with-type/{cid}"), ("delete", "/keywords/{cid}/{index}"),
+            ("get", "/debug/keywords-table-info"),
+            ("get", "/default-replies/{cid}"), ("put", "/default-replies/{cid}"),
+            ("get", "/default-replies"), ("delete", "/default-replies/{cid}"),
+            ("post", "/default-replies/{cid}/clear-records"),
+        ],
+    },
+    "B3_accounts_login": {
+        "module": "accountlogin",
+        "new_module": ("accountlogin", "create_account_login_router",
+                       "QR/password/manual-cookie face-verification login routes (Strangler Fig P2-B3)."),
+        "routes": [
+            ("post", "/manual-cookie-import"), ("get", "/manual-cookie-import/check/{session_id}"),
+            ("post", "/password-login"), ("get", "/password-login/check/{session_id}"),
+            ("post", "/password-login/cancel/{session_id}"),
+            ("get", "/face-verification/screenshot/{account_id}"),
+            ("delete", "/face-verification/screenshot/{account_id}"),
+            ("post", "/qr-login/generate"), ("get", "/qr-login/check/{session_id}"),
+            ("post", "/qr-login/submit-cookies/{session_id}"), ("post", "/qr-login/submit-url/{session_id}"),
+            ("post", "/qr-login-lite/generate"), ("get", "/qr-login-lite/check/{session_id}"),
+            ("post", "/qr-login/refresh-cookies"), ("post", "/qr-login/reset-cooldown/{cookie_id}"),
+            ("get", "/qr-login/cooldown-status/{cookie_id}"),
+        ],
+    },
+    "B4_trading_items": {
+        "module": "trading",
+        "new_module": ("trading", "create_trading_router",
+                       "Items / cards / delivery-rules / product-publish routes (Strangler Fig P2-B4)."),
+        "routes": [
+            ("get", "/items/{cid}"), ("post", "/upload-image"),
+            ("get", "/cards"), ("post", "/cards"), ("get", "/cards/{card_id}"),
+            ("put", "/cards/{card_id}"), ("put", "/cards/{card_id}/image"), ("delete", "/cards/{card_id}"),
+            ("get", "/delivery-rules"), ("get", "/delivery-rules/stats"), ("get", "/delivery-logs/recent"),
+            ("post", "/delivery-rules"), ("get", "/delivery-rules/{rule_id}"),
+            ("put", "/delivery-rules/{rule_id}"), ("delete", "/delivery-rules/{rule_id}"),
+            ("get", "/items"), ("post", "/items/search"), ("post", "/items/search_multiple"),
+            ("get", "/items/cookie/{cookie_id}"), ("get", "/items/{cookie_id}/{item_id}"),
+            ("put", "/items/{cookie_id}/{item_id}"), ("delete", "/items/{cookie_id}/{item_id}"),
+            ("delete", "/items/batch"), ("put", "/items/{cookie_id}/{item_id}/multi-spec"),
+            ("put", "/items/{cookie_id}/{item_id}/multi-quantity-delivery"),
+            ("post", "/items/get-all-from-account"), ("post", "/items/get-by-page"),
+            ("get", "/product-materials"), ("post", "/product-materials"),
+            ("get", "/product-materials/{material_id}"), ("put", "/product-materials/{material_id}"),
+            ("delete", "/product-materials/{material_id}"),
+            ("get", "/publish-logs"), ("delete", "/publish-logs/old"),
+            ("post", "/product-publish"), ("post", "/product-publish/batch"),
+            ("get", "/product-publish/batch/{batch_id}"), ("post", "/item-publish"),
+            ("get", "/itemReplays"), ("get", "/itemReplays/cookie/{cookie_id}"),
+            ("put", "/item-reply/{cookie_id}/{item_id}"), ("delete", "/item-reply/{cookie_id}/{item_id}"),
+            ("delete", "/item-reply/batch"), ("get", "/item-reply/{cookie_id}/{item_id}"),
+        ],
+    },
+    "B5_admin_ops": {
+        "module": "adminops",
+        "new_module": ("adminops", "create_admin_ops_router",
+                       "Admin / ops / logs / backup / update / files / groups / blacklist routes (P2-B5)."),
+        "routes": [
+            ("get", "/ai-reply-settings/{cookie_id}"), ("put", "/ai-reply-settings/{cookie_id}"),
+            ("get", "/ai-reply-settings"), ("get", "/ai-config-presets"),
+            ("post", "/ai-config-presets"), ("delete", "/ai-config-presets/{preset_id}"),
+            ("post", "/ai-reply-test/{cookie_id}"),
+            ("get", "/api/task-logs"), ("get", "/api/auto-comment/logs"),
+            ("post", "/api/auto-comment/batch-rate"),
+            ("get", "/logs"), ("get", "/risk-control-logs"), ("get", "/logs/stats"), ("post", "/logs/clear"),
+            ("get", "/admin/slider-verification-stats"), ("delete", "/admin/risk-control-logs/{log_id}"),
+            ("get", "/admin/users"), ("delete", "/admin/users/{user_id}"),
+            ("put", "/admin/users/{user_id}/admin-status"),
+            ("get", "/admin/risk-control-logs"), ("get", "/admin/cookies"), ("get", "/admin/audit-logs"),
+            ("get", "/admin/logs"), ("get", "/admin/log-files"), ("get", "/admin/logs/export"),
+            ("get", "/admin/stats"),
+            ("get", "/admin/backup/download"), ("post", "/admin/backup/upload"), ("get", "/admin/backup/list"),
+            ("get", "/admin/data/{table_name}"), ("get", "/admin/data/{table_name}/export"),
+            ("delete", "/admin/data/{table_name}/{record_id}"), ("delete", "/admin/data/{table_name}"),
+            ("get", "/backup/export"), ("post", "/backup/import"), ("post", "/system/reload-cache"),
+            ("get", "/api/update/check"), ("post", "/api/update/apply"), ("get", "/api/update/progress"),
+            ("get", "/api/update/local-hashes"), ("post", "/api/update/cleanup-backups"),
+            ("get", "/api/update/file-changes"), ("post", "/api/update/save-hashes"),
+            ("get", "/api/update/saved-hashes"), ("post", "/api/update/restart"),
+            ("post", "/accounts/{cid}/polish-items"),
+            ("post", "/scheduled-tasks"), ("get", "/scheduled-tasks"), ("put", "/scheduled-tasks/{task_id}"),
+            ("delete", "/scheduled-tasks/{task_id}"), ("put", "/scheduled-tasks/{task_id}/toggle"),
+            ("post", "/api/analytics/error"),
+            ("get", "/api/files"), ("get", "/api/files/{file_id}/download"), ("post", "/api/files"),
+            ("put", "/api/files/{file_id}"), ("delete", "/api/files/{file_id}"),
+            ("get", "/api/files/{file_id}/download-token"), ("get", "/api/files/{file_id}/direct"),
+            ("post", "/api/groups"), ("get", "/api/groups"), ("get", "/api/groups/{group_id}/members"),
+            ("delete", "/api/groups/{group_id}"), ("post", "/api/groups/{group_id}/members"),
+            ("delete", "/api/groups/{group_id}/members/{user_id}"),
+            ("get", "/api/blacklist/personal"), ("post", "/api/blacklist/personal"),
+            ("post", "/api/blacklist/personal/batch-delete"), ("delete", "/api/blacklist/personal/{record_id}"),
+            ("get", "/api/blacklist/personal/export"), ("post", "/api/blacklist/personal/import"),
+            ("get", "/api/blacklist/platform"),
+            ("get", "/api/announcement"),
+        ],
+    },
+    "B6b_patch_blacklist": {
+        "module": "adminops",
+        "routes": [
+            ("patch", "/api/blacklist/personal/{record_id}/toggle"),
+        ],
+    },
+    "B6_orders_chat_misc": {
+        "module": "orderschat",
+        "new_module": ("orderschat", "create_orders_chat_router",
+                       "Orders / chat / send-message / dashboard page routes (Strangler Fig P2-B6)."),
+        "routes": [
+            ("post", "/send-message"), ("post", "/xianyu/reply"),
+            ("post", "/api/orders/history-sync"), ("get", "/api/orders/history-sync/{job_id}"),
+            ("post", "/api/orders/history-sync/{job_id}/cancel"), ("post", "/api/orders/recover"),
+            ("get", "/api/orders"), ("get", "/api/orders/stream"),
+            ("delete", "/api/orders/{order_id}"), ("post", "/api/orders/{order_id}/confirm-retry"),
+            ("post", "/api/orders/{order_id}/deliver"), ("post", "/api/orders/{order_id}/refresh"),
+            ("get", "/api/chat/sessions"), ("get", "/api/chat/messages"), ("post", "/api/chat/send"),
+            ("get", "/api/chat/stream"), ("get", "/api/chat/accounts"),
+            ("get", "/api/chat/keywords/{cid}/item/{item_id}"),
+            ("post", "/api/chat/keywords/{cid}/item/{item_id}"),
+            ("post", "/api/chat/keywords/{cid}/copy"), ("get", "/api/chat/items/{cid}"),
+            ("get", "/"), ("get", "/admin"), ("get", "/download"),
+        ],
+    },
+}
 
 
 def span(node):
@@ -126,15 +249,13 @@ def route_key(node):
     for dec in node.decorator_list:
         if (isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)
                 and isinstance(dec.func.value, ast.Name) and dec.func.value.id == "app"
-                and dec.func.attr in {"get", "post", "put", "delete", "websocket"}
+                and dec.func.attr in {"get", "post", "put", "delete", "patch", "websocket"}
                 and dec.args and isinstance(dec.args[0], ast.Constant)):
             return (dec.func.attr, dec.args[0].value)
     return None
 
 
 def local_bound(tree_fragment):
-    """Names bound locally anywhere in fragment: Store Names, args, except/with/for
-    targets, nested def/class names, and function-level import bindings."""
     bound = set()
     for x in ast.walk(tree_fragment):
         if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Store):
@@ -184,41 +305,18 @@ def indent4(text: str) -> str:
     return "\n".join(("    " + ln if ln.strip() else ln) for ln in text.split("\n"))
 
 
-def extract(fragment, src_lines, ctx_names: set, is_route: bool) -> str:
-    start, end = span(fragment)
-    text = "\n".join(src_lines[start - 1:end])
-    repls = {}
-    for (ln, col, eln, ecol, ident) in names_with_pos(fragment):
-        if ident not in ctx_names:
-            continue
-        if any(d.lineno <= ln <= d.end_lineno for d in getattr(fragment, "decorator_list", [])):
-            continue  # decorators handled below
-        repls[(ln, col, eln, ecol)] = f"ctx.{ident}"
-    out = rewrite(text, start, repls)
-    if is_route:
-        # rewrite decorator-line names: `app` -> `router`; ctx-rewrite the rest
-        for dec in fragment.decorator_list:
-            d_repls = {}
-            for (ln, col, eln, ecol, ident) in names_with_pos(dec):
-                if ident == "app" and isinstance(dec, ast.Call) and dec.func.value is \
-                        next(n for n in ast.walk(dec) if isinstance(n, ast.Name) and n.id == "app"
-                             and n.col_offset == col and n.lineno == ln):
-                    d_repls[(ln, col, eln, ecol)] = "router"
-                elif ident in ctx_names:
-                    d_repls[(ln, col, eln, ecol)] = f"ctx.{ident}"
-            out = rewrite(out, start, d_repls)
-    return out
-
-
 def main():
-    src = SRC.read_text(encoding="utf-8")
+    root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
+    batch_key = sys.argv[2] if len(sys.argv) > 2 else list(BATCHES)[0]
+    batch = BATCHES[batch_key]
+    rs_path = root / "reply_server.py"
+    src = rs_path.read_text(encoding="utf-8")
     src_lines = src.split("\n")
     tree = ast.parse(src)
 
-    st = symtable.symtable(src, str(SRC), "exec")
+    st = symtable.symtable(src, str(rs_path), "exec")
     rs_globals = {s.get_name() for s in st.get_symbols() if s.is_global()}
     bi = set(dir(builtins))
-
     hb = set()
     for node in ast.parse(HEADER_IMPORTS).body:
         if isinstance(node, ast.Import):
@@ -226,121 +324,86 @@ def main():
         elif isinstance(node, ast.ImportFrom):
             hb |= {a.asname or a.name for a in node.names}
 
-    routes, funcs, classes, assigns = {}, {}, {}, {}
+    routes = {}
+    dup_hits = []
     for node in tree.body:
         rk = route_key(node)
         if rk:
+            if rk in routes:
+                dup_hits.append((rk, node.lineno))
             routes.setdefault(rk, node)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            funcs[node.name] = node
-        elif isinstance(node, ast.ClassDef):
-            classes[node.name] = node
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            for t in (node.targets if isinstance(node, ast.Assign) else [node.target]):
-                if isinstance(t, ast.Name):
-                    assigns.setdefault(t.id, node)
 
-    for r in AUTH_ROUTES + COOKIES_ROUTES:
-        assert r in routes, f"missing route {r}"
-    for n in AUTH_HELPERS:
-        assert n in funcs, f"missing func {n}"
-    for n in AUTH_MODELS:
-        assert n in classes, f"missing class {n}"
-    for n in AUTH_STATE_TARGETS:
-        assert n in assigns, f"missing assign {n}"
+    wanted = batch["routes"]
+    missing = [r for r in wanted if r not in routes]
+    assert not missing, f"missing routes {missing}"
+    moved_dups = [d for d in dup_hits if d[0] in wanted]
+    if moved_dups:
+        print(f"NOTE: duplicate registrations also cut (dead code): {moved_dups}")
 
-    # ---------------- login.py ----------------
-    # state containers STAY in reply_server (test contract: reply_server.login_ip_tracker etc.)
-    # -> moved helpers access them via ctx at request time (rebinding-safe)
-    login_module_names = set(AUTH_HELPERS) | set(AUTH_MODELS)
-    login_ctx = rs_globals - hb - bi - login_module_names
-    login_expected_locals = login_module_names | set(LOGIN_FACTORY_PARAMS) | {"router"}
+    ctx_names = rs_globals - hb - bi - {"router", "ctx"}
+    nodes = []
+    for r in wanted:
+        nodes.append(routes[r])
+    for (rk, lineno) in moved_dups:
+        for node in tree.body:
+            if route_key(node) == rk and node.lineno == lineno:
+                nodes.append(node)
 
-    login_nodes = ([assigns[n] for n in AUTH_STATE_TARGETS]
-                   + [funcs[n] for n in AUTH_HELPERS]
-                   + [classes[n] for n in AUTH_MODELS]
-                   + [routes[r] for r in AUTH_ROUTES])
-    used = {ident for nd in login_nodes for ident in
-            (x[4] for x in names_with_pos(nd))}
-    unknown = used - rs_globals - bi - hb - login_expected_locals - local_bound(ast.Module(
-        body=login_nodes, type_ignores=[]))
-    assert not unknown, f"login.py unresolvable names: {sorted(unknown)}"
-
-    out = ['"""Login / register / captcha / login-security routes (Strangler Fig P1).', "",
-           "Mechanically extracted from reply_server.py at main@0aa4100; behavior-preserving.",
-           "External (reply_server) symbols resolve via ctx at request time - see app/api/state.py.", '"""', ""]
-    out.append(HEADER_IMPORTS.rstrip("\n"))
-    out.append("")
-    out.append("from app.api.state import ctx  # noqa: F401  (module-level helpers; factory param shadows with same singleton)")
-    out.append("")
-    out.append("")
-    out.append("# 防暴力破解/验证码状态容器留在 reply_server（tests 直接操作 reply_server.login_ip_tracker 等）")
-    out.append("# -> 本模块 helpers 经 ctx.<name> 请求时解析访问")
-    out.append("")
-    out.append("# ========================= 登录安全 helpers =========================")
-    for n in AUTH_HELPERS:
-        out.append(extract(funcs[n], src_lines, login_ctx, is_route=False))
-        out.append("")
-        out.append("")
-    out.append("# ========================= request/response models =========================")
-    for n in AUTH_MODELS:
-        out.append(extract(classes[n], src_lines, login_ctx, is_route=False))
-        out.append("")
-        out.append("")
-    out.append("")
-    out.append("def create_login_router(ctx, session_service, security, verify_dependency, "
-               "admin_username) -> APIRouter:")
-    out.append('    """Factory keeps the established create_auth_router dependency style."""')
-    out.append("    router = APIRouter()")
-    for r in AUTH_ROUTES:
-        out.append(indent4(extract(routes[r], src_lines, login_ctx, is_route=True)))
-        out.append("")
-    out.append("    return router")
-    out.append("")
-    (ROOT / "app/api/routers/login.py").write_text("\n".join(out), encoding="utf-8")
-
-    # ---------------- cookies.py ----------------
-    cookies_ctx = rs_globals - hb - bi - {"router", "ctx"}
-    cookie_nodes = [routes[r] for r in COOKIES_ROUTES]
-    used = {ident for nd in cookie_nodes for ident in (x[4] for x in names_with_pos(nd))}
+    used = {ident for nd in nodes for ident in (x[4] for x in names_with_pos(nd))}
     unknown = used - rs_globals - bi - hb - {"router", "ctx"} - local_bound(ast.Module(
-        body=cookie_nodes, type_ignores=[]))
-    assert not unknown, f"cookies.py unresolvable names: {sorted(unknown)}"
+        body=nodes, type_ignores=[]))
+    assert not unknown, f"unresolvable names: {sorted(unknown)}"
 
-    out = ['"""Core cookies CRUD routes (Strangler Fig P1).', "",
-           "Mechanically extracted from reply_server.py at main@0aa4100; behavior-preserving.",
-           "External (reply_server) symbols resolve via ctx at request time - see app/api/state.py.", '"""', ""]
-    out.append(HEADER_IMPORTS.rstrip("\n"))
-    out.append("")
-    out.append("")
-    out.append("def create_cookies_router(ctx) -> APIRouter:")
-    out.append("    router = APIRouter()")
-    for r in COOKIES_ROUTES:
-        out.append(indent4(extract(routes[r], src_lines, cookies_ctx, is_route=True)))
+    extracted = []
+    for nd in nodes:
+        text = extract_one(nd, src_lines, ctx_names)
+        extracted.append(indent4(text))
+        extracted.append("")
+
+    # ---- target module: create or append ----
+    mod_dir = root / "app" / "api" / "routers"
+    if "new_module" in batch:
+        mod_name, factory, doc = batch["new_module"]
+        target = mod_dir / f"{mod_name}.py"
+        assert not target.exists(), f"{target} already exists"
+        out = [f'"""{doc}', "",
+               "Mechanically extracted from reply_server.py; behavior-preserving.",
+               'External (reply_server) symbols resolve via ctx at request time - see app/api/state.py.', '"""', ""]
+        out.append(HEADER_IMPORTS.rstrip("\n"))
         out.append("")
-    out.append("    return router")
-    out.append("")
-    (ROOT / "app/api/routers/cookies.py").write_text("\n".join(out), encoding="utf-8")
+        out.append("")
+        out.append(f"def {factory}(ctx) -> APIRouter:")
+        out.append("    router = APIRouter()")
+        out.extend(extracted)
+        out.append("    return router")
+        out.append("")
+        target.write_text("\n".join(out), encoding="utf-8")
+        mod_dot = f"app.api.routers.{mod_name}"
+        wire = f"app.include_router({factory}(ctx=ctx))\n"
+        include_line = f"from {mod_dot} import {factory}\n"
+    else:
+        mod_name = batch["module"]
+        factory = f"create_{mod_name}_router"
+        target = mod_dir / f"{mod_name}.py"
+        ttext = target.read_text(encoding="utf-8")
+        anchor = "    return router"
+        assert ttext.rstrip().endswith("    return router"), f"unexpected tail in {target}"
+        ttext = ttext.rstrip("\n")[: ttext.rstrip("\n").rfind(anchor)]
+        nl = "\n"
+        ttext = ttext.rstrip("\n") + "\n" + nl.join(extracted).rstrip("\n") + "\n" + anchor + "\n"
+        target.write_text(ttext, encoding="utf-8")
+        include_line = None
+        wire = None
+        # import already present (module pre-wired)
+        assert f"routers.{mod_name}" in (root / "reply_server.py").read_text(encoding="utf-8")
 
-    # ---------------- app/api/state.py ----------------
-    (ROOT / "app/api/state.py").write_text(STATE_PY, encoding="utf-8")
-
-    # ---------------- reply_server.new.py ----------------
-    # NOTE: auth state block (login_ip_tracker 等) intentionally KEPT in reply_server
-    dead_spans = []
-    for n in AUTH_HELPERS:
-        dead_spans.append(span(funcs[n]))
-    for n in AUTH_MODELS:
-        dead_spans.append(span(classes[n]))
-    for r in AUTH_ROUTES + COOKIES_ROUTES:
-        dead_spans.append(span(routes[r]))
-
+    # ---- reply_server.new.py: cut moved handlers, wire new module import+include ----
+    dead = [span(nd) for nd in nodes]
     keep = [True] * (len(src_lines) + 1)
-    for a, b in dead_spans:
+    for a, b in dead:
         for i in range(a, b + 1):
             keep[i] = False
     kept = [ln for i, ln in enumerate(src_lines, 1) if keep[i]]
-    # collapse 3+ blank lines to 2
     cleaned, blanks = [], 0
     for ln in kept:
         blanks = blanks + 1 if ln.strip() == "" else 0
@@ -348,36 +411,39 @@ def main():
             cleaned.append(ln)
     text = "\n".join(cleaned)
 
-    # imports
-    anchor = "from app.application.auth.sessions import SessionService\n"
-    assert anchor in text
-    text = text.replace(anchor, anchor +
-                        "from app.api.routers.cookies import create_cookies_router\n"
-                        "from app.api.routers.login import create_login_router\n"
-                        "from app.api.state import ctx\n", 1)
+    if include_line:
+        anchor_imp = "from app.api.state import ctx\n"
+        assert anchor_imp in text
+        text = text.replace(anchor_imp, include_line + anchor_imp, 1)
+        tail_anchor = "app.include_router(create_cookies_router(ctx=ctx))"
+        assert tail_anchor in text
+        text = text.replace(tail_anchor, tail_anchor + "\n" + wire.rstrip("\n"), 1)
 
-    # router registration at END of module: factory-time Depends/annotation resolution
-    # (e.g. ctx.CookieIn) needs every reply_server global already defined.
-    reg = ("\n\n"
-           "# ========================= Strangler Fig P1: 已拆分路由域注册（app/api/routers/）=========================\n"
-           "# 置于模块末尾：factory 装饰期需解析全部模块级符号（如 CookieIn）。\n"
-           "app.include_router(\n"
-           "    create_login_router(\n"
-           "        ctx=ctx,\n"
-           "        session_service=session_service,\n"
-           "        security=security,\n"
-           "        verify_dependency=verify_token,\n"
-           "        admin_username=ADMIN_USERNAME,\n"
-           "    )\n"
-           ")\n"
-           "app.include_router(create_cookies_router(ctx=ctx))\n")
-    text = text.rstrip("\n") + reg
+    (root / "reply_server.new.py").write_text(text, encoding="utf-8")
+    print(f"{batch_key}: moved {len(nodes)} handlers; reply_server {len(src_lines)} -> {len(text.splitlines())} lines")
 
-    (ROOT / "reply_server.new.py").write_text(text, encoding="utf-8")
-    old_n = len(src_lines)
-    new_n = len(text.split("\n"))
-    print(f"reply_server: {old_n} -> {new_n} lines (-{old_n - new_n})")
-    print("login.py / cookies.py / state.py written")
+
+def extract_one(fragment, src_lines, ctx_names):
+    start, end = span(fragment)
+    text = "\n".join(src_lines[start - 1:end])
+    repls = {}
+    for (ln, col, eln, ecol, ident) in names_with_pos(fragment):
+        if ident not in ctx_names:
+            continue
+        if any(d.lineno <= ln <= d.end_lineno for d in getattr(fragment, "decorator_list", [])):
+            continue
+        repls[(ln, col, eln, ecol)] = f"ctx.{ident}"
+    out = rewrite(text, start, repls)
+    # decorator lines
+    for dec in fragment.decorator_list:
+        d_repls = {}
+        for (ln, col, eln, ecol, ident) in names_with_pos(dec):
+            if ident == "app":
+                d_repls[(ln, col, eln, ecol)] = "router"
+            elif ident in ctx_names:
+                d_repls[(ln, col, eln, ecol)] = f"ctx.{ident}"
+        out = rewrite(out, start, d_repls)
+    return out.replace("@app.", "@router.", 1)
 
 
 if __name__ == "__main__":

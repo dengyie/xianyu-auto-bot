@@ -146,8 +146,8 @@ def test_task_logs_api_rejects_foreign_cookie(_db):
     assert resp.status_code in {403, 400, 404}
 
 
-def test_source_has_task_log_contract():
-    src = Path("reply_server.py").read_text(encoding="utf-8")
+def test_source_has_task_log_contract(api_source):
+    src = api_source.replace("@router.", "@app.").replace("ctx.", "")
     assert "TASK_LOG_TYPE_LABELS" in src
     assert "@app.get('/api/task-logs')" in src or '@app.get("/api/task-logs")' in src
     assert "@app.get('/api/auto-comment/logs')" in src or '@app.get("/api/auto-comment/logs")' in src
