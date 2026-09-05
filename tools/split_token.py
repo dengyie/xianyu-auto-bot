@@ -193,10 +193,6 @@ def main():
     out.extend(t for t in build(TOKEN))
     OUT.write_text("\n".join(out), encoding="utf-8")
 
-    const_dead = []
-    for n in tree.body:
-        if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id in ("DELIVERY_BATCH_MAX_UNITS", "DELIVERY_BATCH_MAX_CHARS") for t in n.targets):
-            const_dead.append((n.lineno, n.end_lineno))
     dead = [span(methods[n]) for n in TOKEN]
     keep = [True] * (len(src_lines) + 1)
     for a, b in dead:

@@ -42,13 +42,6 @@ class _HostDBManagerProxy:
 db_manager = _HostDBManagerProxy()
 
 
-def bind_host_module(module) -> None:
-    """预留：宿主模块未来需要向状态机注入依赖时使用。"""
-    global _HOST
-    _HOST = module
-
-
-_HOST = None
 
 
 

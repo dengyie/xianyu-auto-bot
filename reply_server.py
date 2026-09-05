@@ -659,16 +659,6 @@ KEYWORDS_MAPPING = load_keywords()
 # 认证相关模型
 
 
-def generate_token() -> str:
-    """生成随机token"""
-    return secrets.token_urlsafe(32)
-
-
-def _remove_session_tokens_for_user(user_id: int) -> int:
-    """Remove all in-memory session tokens for a user after permission changes."""
-    return session_service.revoke_user(user_id)
-
-
 def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[Dict[str, Any]]:
     """验证token并返回用户信息"""
     if not credentials:
@@ -676,6 +666,10 @@ def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(s
 
     return session_service.verify(credentials.credentials, db_manager.get_user_by_id)
 
+
+def _remove_session_tokens_for_user(user_id: int) -> int:
+    """Remove all in-memory session tokens for a user after permission changes."""
+    return session_service.revoke_user(user_id)
 
 def verify_admin_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Dict[str, Any]:
     """验证管理员token"""
@@ -1314,30 +1308,6 @@ def _get_cached_chat_history_probe(cookie_id: str, chat_id: str) -> Optional[Dic
     return dict(cached)
 
 
-def _set_cached_chat_history_probe(
-    cookie_id: str,
-    chat_id: str,
-    *,
-    status: str,
-    fetched: int = 0,
-    normalized_count: int = 0,
-    saved: int = 0,
-    note: Optional[str] = None,
-) -> Dict[str, Any]:
-    checked_at = time.time()
-    payload = {
-        'status': str(status or '').strip() or 'unknown',
-        'fetched': max(0, int(fetched or 0)),
-        'normalized_count': max(0, int(normalized_count or 0)),
-        'saved': max(0, int(saved or 0)),
-        'note': str(note or '').strip() or None,
-        'checked_at': checked_at,
-        'checked_at_display': datetime.fromtimestamp(checked_at, tz=LOCAL_TIMEZONE).strftime('%Y-%m-%d %H:%M:%S'),
-    }
-    _chat_history_probe_cache[_build_chat_history_probe_key(cookie_id, chat_id)] = payload
-    return dict(payload)
-
-
 def _apply_chat_history_probe_to_session(cookie_id: str, session: Dict[str, Any]) -> Dict[str, Any]:
     normalized = dict(session or {})
     chat_id = str(normalized.get('chat_id') or '').strip()
@@ -1648,129 +1618,6 @@ def _extract_history_message_text(message: Dict[str, Any]) -> str:
     return raw_text[:120] if raw_text else ''
 
 
-def _normalize_chat_history_message_record(
-    raw: Dict[str, Any],
-    cookie_id: str,
-    chat_id: str,
-    owner_user_id: Optional[str] = None,
-    fallback_item_id: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
-    """将闲鱼历史消息结构转换为本地 chat_messages 记录格式。"""
-    if not isinstance(raw, dict):
-        logger.debug(f"聊天历史记录格式异常，raw 不是 dict: cookie_id={cookie_id}, chat_id={chat_id}, type={type(raw).__name__}")
-        return None
-
-    message = raw.get('message')
-    if not isinstance(message, dict):
-        logger.debug(
-            f"聊天历史记录缺少 message 结构: cookie_id={cookie_id}, chat_id={chat_id}, "
-            f"keys={list(raw.keys())[:8]}"
-        )
-        return None
-
-    sender_id = str(raw.get('send_user_id') or '').strip()
-    message_extension = raw.get('message_extension') if isinstance(raw.get('message_extension'), dict) else {}
-    sender_name = (
-        str(raw.get('send_user_name') or '').strip()
-        or str(message_extension.get('senderNick') or '').strip()
-        or str(message_extension.get('reminderTitle') or '').strip()
-        or sender_id
-        or chat_id
-    )
-    content = ''
-    content_type = 1
-    image_url = None
-    media_url = None
-    link_url = None
-    extra_json = None
-    item_id = None
-    created_at = None
-
-    try:
-        message_1 = message.get('1', {}) if isinstance(message, dict) else {}
-        message_10 = message_1.get('10', {}) if isinstance(message_1, dict) else {}
-        created_ts = raw.get('created_at', message_1.get('5'))
-        created_at = _format_history_created_at(created_ts)
-        content = _extract_history_message_text(message)
-        message_6 = message_1.get('6', {}) if isinstance(message_1, dict) else {}
-        message_6_3 = message_6.get('3', {}) if isinstance(message_6, dict) else {}
-        content_type = int(message_6_3.get('4', 1) or 1)
-        rich_fields = _extract_rich_message_fields(message)
-        if rich_fields.get('display_type') == 'image':
-            content_type = 2
-        elif rich_fields.get('display_type') == 'video':
-            content_type = 3
-        elif rich_fields.get('display_type') == 'link':
-            content_type = 4
-        elif rich_fields.get('display_type') == 'item_share':
-            content_type = 5
-        elif rich_fields.get('display_type') == 'card':
-            content_type = 6
-        if rich_fields.get('content'):
-            content = rich_fields.get('content')
-        image_url = rich_fields.get('image_url') or image_url
-        media_url = rich_fields.get('media_url')
-        link_url = rich_fields.get('link_url')
-        extra_json = rich_fields.get('extra_json')
-        if content_type == 2:
-            content_json_str = message_6_3.get('5', '')
-            if content_json_str:
-                content_obj = json.loads(content_json_str)
-                pics = content_obj.get('image', {}).get('pics', [])
-                if pics:
-                    image_url = pics[0].get('url', '') or image_url
-            if not content:
-                content = '[图片]'
-        elif content_type == 26 and not content:
-            card_title = (
-                (((_extract_history_message_payload(message).get('dxCard') or {}).get('item') or {}).get('main') or {}).get('exContent', {})
-            )
-            content = str(card_title.get('title') or message_10.get('detailNotice') or message_10.get('reminderContent') or '[交易卡片]').strip()
-        reminder_url = str(message_10.get('reminderUrl') or '').strip()
-        if reminder_url:
-            parsed = urlparse(reminder_url)
-            item_id = parse_qs(parsed.query or '').get('itemId', [None])[0]
-            if not link_url:
-                link_url = reminder_url
-    except Exception as normalize_exc:
-        logger.warning(
-            f"聊天历史记录解析失败: cookie_id={cookie_id}, chat_id={chat_id}, "
-            f"sender_id={sender_id or '-'}, error={mask_sensitive_text(normalize_exc)}"
-        )
-
-    if not content:
-        fallback_content = (
-            str(message_extension.get('detailNotice') or '').strip()
-            or str(message_extension.get('reminderContent') or '').strip()
-            or str(message_extension.get('reminderNotice') or '').strip()
-        )
-        if fallback_content:
-            content = fallback_content
-
-    if not item_id and fallback_item_id:
-        item_id = fallback_item_id
-
-    owner_id = str(owner_user_id or '').strip()
-    direction = 1 if sender_id and owner_id and sender_id == owner_id else 2
-
-    return {
-        'cookie_id': cookie_id,
-        'chat_id': chat_id,
-        'sender_id': sender_id,
-        'sender_name': sender_name,
-        'content': content or ('[图片]' if content_type == 2 else '[系统消息]'),
-        'content_type': content_type,
-        'image_url': image_url,
-        'item_id': item_id,
-        'direction': direction,
-        'reply_source': None,
-        'media_url': media_url,
-        'link_url': link_url,
-        'extra_json': extra_json,
-        'created_at': created_at,
-    }
-
-
 def _format_history_created_at(raw_value: Any) -> Optional[str]:
     if raw_value in (None, '', 0, '0'):
         return None
@@ -1799,21 +1646,6 @@ def _format_history_created_at(raw_value: Any) -> Optional[str]:
         return datetime.fromtimestamp(value / 1000, tz=LOCAL_TIMEZONE).strftime('%Y-%m-%d %H:%M:%S')
     except (OverflowError, OSError, ValueError):
         return None
-
-
-def _build_chat_message_signature(record: Dict[str, Any]) -> tuple:
-    return (
-        str(record.get('chat_id') or ''),
-        str(record.get('sender_id') or ''),
-        str(record.get('content') or ''),
-        int(record.get('content_type') or 0),
-        str(record.get('image_url') or ''),
-        str(record.get('media_url') or ''),
-        str(record.get('link_url') or ''),
-        str(record.get('item_id') or ''),
-        int(record.get('direction') or 0),
-        str(record.get('created_at') or ''),
-    )
 
 
 def _build_chat_sessions_from_recent_orders(cookie_id: str, limit: int = 50) -> List[Dict[str, Any]]:

@@ -6,7 +6,6 @@ from typing import Any, Dict, Optional
 import json
 import re
 
-from fastapi import HTTPException
 
 def mask_sensitive_text(text: Any) -> str:
     raw_text = str(text or '')

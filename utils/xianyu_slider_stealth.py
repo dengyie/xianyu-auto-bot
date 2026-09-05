@@ -41,6 +41,11 @@ _PLAYWRIGHT_BROWSER_INSTALL_LOCK = threading.Lock()
 # 1D Perlin 噪声实现（纯 Python，无外部依赖）
 # 用于生成连续平滑的非周期性随机序列，替代 sin 叠加
 # ============================================================================
+def _is_runtime_detached_error(error: Exception) -> bool:
+    """判断浏览器异常是否为页面运行时 detached/disconnected（纯函数）。"""
+    error_text = str(error).lower()
+    return 'detached' in error_text or 'disconnected' in error_text
+
 def _perlin_fade(t):
     """Perlin 缓动函数: 6t^5 - 15t^4 + 10t^3"""
     return t * t * t * (t * (t * 6 - 15) + 10)
@@ -2150,7 +2155,6 @@ class XianyuSliderStealth(StealthScriptMixin, PasswordLoginMixin):
                     clicked = True
                     break
                 except Exception as selector_error:
-                    _mark_detached_runtime(selector_error)
                     continue
 
             if not clicked and slider_container:
@@ -6289,13 +6293,6 @@ class XianyuSliderStealth(StealthScriptMixin, PasswordLoginMixin):
         try:
             detached_runtime = False
 
-            def _mark_detached_runtime(error: Exception) -> bool:
-                nonlocal detached_runtime
-                error_text = str(error).lower()
-                if 'detached' in error_text or 'disconnected' in error_text:
-                    detached_runtime = True
-                    return True
-                return False
 
             try:
                 current_url = str(getattr(target_page, 'url', '') or '')
@@ -6308,7 +6305,7 @@ class XianyuSliderStealth(StealthScriptMixin, PasswordLoginMixin):
                 raw_title = target_page.title() if callable(getattr(target_page, 'title', None)) else getattr(target_page, 'title', '')
                 current_title = str(raw_title or '')
             except Exception as title_error:
-                _mark_detached_runtime(title_error)
+                detached_runtime = _is_runtime_detached_error(title_error) or detached_runtime
                 current_title = ''
             current_title_lower = current_title.lower()
 
@@ -6316,11 +6313,11 @@ class XianyuSliderStealth(StealthScriptMixin, PasswordLoginMixin):
             try:
                 page_text = target_page.inner_text('body', timeout=1500) or ''
             except Exception as text_error:
-                _mark_detached_runtime(text_error)
+                detached_runtime = _is_runtime_detached_error(text_error) or detached_runtime
                 try:
                     page_text = target_page.content() or ''
                 except Exception as content_error:
-                    _mark_detached_runtime(content_error)
+                    detached_runtime = _is_runtime_detached_error(content_error) or detached_runtime
                     page_text = ''
             page_text_lower = str(page_text or '').lower()
 
