@@ -97,7 +97,3 @@ jobs:
           sleep 20
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
             'curl -sS --noproxy "*" http://127.0.0.1:9000/health'
-
-      - name: Prune dangling images
-        run: |
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST"             'sudo docker image prune -f'
