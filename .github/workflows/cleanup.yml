@@ -2,8 +2,8 @@ name: HK Docker Cleanup
 
 # 悬空镜像清理（发版后旧 latest 变 dangling，1GB 级 VPS 需定期回收）。
 # 机制：deploy key SSH → `sudo -S`（HK_SUDO_PASSWORD 经 stdin，不落日志/参数）；
-# 首次运行会 bootstrap /etc/sudoers.d/xianyu-image-prune（仅放行
-# `/usr/bin/docker image prune -f`），此后走 `sudo -n` 无需密码。
+# 首次运行会 bootstrap /etc/sudoers.d/xianyu-image-prune（放行本机真实 docker
+# 路径下的 `image prune -f`），此后走 `sudo -n` 无需密码。
 # 2026-09-05 PROBE 实测：hk sudoers 仅精确放行 deploy 的 pull/up 两条。
 on:
   workflow_dispatch:
@@ -34,17 +34,14 @@ jobs:
           set -o pipefail
           DOCKER_BIN=$($SSH_CMD "$SSH_HOST" 'command -v docker')
           echo "remote docker at: $DOCKER_BIN"
-          # sudoers matches the RESOLVED absolute command path; use the real docker path
           if $SSH_CMD "$SSH_HOST" "sudo -n $DOCKER_BIN image prune -f" 2>/dev/null; then
             echo "pruned via sudoers NOPASSWD"
           else
-            printf '%s
-' "${{ secrets.HK_SUDO_PASSWORD }}" |               $SSH_CMD "$SSH_HOST" 'sudo -S docker image prune -f'
-            printf '%s
-' "${{ secrets.HK_SUDO_PASSWORD }}" | $SSH_CMD "$SSH_HOST"               "sudo -S sh -c 'echo \"mango ALL=(root) NOPASSWD: $DOCKER_BIN image prune -f\" > /etc/sudoers.d/xianyu-image-prune && chmod 440 /etc/sudoers.d/xianyu-image-prune && visudo -c'"
+            printf '%s\n' "${{ secrets.HK_SUDO_PASSWORD }}" | $SSH_CMD "$SSH_HOST" 'sudo -S docker image prune -f'
+            printf '%s\n' "${{ secrets.HK_SUDO_PASSWORD }}" | $SSH_CMD "$SSH_HOST" "sudo -S sh -c 'echo \"mango ALL=(root) NOPASSWD: $DOCKER_BIN image prune -f\" > /etc/sudoers.d/xianyu-image-prune && chmod 440 /etc/sudoers.d/xianyu-image-prune && visudo -c'"
             $SSH_CMD "$SSH_HOST" "sudo -n $DOCKER_BIN image prune -f" && echo "sudoers NOPASSWD verified"
           fi
+
       - name: Report
         run: |
           $SSH_CMD "$SSH_HOST" 'docker images -f dangling=true -q | wc -l | xargs echo "dangling images remaining:"; df -h / | tail -1'
-
