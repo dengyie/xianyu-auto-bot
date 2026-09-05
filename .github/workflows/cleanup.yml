@@ -29,7 +29,7 @@ jobs:
       - name: Write one-off cleanup override
         run: |
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
-            'cat > $DIR/cleanup-override.yml <<'"'"'EOF'"'"'
+            'cat > /home/mango/xianyu-auto-bot/cleanup-override.yml <<'"'"'EOF'"'"'
           services:
             cleanup:
               image: docker:cli
@@ -43,14 +43,14 @@ jobs:
         run: |
           SSH="ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no $SSH_HOST"
           echo "=== probe1: deploy 原形态 pull（应通过）==="
-          $SSH "sudo -n docker compose -f $DIR/docker-compose.yml pull" || echo "PROBE1=FAIL"
+          $SSH "sudo -n docker compose -f /home/mango/xianyu-auto-bot/docker-compose.yml pull" || echo "PROBE1=FAIL"
           echo "=== probe2: 绝对路径 + 追加 -f override run ==="
-          $SSH "sudo -n docker compose -f $DIR/docker-compose.yml -f $DIR/cleanup-override.yml run --rm -T cleanup" || echo "PROBE2=FAIL"
+          $SSH "sudo -n docker compose -f /home/mango/xianyu-auto-bot/docker-compose.yml -f /home/mango/xianyu-auto-bot/cleanup-override.yml run --rm -T cleanup" || echo "PROBE2=FAIL"
           echo "=== probe3: -f 覆盖在前的 run 形态 ==="
-          $SSH "cd $DIR && sudo -n docker compose -f cleanup-override.yml run --rm -T cleanup" || echo "PROBE3=FAIL"
+          $SSH "cd /home/mango/xianyu-auto-bot && sudo -n docker compose -f cleanup-override.yml run --rm -T cleanup" || echo "PROBE3=FAIL"
 
       - name: Remove override
         if: always()
         run: |
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
-            'rm -f $DIR/cleanup-override.yml'
+            'rm -f /home/mango/xianyu-auto-bot/cleanup-override.yml'
