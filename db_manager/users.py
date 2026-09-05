@@ -8,7 +8,7 @@ import base64
 from PIL import Image, ImageDraw, ImageFont
 from loguru import logger
 from typing import Any, Dict, Optional, Tuple
-from .base import DBBase
+from .base import DBBase, validate_sql_identifier
 from .security import hash_user_password, is_legacy_sha256_hash, verify_password_hash
 
 
@@ -171,6 +171,10 @@ class DBUsersMixin:
 
                     if not rows:
                         continue
+
+                    # 列名来自上传的备份文件，必须校验为普通标识符后才允许拼接
+                    for _col in columns:
+                        validate_sql_identifier(_col)
 
                     if user_id is not None and table_name in cookie_scoped_tables:
                         if 'cookie_id' not in columns:

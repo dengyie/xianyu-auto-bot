@@ -9717,7 +9717,7 @@ class XianyuLive:
 
             # 生成AI回复
             # 由于外部已实现防抖机制，跳过内部等待（skip_wait=True）
-            reply = ai_reply_engine.generate_reply(
+            reply = await ai_reply_engine.generate_reply_async(
                 message=send_message,
                 item_info=item_info,
                 chat_id=chat_id,

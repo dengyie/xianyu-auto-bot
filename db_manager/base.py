@@ -20,6 +20,32 @@ from loguru import logger
 
 from .security import generate_initial_admin_password, hash_user_password
 
+# 动态表名白名单：凡将表名拼接进 SQL 的接口必须先经 validate_table_name 校验。
+# 路由层（/admin/data/*）已有同名白名单，这里是 DB 层兜底，防未来调用方绕过。
+DYNAMIC_TABLE_WHITELIST = frozenset({
+    'users', 'cookies', 'cookie_status', 'keywords', 'default_replies', 'default_reply_records',
+    'ai_reply_settings', 'ai_conversations', 'ai_item_cache', 'item_info',
+    'message_notifications', 'cards', 'delivery_rules', 'notification_channels',
+    'user_settings', 'system_settings', 'email_verifications', 'captcha_codes', 'orders', 'item_replay',
+    # 遗留迁移专用表（_migrate_table_data）
+    'old_notification_channels',
+})
+_SQL_IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+
+
+def validate_table_name(table_name: str) -> str:
+    """校验动态拼接的表名；非法直接 raise ValueError（不应静默降级）。"""
+    if table_name not in DYNAMIC_TABLE_WHITELIST:
+        raise ValueError(f"非法表名: {table_name!r}")
+    return table_name
+
+
+def validate_sql_identifier(name: str) -> str:
+    """校验来自外部数据（如备份文件）的列名等标识符，只放行普通标识符字符。"""
+    if not _SQL_IDENTIFIER_RE.match(name or ''):
+        raise ValueError(f"非法 SQL 标识符: {name!r}")
+    return name
+
 
 def validate_backup_database(path: Path) -> None:
     """Validate an uploaded SQLite backup before it can replace the live DB."""
@@ -1972,6 +1998,7 @@ Cookie数量: {cookie_count}
             return False
     def _migrate_table_data(self, cursor, table_name: str):
         """迁移指定表的数据"""
+        validate_table_name(table_name)
         try:
             if table_name == 'old_notification_channels':
                 # 迁移通知渠道数据
@@ -2166,6 +2193,7 @@ Cookie数量: {cookie_count}
                 raise
     def get_table_data(self, table_name: str):
         """获取指定表的所有数据"""
+        validate_table_name(table_name)
         with self.lock:
             try:
                 cursor = self.conn.cursor()
@@ -2422,6 +2450,7 @@ Cookie数量: {cookie_count}
 
     def delete_table_record(self, table_name: str, record_id: str):
         """删除指定表的指定记录"""
+        validate_table_name(table_name)
         with self.lock:
             try:
                 cursor = self.conn.cursor()
@@ -2469,6 +2498,7 @@ Cookie数量: {cookie_count}
                 return False
     def clear_table_data(self, table_name: str):
         """清空指定表的所有数据"""
+        validate_table_name(table_name)
         with self.lock:
             try:
                 cursor = self.conn.cursor()

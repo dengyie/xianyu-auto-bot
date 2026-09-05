@@ -1,0 +1,52 @@
+name: HK Docker Cleanup
+
+# 悬空镜像清理（发版后旧 latest 变 dangling，1GB 级 VPS 需定期回收）。
+# hk sudoers 仅对 `docker compose` 免密（`docker image prune` 需 TTY 密码），
+# 因此通过一次性 override compose 定义 cleanup 服务（挂载 docker.sock 的 docker:cli），
+# 用 `docker compose run` 在白名单内执行 daemon 级 prune。
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 21 * * 1" # UTC 周一 21:00 = 北京时间周二 05:00
+
+concurrency:
+  group: hk-cleanup
+  cancel-in-progress: false
+
+jobs:
+  prune-dangling-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SSH_HOST: ${{ secrets.XIANYU_DEPLOY_HOST }}
+    steps:
+      - name: Setup deploy key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.XIANYU_DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Write one-off cleanup override
+        run: |
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
+            'cat > /home/mango/xianyu-auto-bot/cleanup-override.yml <<'"'"'EOF'"'"'
+          services:
+            cleanup:
+              image: docker:cli
+              volumes:
+                - /var/run/docker.sock:/var/run/docker.sock
+              entrypoint: ["sh", "-c"]
+              command: ["docker image prune -f; echo \"--- dangling images remaining:\"; docker images -f dangling=true -q | wc -l"]
+          EOF'
+
+      - name: Run prune via compose (sudoers-safe)
+        run: |
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
+            'cd /home/mango/xianyu-auto-bot && sudo docker compose -f docker-compose.yml -f cleanup-override.yml run --rm -T cleanup'
+
+      - name: Remove override
+        if: always()
+        run: |
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
+            'rm -f /home/mango/xianyu-auto-bot/cleanup-override.yml'
