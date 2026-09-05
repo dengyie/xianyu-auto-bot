@@ -2,10 +2,12 @@ name: HK Docker Cleanup
 
 # 悬空镜像清理。hk sudoers 仅免密白名单内的 `docker compose` 命令形态，
 # 本 job 同时充当形态探测（PROBE 步骤逐个尝试，|| true 不阻断）。
+# ⚠️ 当前 hk sudoers 只精确放行 deploy 用的 pull / up 两条命令，prune 实跑会
+# 被拒（2026-09-05 PROBE 实测）。放行以下任一条目后，把 schedule 加回来：
+#   mango ALL=(root) NOPASSWD: /usr/bin/docker image prune -f
+#   （或 compose run + docker.sock 挂载方案：放宽到 `docker compose` 通配）
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 21 * * 1" # UTC 周一 21:00 = 北京时间周二 05:00
 
 concurrency:
   group: hk-cleanup

@@ -26,6 +26,14 @@
 | 🐳 **Docker 部署** | 一键 Docker Compose 部署 |
 | 📊 **实时监控** | SSE 实时推送聊天/订单/日志 |
 
+## 🔐 部署前必读
+
+- **镜像只从 GHCR 拉取**：compose 无 `build:`，禁止在 1GB 级 VPS 上本地 build（`docker-deploy.sh build` 会主动拒绝）。
+- **默认凭证只用于本地体验**：正式/联网部署必须通过 `.env` 覆盖 `ADMIN_PASSWORD`、`JWT_SECRET_KEY`、`SECRET_ENCRYPTION_KEY`（换 key 会导致旧 Cookie 密文不可解，迁移前想清楚）。
+- **端口默认仅绑定回环**（`127.0.0.1:9000`）：公网访问请走 HTTPS 反向代理并限制来源；**不要**把 `5900`（VNC）/`6080`（noVNC）直接暴露公网。
+- **`data/`、`logs/`、`backups/`、`global_config.yml` 与 `.env` 含敏感数据**：不进 Git、不贴 Issue/PR、公开日志截图前先脱敏（Cookie/Token/账号密码/数据库凭据）。
+- 完整密钥注入说明见 [`.env.example`](.env.example)，漏洞反馈见 [SECURITY.md](SECURITY.md)。
+
 ## 🛠️ 技术栈
 
 | 层级 | 技术 |
