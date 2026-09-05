@@ -4,7 +4,7 @@ import hashlib
 from urllib.parse import urlparse, parse_qs
 from loguru import logger
 from typing import Any, Dict, List, Optional, Tuple
-from .base import DBBase
+from .base import safe_join_sql, DBBase
 
 class DBOpsMixin:
     """ops"""
@@ -1207,7 +1207,7 @@ Cookie数量: {cookie_count}
                     update_fields.append("updated_at = CURRENT_TIMESTAMP")
                     params.append(log_id)
 
-                    sql = f"UPDATE risk_control_logs SET {', '.join(update_fields)} WHERE id = ?"
+                    sql = f"UPDATE risk_control_logs SET {safe_join_sql(update_fields)} WHERE id = ?"
                     cursor.execute(sql, params)
                     self.conn.commit()
                     return cursor.rowcount > 0
@@ -1296,7 +1296,7 @@ Cookie数量: {cookie_count}
                 )
 
                 if conditions:
-                    query += ' WHERE ' + ' AND '.join(conditions)
+                    query += ' WHERE ' + safe_join_sql(conditions, ' AND ')
 
                 query += ' ORDER BY datetime(COALESCE(r.updated_at, r.created_at)) DESC, r.id DESC LIMIT ? OFFSET ?'
                 params.extend([limit, offset])
@@ -1351,7 +1351,7 @@ Cookie数量: {cookie_count}
                 )
 
                 if conditions:
-                    query += ' WHERE ' + ' AND '.join(conditions)
+                    query += ' WHERE ' + safe_join_sql(conditions, ' AND ')
 
                 cursor.execute(query, params)
 
@@ -1478,7 +1478,7 @@ Cookie数量: {cookie_count}
                     params = list(scope_params)
                     conditions.append(extra_condition)
                     params.extend(extra_params)
-                    recent_where = ' WHERE ' + ' AND '.join(conditions)
+                    recent_where = ' WHERE ' + safe_join_sql(conditions, ' AND ')
 
                     cursor.execute(
                         f'''
@@ -1772,7 +1772,7 @@ Cookie数量: {cookie_count}
 
                 update_fields.append("updated_at = CURRENT_TIMESTAMP")
                 params.append(task_id)
-                sql = f"UPDATE scheduled_tasks SET {', '.join(update_fields)} WHERE id = ?"
+                sql = f"UPDATE scheduled_tasks SET {safe_join_sql(update_fields)} WHERE id = ?"
                 self._execute_sql(cursor, sql, tuple(params))
                 self.conn.commit()
                 return cursor.rowcount > 0

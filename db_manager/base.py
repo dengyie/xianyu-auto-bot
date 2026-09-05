@@ -47,6 +47,19 @@ def validate_sql_identifier(name: str) -> str:
     return name
 
 
+def safe_join_sql(parts, sep=', '):
+    '''拼接动态 SQL 片段（SET 子句 / WHERE 条件），拒绝语句级注入标记。
+
+    片段一律来自代码内部的列名/条件构造，值走参数绑定；这里只防
+    分号链式语句、注释截断与块注释，标识符片段不会含这些字符。
+    '''
+    for p in parts:
+        if re.search(r';|--|/\*', p or ''):
+            raise ValueError(f'非法 SQL 片段: {p!r}')
+    return sep.join(parts)
+
+
+
 def validate_backup_database(path: Path) -> None:
     """Validate an uploaded SQLite backup before it can replace the live DB."""
     path = Path(path)
@@ -223,7 +236,7 @@ class DBBase:
                     continue
 
                 params.append(cookie_id)
-                self._execute_sql(cursor, f"UPDATE cookies SET {', '.join(update_fields)} WHERE id = ?", tuple(params))
+                self._execute_sql(cursor, f"UPDATE cookies SET {safe_join_sql(update_fields)} WHERE id = ?", tuple(params))
                 updated_count += 1
 
             if updated_count:
@@ -2381,7 +2394,7 @@ Cookie数量: {cookie_count}
                     conditions.append('resource_id = ?')
                     params.append(str(resource_id))
                 if conditions:
-                    query += ' WHERE ' + ' AND '.join(conditions)
+                    query += ' WHERE ' + safe_join_sql(conditions, ' AND ')
                 query += ' ORDER BY datetime(created_at) DESC, id DESC LIMIT ?'
                 params.append(safe_limit)
 

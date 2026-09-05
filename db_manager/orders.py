@@ -3,7 +3,7 @@ import time
 from datetime import datetime
 from loguru import logger
 from typing import Any, Dict, List, Optional
-from .base import DBBase
+from .base import safe_join_sql, DBBase
 
 class DBOrdersMixin:
     """orders"""
@@ -276,9 +276,9 @@ class DBOrdersMixin:
 
                 if user_id is not None:
                     params.append(user_id)
-                    sql = f"UPDATE delivery_rules SET {', '.join(update_fields)} WHERE id = ? AND user_id = ?"
+                    sql = f"UPDATE delivery_rules SET {safe_join_sql(update_fields)} WHERE id = ? AND user_id = ?"
                 else:
-                    sql = f"UPDATE delivery_rules SET {', '.join(update_fields)} WHERE id = ?"
+                    sql = f"UPDATE delivery_rules SET {safe_join_sql(update_fields)} WHERE id = ?"
 
                 self._execute_sql(cursor, sql, params)
 
@@ -518,7 +518,7 @@ class DBOrdersMixin:
                 )
 
                 params.append(safe_limit)
-                where_sql = ' AND '.join(conditions)
+                where_sql = safe_join_sql(conditions, ' AND ')
                 sql = (
                     "SELECT order_id, unit_index, cookie_id, item_id, buyer_id, channel, status, "
                     "delivery_meta, last_error, sent_at, finalized_at, created_at, updated_at "
@@ -1273,7 +1273,7 @@ class DBOrdersMixin:
                         update_fields.append("updated_at = CURRENT_TIMESTAMP")
                         update_values.append(order_id)
 
-                        sql = f"UPDATE orders SET {', '.join(update_fields)} WHERE order_id = ?"
+                        sql = f"UPDATE orders SET {safe_join_sql(update_fields)} WHERE order_id = ?"
                         cursor.execute(sql, update_values)
                         logger.info(f"更新订单信息: {order_id}")
                 else:
@@ -1437,7 +1437,7 @@ class DBOrdersMixin:
                 if cookie_id:
                     conditions.append("l.cookie_id = ?")
                     params.append(cookie_id)
-                where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+                where_sql = f"WHERE {safe_join_sql(conditions, ' AND ')}" if conditions else ""
                 params.extend([max(1, min(int(limit or 100), 500)), max(0, int(offset or 0))])
                 cursor.execute(f'''
                 SELECT l.id, l.batch_id, l.cookie_id, l.order_id, l.item_id, l.buyer_id,
@@ -1576,7 +1576,7 @@ class DBOrdersMixin:
                 if task_type and task_type != 'all':
                     conditions.append("l.task_type = ?")
                     params.append(task_type)
-                where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+                where_sql = f"WHERE {safe_join_sql(conditions, ' AND ')}" if conditions else ""
                 params.extend([max(1, min(int(limit or 100), 500)), max(0, int(offset or 0))])
                 cursor.execute(f'''
                 SELECT l.id, l.batch_id, l.task_type, l.cookie_id, l.object_id,
@@ -2116,7 +2116,7 @@ class DBOrdersMixin:
                 update_values.append(order_id)
                 
                 # 执行更新
-                sql = f"UPDATE orders SET {', '.join(update_fields)} WHERE order_id = ?"
+                sql = f"UPDATE orders SET {safe_join_sql(update_fields)} WHERE order_id = ?"
                 cursor.execute(sql, update_values)
                 
                 self.conn.commit()

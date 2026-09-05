@@ -1,6 +1,6 @@
 from loguru import logger
 from typing import Dict, List, Optional
-from .base import DBBase
+from .base import safe_join_sql, DBBase
 
 class DBAccountsMixin:
     """accounts"""
@@ -316,7 +316,7 @@ class DBAccountsMixin:
                         return False
                     
                     params.append(cookie_id)
-                    sql = f"UPDATE cookies SET {', '.join(update_fields)} WHERE id = ?"
+                    sql = f"UPDATE cookies SET {safe_join_sql(update_fields)} WHERE id = ?"
                     
                     self._execute_sql(cursor, sql, tuple(params))
                     self.conn.commit()
@@ -379,7 +379,7 @@ class DBAccountsMixin:
                     return False
                 
                 params.append(cookie_id)
-                sql = f"UPDATE cookies SET {', '.join(update_fields)} WHERE id = ?"
+                sql = f"UPDATE cookies SET {safe_join_sql(update_fields)} WHERE id = ?"
                 
                 self._execute_sql(cursor, sql, tuple(params))
                 self.conn.commit()
@@ -592,7 +592,7 @@ class DBAccountsMixin:
                 update_fields.append("updated_at = CURRENT_TIMESTAMP")
                 params.append(template_id)
                 
-                sql = f"UPDATE comment_templates SET {', '.join(update_fields)} WHERE id = ?"
+                sql = f"UPDATE comment_templates SET {safe_join_sql(update_fields)} WHERE id = ?"
                 self._execute_sql(cursor, sql, tuple(params))
                 self.conn.commit()
                 logger.info(f"更新好评模板成功: id={template_id}")

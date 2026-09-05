@@ -6,6 +6,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from .base import safe_join_sql
 
 
 class DBProductPublishMixin:
@@ -230,7 +231,7 @@ class DBProductPublishMixin:
                 if user_id is not None:
                     conditions.append('user_id = ?')
                     params.append(user_id)
-                where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ''
+                where_sql = f"WHERE {safe_join_sql(conditions, ' AND ')}" if conditions else ''
                 cursor.execute(f"SELECT COUNT(*) FROM product_materials {where_sql}", tuple(params))
                 total = int(cursor.fetchone()[0] or 0)
                 cursor.execute(f'''
@@ -313,7 +314,7 @@ class DBProductPublishMixin:
                 update_fields.append('updated_at = CURRENT_TIMESTAMP')
                 params.extend([material_id, user_id])
                 cursor.execute(
-                    f"UPDATE product_materials SET {', '.join(update_fields)} WHERE id = ? AND user_id = ?",
+                    f"UPDATE product_materials SET {safe_join_sql(update_fields)} WHERE id = ? AND user_id = ?",
                     tuple(params),
                 )
                 self.conn.commit()
@@ -399,7 +400,7 @@ class DBProductPublishMixin:
                     where_sql += ' AND user_id = ?'
                     params.append(user_id)
                 cursor.execute(
-                    f"UPDATE publish_logs SET {', '.join(update_fields)} {where_sql}",
+                    f"UPDATE publish_logs SET {safe_join_sql(update_fields)} {where_sql}",
                     tuple(params),
                 )
                 self.conn.commit()
@@ -455,7 +456,7 @@ class DBProductPublishMixin:
                 if batch_id:
                     conditions.append('batch_id = ?')
                     params.append(batch_id)
-                where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ''
+                where_sql = f"WHERE {safe_join_sql(conditions, ' AND ')}" if conditions else ''
                 cursor = self.conn.cursor()
                 cursor.execute(f"SELECT COUNT(*) FROM publish_logs {where_sql}", tuple(params))
                 total = int(cursor.fetchone()[0] or 0)

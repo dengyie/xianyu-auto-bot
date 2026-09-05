@@ -147,7 +147,11 @@ def test_order_recover_source_contract(api_source):
     assert "@app.post('/api/orders/recover')" in runtime
     assert "_auto_deliver_recovered_pending_order" in runtime
 
-    live = Path("XianyuAutoAsync.py").read_text(encoding="utf-8")
+    live = "\n".join([
+        Path("XianyuAutoAsync.py").read_text(encoding="utf-8"),
+        Path("xianyu_trading_mixins.py").read_text(encoding="utf-8"),
+        Path("xianyu_auth_recovery.py").read_text(encoding="utf-8"),
+    ])
     assert "async def _auto_deliver_recovered_pending_order" in live
     assert "async def _send_recovered_delivery_without_sid" in live
 

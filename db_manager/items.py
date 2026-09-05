@@ -1,7 +1,7 @@
 import json
 from loguru import logger
 from typing import Any, Dict, List, Optional
-from .base import DBBase
+from .base import safe_join_sql, DBBase
 
 class DBItemsMixin:
     """items"""
@@ -270,9 +270,9 @@ class DBItemsMixin:
 
                 if user_id is not None:
                     params.append(user_id)
-                    sql = f"UPDATE cards SET {', '.join(update_fields)} WHERE id = ? AND user_id = ?"
+                    sql = f"UPDATE cards SET {safe_join_sql(update_fields)} WHERE id = ? AND user_id = ?"
                 else:
-                    sql = f"UPDATE cards SET {', '.join(update_fields)} WHERE id = ?"
+                    sql = f"UPDATE cards SET {safe_join_sql(update_fields)} WHERE id = ?"
 
                 logger.info(f"[DEBUG DB] 执行SQL: {sql}")
                 logger.info(f"[DEBUG DB] 参数: {params}")
@@ -401,7 +401,7 @@ class DBItemsMixin:
                     update_parts.append("updated_at = CURRENT_TIMESTAMP")
                     params.extend([cookie_id, item_id])
 
-                    sql = f"UPDATE item_info SET {', '.join(update_parts)} WHERE cookie_id = ? AND item_id = ?"
+                    sql = f"UPDATE item_info SET {safe_join_sql(update_parts)} WHERE cookie_id = ? AND item_id = ?"
                     self._execute_sql(cursor, sql, params)
 
                     if cursor.rowcount > 0:
