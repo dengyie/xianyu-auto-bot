@@ -1,13 +1,14 @@
 name: HK Docker Cleanup
 
-# 悬空镜像清理。hk sudoers 仅免密白名单内的 `docker compose` 命令形态，
-# 本 job 同时充当形态探测（PROBE 步骤逐个尝试，|| true 不阻断）。
-# ⚠️ 当前 hk sudoers 只精确放行 deploy 用的 pull / up 两条命令，prune 实跑会
-# 被拒（2026-09-05 PROBE 实测）。放行以下任一条目后，把 schedule 加回来：
-#   mango ALL=(root) NOPASSWD: /usr/bin/docker image prune -f
-#   （或 compose run + docker.sock 挂载方案：放宽到 `docker compose` 通配）
+# 悬空镜像清理（发版后旧 latest 变 dangling，1GB 级 VPS 需定期回收）。
+# 机制：deploy key SSH → `sudo -S`（HK_SUDO_PASSWORD 经 stdin，不落日志/参数）；
+# 首次运行会 bootstrap /etc/sudoers.d/xianyu-image-prune（仅放行
+# `/usr/bin/docker image prune -f`），此后走 `sudo -n` 无需密码。
+# 2026-09-05 PROBE 实测：hk sudoers 仅精确放行 deploy 的 pull/up 两条。
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 21 * * 1" # UTC 周一 21:00 = 北京时间周二 05:00
 
 concurrency:
   group: hk-cleanup
@@ -19,7 +20,7 @@ jobs:
     timeout-minutes: 10
     env:
       SSH_HOST: ${{ secrets.XIANYU_DEPLOY_HOST }}
-      DIR: /home/mango/xianyu-auto-bot
+      SSH_CMD: ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no
     steps:
       - name: Setup deploy key
         run: |
@@ -28,31 +29,20 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Write one-off cleanup override
+      - name: Prune dangling images
         run: |
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
-            'cat > /home/mango/xianyu-auto-bot/cleanup-override.yml <<'"'"'EOF'"'"'
-          services:
-            cleanup:
-              image: docker:cli
-              volumes:
-                - /var/run/docker.sock:/var/run/docker.sock
-              entrypoint: ["sh", "-c"]
-              command: ["docker image prune -f; echo \"--- dangling images remaining:\"; docker images -f dangling=true -q | wc -l"]
-          EOF'
+          set -o pipefail
+          # 优先 sudo -n（sudoers 已放行时）；否则用 secret 经 stdin 引导
+          if $SSH_CMD "$SSH_HOST" 'sudo -n docker image prune -f' 2>/dev/null; then
+            echo "pruned via sudoers NOPASSWD"
+          else
+            printf '%s\n' "${{ secrets.HK_SUDO_PASSWORD }}" | \
+              $SSH_CMD "$SSH_HOST" 'sudo -S docker image prune -f'
+            # 一次性 bootstrap：装免密条目，之后的调度不再需要密码
+            printf '%s\n' "${{ secrets.HK_SUDO_PASSWORD }}" | $SSH_CMD "$SSH_HOST" \
+              'sudo -S sh -c "printf %s\n \"mango ALL=(root) NOPASSWD: /usr/bin/docker image prune -f\" > /etc/sudoers.d/xianyu-image-prune && chmod 440 /etc/sudoers.d/xianyu-image-prune && visudo -c"'
+          fi
 
-      - name: PROBE sudoers shapes
+      - name: Report
         run: |
-          SSH="ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no $SSH_HOST"
-          echo "=== probe1: deploy 原形态 pull（应通过）==="
-          $SSH "sudo -n docker compose -f /home/mango/xianyu-auto-bot/docker-compose.yml pull" || echo "PROBE1=FAIL"
-          echo "=== probe2: 绝对路径 + 追加 -f override run ==="
-          $SSH "sudo -n docker compose -f /home/mango/xianyu-auto-bot/docker-compose.yml -f /home/mango/xianyu-auto-bot/cleanup-override.yml run --rm -T cleanup" || echo "PROBE2=FAIL"
-          echo "=== probe3: -f 覆盖在前的 run 形态 ==="
-          $SSH "cd /home/mango/xianyu-auto-bot && sudo -n docker compose -f cleanup-override.yml run --rm -T cleanup" || echo "PROBE3=FAIL"
-
-      - name: Remove override
-        if: always()
-        run: |
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
-            'rm -f /home/mango/xianyu-auto-bot/cleanup-override.yml'
+          $SSH_CMD "$SSH_HOST" 'docker images -f dangling=true -q | wc -l | xargs echo "dangling images remaining:"; df -h / | tail -1'
