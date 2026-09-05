@@ -190,6 +190,7 @@ def test_xianyu_async_has_blacklist_intercepts():
     src = "\n".join([
         Path("XianyuAutoAsync.py").read_text(encoding="utf-8"),
         Path("xianyu_messaging_mixins.py").read_text(encoding="utf-8"),
+        Path("xianyu_delivery_mixin.py").read_text(encoding="utf-8"),
     ])
     assert "def _check_buyer_blacklist_for_action" in src
     assert "def _resolve_blacklist_user_id" in src
