@@ -82,3 +82,19 @@ def test_slider_mixins_present():
     # 代表性方法（各簇一个）必须可达
     for name in ("login_with_password_playwright", "_get_stealth_script", "solve_slider"):
         assert hasattr(XianyuSliderStealth, name), name
+
+
+def test_slider_mixin_host_refs_resolve():
+    """Guard: every `_host.X` in slider_stealth_mixins.py must exist on the host module.
+
+    Catches the scope-blind rewrite class (params/except-vars/locals shadowed into
+    _host attribute refs) that produced latent NameErrors on password-login paths.
+    """
+    import re
+    import utils.xianyu_slider_stealth as host_module
+
+    src = (Path(__file__).resolve().parents[2] / "utils" / "slider_stealth_mixins.py").read_text(encoding="utf-8")
+    refs = set(re.findall(r"_host\.(\w+)", src))
+    assert refs, "expected _host references in slider_stealth_mixins.py"
+    missing = sorted(r for r in refs if not hasattr(host_module, r))
+    assert not missing, f"_host refs missing on host module: {missing}"
