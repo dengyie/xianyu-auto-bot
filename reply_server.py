@@ -97,6 +97,11 @@ from app.domain.accounts.ownership import (
 
 from loguru import logger
 
+# ── P1 收尾：共享层已下沉 app/api/{models,common,state}.py，此处 import 回以维持
+#    本文件自身代码与既有测试 seam（reply_server.<name> 补丁面）兼容。
+#    仍留在本文件的符号 = 认证依赖 + 业务 helper（与 db_manager/cookie_manager 强
+#    耦合、经双 seam 依赖测试补丁）；路由侧以 `import reply_server` 属性访问晚绑定
+#    —— 这是有意设计而非未完成迁移，见 vault 开发文档路线图 P4 行。
 from app.api.models import (
     AIConfigPreset,
     AIReplySettings,
