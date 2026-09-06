@@ -69,6 +69,16 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q -f .
 
+      # compileall 只查语法，查不出未定义名（历史潜伏 NameError 均漏过）；
+      # 只把 F821 当门禁，未用导入等其余提示不阻塞
+      - name: Undefined-name guard (pyflakes F821)
+        run: |
+          uv pip install --python .venv/bin/python --quiet pyflakes
+          if python -m pyflakes *.py utils/*.py db_manager/*.py app/*.py app/api/*.py app/api/routers/*.py app/application/*/*.py app/domain/*/*.py | grep "undefined name"; then
+            echo "::error::undefined names detected (F821)"
+            exit 1
+          fi
+
       - name: Validate Compose configuration
         run: docker compose config --quiet
 
