@@ -11,6 +11,7 @@
   本模块严禁在模块级 import XianyuAutoAsync（运行期惰性导入除外）。
 """
 import asyncio
+import secrets
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -20,6 +21,7 @@ from typing import Any, Dict, Optional, Tuple
 from loguru import logger
 
 from config import RISK_CONTROL
+from utils.refresh_util import log_captcha_event
 from utils.notification_dispatcher import (
     build_face_verify_notification,
     dispatch_account_notifications,

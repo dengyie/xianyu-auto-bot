@@ -13,6 +13,7 @@ import os
 import random
 import re
 import secrets
+import subprocess
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, parse_qs
@@ -1527,7 +1528,7 @@ class PasswordLoginMixin:
                     if element and element.is_visible():
                         return True
                 except Exception as selector_error:
-                    _mark_detached_runtime(selector_error)
+                    logger.debug(f"【{self.pure_user_id}】检查保持登录提示选择器失败: {selector_error}")
                     continue
         except Exception:
             pass
