@@ -1,7 +1,7 @@
 """Orders / chat / send-message / dashboard page routes (Strangler Fig P2-B6).
 
 Mechanically extracted from reply_server.py; behavior-preserving.
-External (reply_server) symbols resolve via ctx at request time - see app/api/state.py.
+Shared models/helpers/state live in app/api/models.py, app/api/common.py and app/api/state.py; reply_server-resident symbols are accessed late-bound (reply_server.X) so runtime rebinds stay visible.
 """
 
 from typing import Any, Dict, List, Optional, Tuple, Callable, Awaitable
@@ -31,11 +31,35 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
 from pydantic import BaseModel
 
+from app.api.models import (
+    ChatSendRequest,
+    CopyKeywordsRequest,
+    OrderHistorySyncRequest,
+    OrderRecoverRequest,
+    RequestModel,
+    ResponseModel,
+    SaveItemKeywordsRequest,
+    SendMessageRequest,
+    SendMessageResponse,
+)
+from app.api.common import (
+    _normalize_history_optional_text,
+)
+from app.api import state
+import db_manager
+import reply_server  # noqa: F401  (late-bound seam: runtime rebinds stay visible)
+from app.application.orders.delivery import ForbiddenOrder, ManualDeliveryContextLoader, MissingOrderAccount, OrderNotFound
+from chat_event_hub import chat_event_hub, publish_chat_message
+import order_event_hub
+from utils.time_utils import get_local_now
+import cookie_manager
+import queue
 
-def create_orders_chat_router(ctx) -> APIRouter:
+
+def create_orders_chat_router() -> APIRouter:
     router = APIRouter()
-    @router.post('/send-message', response_model=ctx.SendMessageResponse)
-    async def send_message_api(request: ctx.SendMessageRequest):
+    @router.post('/send-message', response_model=SendMessageResponse)
+    async def send_message_api(request: SendMessageRequest):
         """发送消息API接口（使用秘钥验证）"""
         try:
             # 清理所有参数中的换行符
@@ -55,15 +79,15 @@ def create_orders_chat_router(ctx) -> APIRouter:
             # 验证API秘钥不能为空
             if not cleaned_api_key:
                 logger.warning("API秘钥为空")
-                return ctx.SendMessageResponse(
+                return SendMessageResponse(
                     success=False,
                     message="API秘钥不能为空"
                 )
 
             # 验证API秘钥
-            if not ctx.verify_api_key(cleaned_api_key):
-                logger.warning(f"API秘钥验证失败: {ctx.mask_sensitive_text(cleaned_api_key)}")
-                return ctx.SendMessageResponse(
+            if not reply_server.verify_api_key(cleaned_api_key):
+                logger.warning(f"API秘钥验证失败: {reply_server.mask_sensitive_text(cleaned_api_key)}")
+                return SendMessageResponse(
                     success=False,
                     message="API秘钥验证失败"
                 )
@@ -79,7 +103,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
             for param_name, param_value in required_params.items():
                 if not param_value:
                     logger.warning(f"必需参数 {param_name} 为空")
-                    return ctx.SendMessageResponse(
+                    return SendMessageResponse(
                         success=False,
                         message=f"参数 {param_name} 不能为空"
                     )
@@ -90,7 +114,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
 
             if not live_instance:
                 logger.warning(f"账号实例不存在或未连接: {cleaned_cookie_id}")
-                return ctx.SendMessageResponse(
+                return SendMessageResponse(
                     success=False,
                     message="账号实例不存在或未连接，请检查账号状态"
                 )
@@ -99,7 +123,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
             # connection_state 是项目维护的连接状态，比 ws.closed 更可靠
             if live_instance.connection_state != ConnectionState.CONNECTED:
                 logger.warning(f"账号WebSocket连接状态异常: {cleaned_cookie_id}, 状态: {live_instance.connection_state}")
-                return ctx.SendMessageResponse(
+                return SendMessageResponse(
                     success=False,
                     message=f"账号WebSocket连接状态异常({live_instance.connection_state.value})，请等待重连"
                 )
@@ -107,13 +131,13 @@ def create_orders_chat_router(ctx) -> APIRouter:
             # 额外检查ws对象是否存在
             if not live_instance.ws:
                 logger.warning(f"账号WebSocket对象不存在: {cleaned_cookie_id}")
-                return ctx.SendMessageResponse(
+                return SendMessageResponse(
                     success=False,
                     message="账号WebSocket连接未就绪，请等待重连"
                 )
 
             # 发送消息时需要回到账号实例所属事件循环，避免跨 loop 直接操作 ws
-            await ctx._run_live_instance_on_manager_loop(
+            await reply_server._run_live_instance_on_manager_loop(
                 cleaned_cookie_id,
                 lambda: live_instance.send_msg(
                     live_instance.ws,
@@ -126,7 +150,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
 
             logger.info(f"API成功发送消息: {cleaned_cookie_id} -> {cleaned_to_user_id}, 内容: {cleaned_message[:50]}{'...' if len(cleaned_message) > 50 else ''}")
 
-            return ctx.SendMessageResponse(
+            return SendMessageResponse(
                 success=True,
                 message="消息发送成功"
             )
@@ -135,8 +159,8 @@ def create_orders_chat_router(ctx) -> APIRouter:
             # 使用清理后的参数记录日志
             cookie_id_for_log = clean_param(request.cookie_id) if 'clean_param' in locals() else request.cookie_id
             to_user_id_for_log = clean_param(request.to_user_id) if 'clean_param' in locals() else request.to_user_id
-            logger.warning(f"API发送消息被拒绝: {cookie_id_for_log} -> {to_user_id_for_log}, 原因: {ctx.mask_sensitive_text(e.detail)}")
-            return ctx.SendMessageResponse(
+            logger.warning(f"API发送消息被拒绝: {cookie_id_for_log} -> {to_user_id_for_log}, 原因: {reply_server.mask_sensitive_text(e.detail)}")
+            return SendMessageResponse(
                 success=False,
                 message=str(e.detail or "发送消息失败，请稍后重试")
             )
@@ -144,30 +168,29 @@ def create_orders_chat_router(ctx) -> APIRouter:
             # 使用清理后的参数记录日志
             cookie_id_for_log = clean_param(request.cookie_id) if 'clean_param' in locals() else request.cookie_id
             to_user_id_for_log = clean_param(request.to_user_id) if 'clean_param' in locals() else request.to_user_id
-            logger.error(f"API发送消息异常: {cookie_id_for_log} -> {to_user_id_for_log}, 错误: {ctx.mask_sensitive_text(e)}")
-            return ctx.SendMessageResponse(
+            logger.error(f"API发送消息异常: {cookie_id_for_log} -> {to_user_id_for_log}, 错误: {reply_server.mask_sensitive_text(e)}")
+            return SendMessageResponse(
                 success=False,
                 message="发送消息失败，请稍后重试"
             )
 
-    @router.post("/xianyu/reply", response_model=ctx.ResponseModel)
+    @router.post("/xianyu/reply", response_model=ResponseModel)
     async def xianyu_reply(
-        req: ctx.RequestModel,
-        _: None = Depends(ctx.require_xianyu_reply_api_key),
+        req: RequestModel,
+        _: None = Depends(reply_server.require_xianyu_reply_api_key),
     ):
-        msg_template = ctx.match_reply(req.cookie_id, req.send_message)
+        msg_template = reply_server.match_reply(req.cookie_id, req.send_message)
         is_default_reply = False
 
         if not msg_template:
             # 从数据库获取默认回复
-            from db_manager import db_manager
-            default_reply_settings = ctx.db_manager.get_default_reply(req.cookie_id)
+            default_reply_settings = db_manager.db_manager.get_default_reply(req.cookie_id)
 
             if default_reply_settings and default_reply_settings.get('enabled', False):
                 # 检查是否开启了"只回复一次"功能
                 if default_reply_settings.get('reply_once', False):
                     # 检查是否已经回复过这个chat_id
-                    if ctx.db_manager.has_default_reply_record(req.cookie_id, req.chat_id):
+                    if db_manager.db_manager.has_default_reply_record(req.cookie_id, req.chat_id):
                         raise HTTPException(status_code=404, detail="该对话已使用默认回复，不再重复回复")
 
                 msg_template = default_reply_settings.get('reply_content', '')
@@ -190,15 +213,14 @@ def create_orders_chat_router(ctx) -> APIRouter:
 
         # 如果是默认回复且开启了"只回复一次"，记录回复记录
         if is_default_reply:
-            from db_manager import db_manager
-            default_reply_settings = ctx.db_manager.get_default_reply(req.cookie_id)
+            default_reply_settings = db_manager.db_manager.get_default_reply(req.cookie_id)
             if default_reply_settings and default_reply_settings.get('reply_once', False):
-                ctx.db_manager.add_default_reply_record(req.cookie_id, req.chat_id)
+                db_manager.db_manager.add_default_reply_record(req.cookie_id, req.chat_id)
 
         return {"code": 200, "data": {"send_msg": send_msg}}
 
     @router.post('/api/orders/history-sync')
-    async def start_order_history_sync(request: ctx.OrderHistorySyncRequest, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def start_order_history_sync(request: OrderHistorySyncRequest, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """按时间范围同步历史订单。"""
         try:
             request_data = request.model_dump()
@@ -207,14 +229,14 @@ def create_orders_chat_router(ctx) -> APIRouter:
             if not start_date or not end_date:
                 raise HTTPException(status_code=400, detail='开始日期和结束日期不能为空')
 
-            cookie_id = ctx._normalize_history_optional_text(request_data.get('cookie_id'))
+            cookie_id = _normalize_history_optional_text(request_data.get('cookie_id'))
             max_orders = min(max(int(request_data.get('max_orders') or 120), 1), 500)
             fetch_details = bool(request_data.get('fetch_details', True))
 
-            ctx._cleanup_order_history_sync_jobs()
+            reply_server._cleanup_order_history_sync_jobs()
 
             job_id = f"history_sync_{secrets.token_hex(8)}"
-            created_at = ctx.get_local_now().strftime('%Y-%m-%d %H:%M:%S')
+            created_at = get_local_now().strftime('%Y-%m-%d %H:%M:%S')
             job = {
                 'job_id': job_id,
                 'status': 'pending',
@@ -248,13 +270,13 @@ def create_orders_chat_router(ctx) -> APIRouter:
                 'matched_orders': 0,
                 'warnings': [],
             }
-            ctx.order_history_sync_jobs[job_id] = job
+            state.order_history_sync_jobs[job_id] = job
 
-            task = asyncio.create_task(ctx._run_order_history_sync_job(job_id))
-            ctx.order_history_sync_tasks[job_id] = task
+            task = asyncio.create_task(reply_server._run_order_history_sync_job(job_id))
+            state.order_history_sync_tasks[job_id] = task
 
             def _on_task_done(done_task: asyncio.Task) -> None:
-                ctx.order_history_sync_tasks.pop(job_id, None)
+                state.order_history_sync_tasks.pop(job_id, None)
                 try:
                     done_task.result()
                 except asyncio.CancelledError:
@@ -264,103 +286,103 @@ def create_orders_chat_router(ctx) -> APIRouter:
 
             task.add_done_callback(_on_task_done)
 
-            ctx.log_with_user(
+            reply_server.log_with_user(
                 'info',
                 f"创建历史订单同步任务: job_id={job_id}, cookie_id={cookie_id or 'ALL'}, range={start_date}~{end_date}, max_orders={max_orders}, fetch_details={fetch_details}",
                 current_user
             )
-            return {"success": True, "data": ctx._create_order_history_sync_job_snapshot(job)}
+            return {"success": True, "data": reply_server._create_order_history_sync_job_snapshot(job)}
         except HTTPException:
             raise
         except Exception as exc:
-            ctx.log_with_user('error', f"创建历史订单同步任务失败: {exc}", current_user)
+            reply_server.log_with_user('error', f"创建历史订单同步任务失败: {exc}", current_user)
             raise HTTPException(status_code=500, detail=f"创建历史订单同步任务失败: {exc}")
 
     @router.get('/api/orders/history-sync/{job_id}')
-    def get_order_history_sync_status(job_id: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_order_history_sync_status(job_id: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """查询历史订单同步任务状态。"""
-        ctx._cleanup_order_history_sync_jobs()
+        reply_server._cleanup_order_history_sync_jobs()
 
-        job = ctx.order_history_sync_jobs.get(job_id)
+        job = state.order_history_sync_jobs.get(job_id)
         if not job:
             raise HTTPException(status_code=404, detail='历史订单同步任务不存在或已过期')
         if job.get('user_id') != current_user['user_id']:
             raise HTTPException(status_code=403, detail='无权访问该历史订单同步任务')
 
-        return {"success": True, "data": ctx._create_order_history_sync_job_snapshot(job)}
+        return {"success": True, "data": reply_server._create_order_history_sync_job_snapshot(job)}
 
     @router.post('/api/orders/history-sync/{job_id}/cancel')
-    def cancel_order_history_sync(job_id: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def cancel_order_history_sync(job_id: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """取消历史订单同步任务。"""
-        job = ctx.order_history_sync_jobs.get(job_id)
+        job = state.order_history_sync_jobs.get(job_id)
         if not job:
             raise HTTPException(status_code=404, detail='历史订单同步任务不存在或已过期')
         if job.get('user_id') != current_user['user_id']:
             raise HTTPException(status_code=403, detail='无权取消该历史订单同步任务')
 
         if str(job.get('status') or '') in {'completed', 'failed', 'cancelled'}:
-            return {"success": True, "data": ctx._create_order_history_sync_job_snapshot(job)}
+            return {"success": True, "data": reply_server._create_order_history_sync_job_snapshot(job)}
 
         job['status'] = 'cancelled'
         job['error'] = None
         job['message'] = '历史订单同步已取消'
-        job['finished_at'] = ctx.get_local_now().strftime('%Y-%m-%d %H:%M:%S')
+        job['finished_at'] = get_local_now().strftime('%Y-%m-%d %H:%M:%S')
         job['finished_ts'] = time.time()
 
-        task = ctx.order_history_sync_tasks.get(job_id)
+        task = state.order_history_sync_tasks.get(job_id)
         if task and not task.done():
             task.cancel()
 
-        return {"success": True, "data": ctx._create_order_history_sync_job_snapshot(job)}
+        return {"success": True, "data": reply_server._create_order_history_sync_job_snapshot(job)}
 
     @router.post('/api/orders/recover')
-    async def recover_order_by_id(request: ctx.OrderRecoverRequest, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def recover_order_by_id(request: OrderRecoverRequest, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """按已知订单号强制补抓订单详情；详情确认待发货时可触发补偿发货。"""
         try:
             import cookie_manager
 
-            cookie_id = ctx._ensure_cookie_access(request.cookie_id, current_user)
-            order_id = ctx._normalize_history_optional_text(request.order_id)
+            cookie_id = reply_server._ensure_cookie_access(request.cookie_id, current_user)
+            order_id = _normalize_history_optional_text(request.order_id)
             if not order_id or not re.fullmatch(r'\d{10,}', order_id):
                 raise HTTPException(status_code=400, detail='订单ID格式不正确')
 
-            xianyu_instance = ctx.cookie_manager.manager.get_xianyu_instance(cookie_id) if ctx.cookie_manager.manager else None
+            xianyu_instance = cookie_manager.manager.get_xianyu_instance(cookie_id) if cookie_manager.manager else None
             if not xianyu_instance:
                 return {"success": False, "recovered": False, "delivered": False, "message": f"账号 {cookie_id} 未运行，请先启动账号"}
 
-            before_order = ctx.db_manager.get_order_by_id(order_id) or {}
-            before_status = ctx.normalize_order_status_value(before_order.get('order_status')) if before_order else None
+            before_order = db_manager.db_manager.get_order_by_id(order_id) or {}
+            before_status = reply_server.normalize_order_status_value(before_order.get('order_status')) if before_order else None
 
             detail_result = await xianyu_instance.fetch_order_detail_info(
                 order_id=order_id,
-                item_id=ctx._normalize_history_optional_text(request.item_id) or before_order.get('item_id'),
-                buyer_id=ctx._normalize_history_optional_text(request.buyer_id) or before_order.get('buyer_id'),
-                sid=ctx._normalize_history_optional_text(request.sid) or before_order.get('sid'),
-                buyer_nick=ctx._normalize_history_optional_text(request.buyer_nick) or before_order.get('buyer_nick'),
+                item_id=_normalize_history_optional_text(request.item_id) or before_order.get('item_id'),
+                buyer_id=_normalize_history_optional_text(request.buyer_id) or before_order.get('buyer_id'),
+                sid=_normalize_history_optional_text(request.sid) or before_order.get('sid'),
+                buyer_nick=_normalize_history_optional_text(request.buyer_nick) or before_order.get('buyer_nick'),
                 buyer_id_source='manual_order_recover',
                 force_refresh=True,
             )
             if not detail_result:
                 return {"success": False, "recovered": False, "delivered": False, "message": "订单详情补抓失败，请确认订单ID和账号是否匹配"}
 
-            latest_order = ctx.db_manager.get_order_by_id(order_id) or {}
-            latest_status = ctx.normalize_order_status_value(latest_order.get('order_status')) if latest_order else None
+            latest_order = db_manager.db_manager.get_order_by_id(order_id) or {}
+            latest_status = reply_server.normalize_order_status_value(latest_order.get('order_status')) if latest_order else None
             delivered = False
             if request.auto_deliver and latest_status == 'pending_ship':
                 delivered = bool(await xianyu_instance._auto_deliver_recovered_pending_order(
                     latest_order,
                     fallback_order={
                         'order_id': order_id,
-                        'item_id': ctx._normalize_history_optional_text(request.item_id),
-                        'buyer_id': ctx._normalize_history_optional_text(request.buyer_id),
-                        'buyer_nick': ctx._normalize_history_optional_text(request.buyer_nick),
-                        'sid': ctx._normalize_history_optional_text(request.sid),
+                        'item_id': _normalize_history_optional_text(request.item_id),
+                        'buyer_id': _normalize_history_optional_text(request.buyer_id),
+                        'buyer_nick': _normalize_history_optional_text(request.buyer_nick),
+                        'sid': _normalize_history_optional_text(request.sid),
                     },
                     source='manual_order_recover',
                 ))
 
-            ctx.publish_order_update_event(order_id, source='manual_order_recover')
-            ctx.log_with_user(
+            order_event_hub.publish_order_update_event(order_id, source='manual_order_recover')
+            reply_server.log_with_user(
                 'info',
                 f"按订单ID补抓完成: cookie_id={cookie_id}, order_id={order_id}, status={before_status}->{latest_status}, delivered={delivered}",
                 current_user,
@@ -386,31 +408,30 @@ def create_orders_chat_router(ctx) -> APIRouter:
             raise
         except Exception as exc:
             import traceback
-            ctx.log_with_user('error', f"按订单ID补抓失败: {exc}", current_user)
+            reply_server.log_with_user('error', f"按订单ID补抓失败: {exc}", current_user)
             logger.error(f"按订单ID补抓异常堆栈: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"按订单ID补抓失败: {exc}")
 
     @router.get('/api/orders')
-    def get_user_orders(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_user_orders(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取当前用户的订单信息"""
         try:
-            from db_manager import db_manager
 
             user_id = current_user['user_id']
-            ctx.log_with_user('info', "查询用户订单信息", current_user)
+            reply_server.log_with_user('info', "查询用户订单信息", current_user)
 
             # 获取用户的所有Cookie
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             # 获取所有订单数据
             all_orders = []
             for cookie_id in user_cookies.keys():
-                orders = ctx.db_manager.get_orders_by_cookie(cookie_id, limit=1000)  # 增加限制数量
+                orders = db_manager.db_manager.get_orders_by_cookie(cookie_id, limit=1000)  # 增加限制数量
                 # 为每个订单添加cookie_id信息
                 for order in orders:
                     order['cookie_id'] = cookie_id
-                    if ctx.normalize_order_status_value(order.get('order_status')) == 'partial_pending_finalize':
-                        pending_states = ctx.db_manager.get_pending_platform_confirm_states(
+                    if reply_server.normalize_order_status_value(order.get('order_status')) == 'partial_pending_finalize':
+                        pending_states = db_manager.db_manager.get_pending_platform_confirm_states(
                             cookie_id=cookie_id,
                             order_id=order.get('order_id'),
                             limit=20,
@@ -433,30 +454,30 @@ def create_orders_chat_router(ctx) -> APIRouter:
                 reverse=True
             )
 
-            ctx.log_with_user('info', f"用户订单查询成功，共 {len(all_orders)} 条记录", current_user)
+            reply_server.log_with_user('info', f"用户订单查询成功，共 {len(all_orders)} 条记录", current_user)
             return {"success": True, "data": all_orders}
 
         except Exception as e:
-            ctx.log_with_user('error', f"查询用户订单失败: {str(e)}", current_user)
+            reply_server.log_with_user('error', f"查询用户订单失败: {str(e)}", current_user)
             raise HTTPException(status_code=500, detail=f"查询订单失败: {str(e)}")
 
     @router.get('/api/orders/stream')
-    def stream_user_orders(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def stream_user_orders(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """订单实时事件流，仅在订单页激活时使用。"""
         user_id = current_user['user_id']
-        subscriber = ctx.order_event_hub.subscribe(user_id)
+        subscriber = order_event_hub.subscribe(user_id)
 
         def event_generator():
             try:
-                yield ctx.format_sse_event('stream.ready', {'type': 'stream.ready', 'timestamp': int(time.time() * 1000)})
+                yield reply_server.format_sse_event('stream.ready', {'type': 'stream.ready', 'timestamp': int(time.time() * 1000)})
                 while True:
                     try:
                         event = subscriber.get(timeout=25)
-                        yield ctx.format_sse_event(event.get('type', 'message'), event)
-                    except ctx.queue.Empty:
-                        yield ctx.format_sse_event('ping', {'type': 'ping', 'timestamp': int(time.time() * 1000)})
+                        yield reply_server.format_sse_event(event.get('type', 'message'), event)
+                    except queue.Empty:
+                        yield reply_server.format_sse_event('ping', {'type': 'ping', 'timestamp': int(time.time() * 1000)})
             finally:
-                ctx.order_event_hub.unsubscribe(user_id, subscriber)
+                order_event_hub.unsubscribe(user_id, subscriber)
 
         return StreamingResponse(
             event_generator(),
@@ -469,44 +490,42 @@ def create_orders_chat_router(ctx) -> APIRouter:
         )
 
     @router.delete('/api/orders/{order_id}')
-    def delete_user_order(order_id: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def delete_user_order(order_id: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """删除当前用户自己的订单"""
         try:
-            from db_manager import db_manager
 
             user_id = current_user['user_id']
-            order = ctx.db_manager.get_order_by_id(order_id)
+            order = db_manager.db_manager.get_order_by_id(order_id)
             if not order:
                 raise HTTPException(status_code=404, detail="订单不存在")
 
             cookie_id = order.get('cookie_id')
-            cookie_info = ctx.db_manager.get_cookie_details(cookie_id) if cookie_id else None
+            cookie_info = db_manager.db_manager.get_cookie_details(cookie_id) if cookie_id else None
             if not cookie_info or cookie_info.get('user_id') != user_id:
                 raise HTTPException(status_code=403, detail="无权删除此订单")
 
-            success = ctx.db_manager.delete_order(order_id, cookie_id=cookie_id)
+            success = db_manager.db_manager.delete_order(order_id, cookie_id=cookie_id)
             if not success:
                 raise HTTPException(status_code=400, detail="删除订单失败")
 
-            ctx.log_with_user('info', f"删除订单成功: {order_id}", current_user)
+            reply_server.log_with_user('info', f"删除订单成功: {order_id}", current_user)
             return {"success": True, "message": "订单删除成功"}
         except HTTPException:
             raise
         except Exception as e:
-            ctx.log_with_user('error', f"删除订单失败: {order_id} - {ctx.mask_sensitive_text(e)}", current_user)
+            reply_server.log_with_user('error', f"删除订单失败: {order_id} - {reply_server.mask_sensitive_text(e)}", current_user)
             raise HTTPException(status_code=500, detail="删除订单失败，请稍后重试")
 
     @router.post('/api/orders/{order_id}/confirm-retry')
-    async def retry_order_platform_confirm(order_id: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def retry_order_platform_confirm(order_id: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """只重试平台确认发货，不重复发送卡券。"""
         try:
-            from db_manager import db_manager
             import cookie_manager
 
             user_id = current_user['user_id']
-            ctx.log_with_user('info', f"补确认发货请求: 订单 {order_id}", current_user)
+            reply_server.log_with_user('info', f"补确认发货请求: 订单 {order_id}", current_user)
 
-            order = ctx.db_manager.get_order_by_id(order_id)
+            order = db_manager.db_manager.get_order_by_id(order_id)
             if not order:
                 return {"success": False, "confirmed": False, "message": "订单不存在"}
 
@@ -514,11 +533,11 @@ def create_orders_chat_router(ctx) -> APIRouter:
             if not cookie_id:
                 return {"success": False, "confirmed": False, "message": "订单缺少账号信息"}
 
-            cookie_info = ctx.db_manager.get_cookie_details(cookie_id)
+            cookie_info = db_manager.db_manager.get_cookie_details(cookie_id)
             if not cookie_info or cookie_info.get('user_id') != user_id:
                 return {"success": False, "confirmed": False, "message": "无权操作此订单"}
 
-            pending_states = ctx.db_manager.get_pending_platform_confirm_states(
+            pending_states = db_manager.db_manager.get_pending_platform_confirm_states(
                 cookie_id=cookie_id,
                 order_id=order_id,
                 limit=50,
@@ -526,7 +545,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
             if not pending_states:
                 return {"success": True, "confirmed": False, "message": "该订单没有待补确认记录"}
 
-            xianyu_instance = ctx.cookie_manager.manager.get_xianyu_instance(cookie_id) if ctx.cookie_manager.manager else None
+            xianyu_instance = cookie_manager.manager.get_xianyu_instance(cookie_id) if cookie_manager.manager else None
             if not xianyu_instance:
                 return {"success": False, "confirmed": False, "message": f"账号 {cookie_id} 未运行，请先启动账号"}
 
@@ -536,7 +555,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
                 limit=50,
             )
             try:
-                ctx.publish_order_update_event(order_id, source='manual_confirm_retry')
+                order_event_hub.publish_order_update_event(order_id, source='manual_confirm_retry')
             except Exception:
                 pass
 
@@ -548,36 +567,35 @@ def create_orders_chat_router(ctx) -> APIRouter:
             }
         except Exception as e:
             import traceback
-            ctx.log_with_user('error', f"补确认发货异常: 订单 {order_id} - {str(e)}", current_user)
+            reply_server.log_with_user('error', f"补确认发货异常: 订单 {order_id} - {str(e)}", current_user)
             logger.error(f"补确认发货异常: {traceback.format_exc()}")
             return {"success": False, "confirmed": False, "message": f"补确认异常: {str(e)}"}
 
     @router.post('/api/orders/{order_id}/deliver')
-    async def manual_deliver_order(order_id: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def manual_deliver_order(order_id: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """手动发货 - 根据订单信息匹配发货规则并发送卡券"""
         try:
-            from db_manager import db_manager
             import cookie_manager
 
             user_id = current_user['user_id']
-            ctx.log_with_user('info', f"手动发货请求: 订单 {order_id}", current_user)
+            reply_server.log_with_user('info', f"手动发货请求: 订单 {order_id}", current_user)
 
             try:
-                delivery_context = ctx.ManualDeliveryContextLoader(ctx.db_manager).load(
+                delivery_context = ManualDeliveryContextLoader(db_manager.db_manager).load(
                     order_id, user_id
                 )
-            except ctx.OrderNotFound:
+            except OrderNotFound:
                 return {"success": False, "delivered": False, "message": "订单不存在"}
-            except ctx.MissingOrderAccount:
+            except MissingOrderAccount:
                 return {"success": False, "delivered": False, "message": "订单缺少账号信息"}
-            except ctx.ForbiddenOrder:
+            except ForbiddenOrder:
                 return {"success": False, "delivered": False, "message": "无权操作此订单"}
 
             order = delivery_context.order
             cookie_id = delivery_context.cookie_id
 
             # 获取 XianyuLive 实例
-            xianyu_instance = ctx.cookie_manager.manager.get_xianyu_instance(cookie_id) if ctx.cookie_manager.manager else None
+            xianyu_instance = cookie_manager.manager.get_xianyu_instance(cookie_id) if cookie_manager.manager else None
             if not xianyu_instance:
                 return {"success": False, "delivered": False, "message": f"账号 {cookie_id} 未运行，请先启动账号"}
 
@@ -592,7 +610,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
                 return {"success": False, "delivered": False, "message": "订单缺少买家信息，无法发送消息"}
 
             # 获取商品标题
-            item_info = ctx.db_manager.get_item_info(cookie_id, item_id)
+            item_info = db_manager.db_manager.get_item_info(cookie_id, item_id)
             item_title = item_info.get('item_title', '') if item_info else ''
 
             try:
@@ -642,8 +660,8 @@ def create_orders_chat_router(ctx) -> APIRouter:
                     expected_quantity=expected_quantity,
                     context="手动发货补完成收尾成功"
                 )
-                ctx.publish_order_update_event(order_id, source='manual_delivery_finalize')
-                ctx.log_with_user('info', f"检测到订单 {order_id} 存在待完成收尾记录，已先补完成 {finalize_completed_units} 个单元，继续执行补发", current_user)
+                order_event_hub.publish_order_update_event(order_id, source='manual_delivery_finalize')
+                reply_server.log_with_user('info', f"检测到订单 {order_id} 存在待完成收尾记录，已先补完成 {finalize_completed_units} 个单元，继续执行补发", current_user)
             else:
                 progress_after_finalize = progress_summary_before
 
@@ -728,7 +746,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
                             {'data_reservation_id': data_reservation_id},
                             error=fail_reason
                         )
-                        ctx.db_manager.create_delivery_log(
+                        db_manager.db_manager.create_delivery_log(
                             user_id=user_id,
                             cookie_id=cookie_id,
                             order_id=order_id,
@@ -769,7 +787,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
                     })
                 else:
                     fail_reason = failure_reason or f"第 {unit_index} 个发货单元未匹配到发货规则，请检查卡券和发货规则配置"
-                    ctx.db_manager.create_delivery_log(
+                    db_manager.db_manager.create_delivery_log(
                         user_id=user_id,
                         cookie_id=cookie_id,
                         order_id=order_id,
@@ -792,11 +810,11 @@ def create_orders_chat_router(ctx) -> APIRouter:
                 sid = order.get('sid', '')
                 if sid:
                     manual_chat_id = sid.replace('@goofish', '')
-                    ctx.log_with_user('info', f"手动发货: 使用现有WebSocket连接发送, cid={manual_chat_id}, buyer_id={buyer_id}", current_user)
+                    reply_server.log_with_user('info', f"手动发货: 使用现有WebSocket连接发送, cid={manual_chat_id}, buyer_id={buyer_id}", current_user)
                 else:
-                    ctx.log_with_user('warning', f"手动发货: 订单无sid，尝试使用buyer_id作为cid, buyer_id={buyer_id}", current_user)
+                    reply_server.log_with_user('warning', f"手动发货: 订单无sid，尝试使用buyer_id作为cid, buyer_id={buyer_id}", current_user)
             else:
-                ctx.log_with_user('warning', f"手动发货: 无现有WebSocket连接，使用send_delivery_steps_once, buyer_id={buyer_id}", current_user)
+                reply_server.log_with_user('warning', f"手动发货: 无现有WebSocket连接，使用send_delivery_steps_once, buyer_id={buyer_id}", current_user)
 
             send_groups = xianyu_instance._build_delivery_send_groups(prepared_units, expected_quantity)
             total_send_groups = len(send_groups)
@@ -834,7 +852,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
                             rule_meta,
                             error=f"手动发货发送失败(unit={unit_index}): {send_error_text}"
                         )
-                        ctx.db_manager.create_delivery_log(
+                        db_manager.db_manager.create_delivery_log(
                             user_id=user_id,
                             cookie_id=cookie_id,
                             order_id=order_id,
@@ -862,7 +880,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
                                 rule_meta,
                                 error=f'手动发货发送成功后标记预占已发送失败(unit={unit_index})'
                             )
-                            ctx.db_manager.create_delivery_log(
+                            db_manager.db_manager.create_delivery_log(
                                 user_id=user_id,
                                 cookie_id=cookie_id,
                                 order_id=order_id,
@@ -904,7 +922,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
                                 status='sent',
                                 last_error=finalize_result.get('error') or f'第 {unit_index} 个发货单元发送成功但提交发货副作用失败'
                             )
-                            ctx.db_manager.create_delivery_log(
+                            db_manager.db_manager.create_delivery_log(
                                 user_id=user_id,
                                 cookie_id=cookie_id,
                                 order_id=order_id,
@@ -933,7 +951,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
                         success_reason = f'手动发货第 {unit_index} 个单元发送成功'
                         if is_batched_text_group and len(group_units) > 1:
                             success_reason += '（批量合并发送）'
-                        ctx.db_manager.create_delivery_log(
+                        db_manager.db_manager.create_delivery_log(
                             user_id=user_id,
                             cookie_id=cookie_id,
                             order_id=order_id,
@@ -961,7 +979,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
                             status='sent',
                             last_error=f'第 {unit_index} 个发货单元消息已发送，但发送后处理异常: {unit_error_text}'
                         )
-                        ctx.db_manager.create_delivery_log(
+                        db_manager.db_manager.create_delivery_log(
                             user_id=user_id,
                             cookie_id=cookie_id,
                             order_id=order_id,
@@ -984,7 +1002,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
                 expected_quantity=expected_quantity,
                 context="手动发货发送成功"
             )
-            ctx.publish_order_update_event(order_id, source='manual_delivery')
+            order_event_hub.publish_order_update_event(order_id, source='manual_delivery')
 
             finalized_now = [r for r in unit_results if r.get('status') == 'finalized']
             pending_finalize_now = [r for r in unit_results if r.get('status') == 'pending_finalize']
@@ -1019,23 +1037,22 @@ def create_orders_chat_router(ctx) -> APIRouter:
             return {"success": True, "delivered": delivered, "message": '，'.join(message_parts)}
 
         except Exception as e:
-            ctx.log_with_user('error', f"手动发货异常: 订单 {order_id} - {str(e)}", current_user)
+            reply_server.log_with_user('error', f"手动发货异常: 订单 {order_id} - {str(e)}", current_user)
             import traceback
             logger.error(f"手动发货异常堆栈: {traceback.format_exc()}")
             return {"success": False, "delivered": False, "message": f"发货失败: {str(e)}"}
 
     @router.post('/api/orders/{order_id}/refresh')
-    async def refresh_order_status(order_id: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def refresh_order_status(order_id: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """刷新订单状态 - 从闲鱼平台获取最新订单状态"""
         try:
-            from db_manager import db_manager
             import cookie_manager
 
             user_id = current_user['user_id']
-            ctx.log_with_user('info', f"刷新订单状态请求: 订单 {order_id}", current_user)
+            reply_server.log_with_user('info', f"刷新订单状态请求: 订单 {order_id}", current_user)
 
             # 获取订单信息
-            order = ctx.db_manager.get_order_by_id(order_id)
+            order = db_manager.db_manager.get_order_by_id(order_id)
             if not order:
                 return {"success": False, "updated": False, "message": "订单不存在"}
 
@@ -1046,12 +1063,12 @@ def create_orders_chat_router(ctx) -> APIRouter:
             if not cookie_id:
                 return {"success": False, "updated": False, "message": "订单缺少账号信息"}
 
-            cookie_info = ctx.db_manager.get_cookie_details(cookie_id)
+            cookie_info = db_manager.db_manager.get_cookie_details(cookie_id)
             if not cookie_info or cookie_info.get('user_id') != user_id:
                 return {"success": False, "updated": False, "message": "无权操作此订单"}
 
             # 获取 XianyuLive 实例
-            xianyu_instance = ctx.cookie_manager.manager.get_xianyu_instance(cookie_id) if ctx.cookie_manager.manager else None
+            xianyu_instance = cookie_manager.manager.get_xianyu_instance(cookie_id) if cookie_manager.manager else None
             if not xianyu_instance:
                 return {"success": False, "updated": False, "message": f"账号 {cookie_id} 未运行，请先启动账号"}
 
@@ -1070,10 +1087,10 @@ def create_orders_chat_router(ctx) -> APIRouter:
 
             if result:
                 # 获取更新后的订单信息
-                updated_order = ctx.db_manager.get_order_by_id(order_id)
+                updated_order = db_manager.db_manager.get_order_by_id(order_id)
                 new_status = updated_order.get('order_status', '') if updated_order else ''
                 status_changed = old_status != new_status
-                ctx.log_with_user('info', f"刷新订单状态成功: 订单 {order_id}, 状态: {old_status} -> {new_status}", current_user)
+                reply_server.log_with_user('info', f"刷新订单状态成功: 订单 {order_id}, 状态: {old_status} -> {new_status}", current_user)
                 return {
                     "success": True,
                     "updated": status_changed,
@@ -1081,11 +1098,11 @@ def create_orders_chat_router(ctx) -> APIRouter:
                     "message": f"状态已更新: {new_status}" if status_changed else "订单状态无变化"
                 }
             else:
-                ctx.log_with_user('warning', f"刷新订单状态失败: 订单 {order_id}", current_user)
+                reply_server.log_with_user('warning', f"刷新订单状态失败: 订单 {order_id}", current_user)
                 return {"success": False, "updated": False, "message": "获取订单详情失败，请稍后重试"}
 
         except Exception as e:
-            ctx.log_with_user('error', f"刷新订单状态异常: 订单 {order_id} - {str(e)}", current_user)
+            reply_server.log_with_user('error', f"刷新订单状态异常: 订单 {order_id} - {str(e)}", current_user)
             import traceback
             logger.error(f"刷新订单状态异常堆栈: {traceback.format_exc()}")
             return {"success": False, "updated": False, "message": f"刷新失败: {str(e)}"}
@@ -1095,29 +1112,29 @@ def create_orders_chat_router(ctx) -> APIRouter:
         cookie_id: str = None,
         include_order_fallback: bool = True,
         limit: int = 100,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """获取指定账号的会话列表"""
         try:
             if not cookie_id:
                 raise HTTPException(status_code=400, detail="缺少 cookie_id 参数")
-            cookie_id = ctx._ensure_cookie_access(cookie_id, current_user)
-            sessions = ctx.db_manager.get_chat_sessions(cookie_id, limit=min(limit, 200))
+            cookie_id = reply_server._ensure_cookie_access(cookie_id, current_user)
+            sessions = db_manager.db_manager.get_chat_sessions(cookie_id, limit=min(limit, 200))
             logger.info(
                 f"获取聊天会话列表: cookie_id={cookie_id}, local_sessions={len(sessions)}, include_order_fallback={include_order_fallback}, limit={limit}"
             )
             if include_order_fallback:
-                fallback_sessions = ctx._build_chat_sessions_from_recent_orders(cookie_id, limit=min(max(limit, 50), 300))
+                fallback_sessions = reply_server._build_chat_sessions_from_recent_orders(cookie_id, limit=min(max(limit, 50), 300))
                 logger.info(f"聊天会话列表订单兜底结果: cookie_id={cookie_id}, fallback_sessions={len(fallback_sessions)}")
-                sessions = ctx._merge_chat_sessions_with_order_fallback(sessions, fallback_sessions, limit=min(max(limit, 50), 300))
+                sessions = reply_server._merge_chat_sessions_with_order_fallback(sessions, fallback_sessions, limit=min(max(limit, 50), 300))
                 logger.info(f"聊天会话列表合并结果: cookie_id={cookie_id}, merged_sessions={len(sessions)}")
-            sessions = ctx._annotate_chat_sessions(cookie_id, sessions)
-            sessions = await ctx._enrich_chat_sessions(cookie_id, sessions, limit=min(max(limit, 20), 30))
+            sessions = reply_server._annotate_chat_sessions(cookie_id, sessions)
+            sessions = await reply_server._enrich_chat_sessions(cookie_id, sessions, limit=min(max(limit, 20), 30))
             return {'success': True, 'sessions': sessions}
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"获取会话列表失败: {ctx.mask_sensitive_text(e)}")
+            logger.error(f"获取会话列表失败: {reply_server.mask_sensitive_text(e)}")
             raise HTTPException(status_code=500, detail="获取会话列表失败")
 
     @router.get('/api/chat/messages')
@@ -1126,29 +1143,29 @@ def create_orders_chat_router(ctx) -> APIRouter:
         chat_id: str = None,
         limit: int = 50,
         before_id: int = None,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """获取指定会话的消息列表（仅读本地 DB，新消息走 /api/chat/stream 实时推送）"""
         try:
             if not cookie_id or not chat_id:
                 raise HTTPException(status_code=400, detail="缺少 cookie_id 或 chat_id 参数")
-            cookie_id = ctx._ensure_cookie_access(cookie_id, current_user)
-            messages = ctx.db_manager.get_chat_messages(cookie_id, chat_id, limit=min(limit, 100), before_id=before_id)
+            cookie_id = reply_server._ensure_cookie_access(cookie_id, current_user)
+            messages = db_manager.db_manager.get_chat_messages(cookie_id, chat_id, limit=min(limit, 100), before_id=before_id)
             return {'success': True, 'messages': messages}
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"获取聊天消息失败: {ctx.mask_sensitive_text(e)}")
+            logger.error(f"获取聊天消息失败: {reply_server.mask_sensitive_text(e)}")
             raise HTTPException(status_code=500, detail="获取聊天消息失败")
 
     @router.post('/api/chat/send')
     async def chat_send_message(
-        req: ctx.ChatSendRequest,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        req: ChatSendRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """在线客服发送消息"""
         try:
-            cookie_id = ctx._ensure_cookie_access(req.cookie_id, current_user)
+            cookie_id = reply_server._ensure_cookie_access(req.cookie_id, current_user)
 
             from XianyuAutoAsync import XianyuLive, ConnectionState
             live_instance = XianyuLive.get_instance(cookie_id)
@@ -1159,7 +1176,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
             if not live_instance.ws:
                 raise HTTPException(status_code=400, detail="WebSocket连接未就绪")
 
-            await ctx._run_live_instance_on_manager_loop(
+            await reply_server._run_live_instance_on_manager_loop(
                 cookie_id,
                 lambda: live_instance.send_msg(
                     live_instance.ws, req.chat_id, req.to_user_id, req.message
@@ -1176,12 +1193,12 @@ def create_orders_chat_router(ctx) -> APIRouter:
                 myid = getattr(live_instance, 'myid', None) or ''
                 sender_name = cookie_id
                 try:
-                    detail = ctx.db_manager.get_cookie_details(cookie_id) or {}
+                    detail = db_manager.db_manager.get_cookie_details(cookie_id) or {}
                     sender_name = detail.get('remark') or detail.get('username') or cookie_id
                 except Exception:
                     pass
 
-                _msg_id_db = ctx.db_manager.save_chat_message(
+                _msg_id_db = db_manager.db_manager.save_chat_message(
                     cookie_id=cookie_id, chat_id=req.chat_id,
                     sender_id=str(myid), sender_name=str(sender_name),
                     content=req.message, content_type=1,
@@ -1189,7 +1206,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
                     direction=1, reply_source='手动',
                     media_url=None, link_url=None, extra_json=None,
                 )
-                ctx.publish_chat_message(cookie_id, {
+                publish_chat_message(cookie_id, {
                     'msg_id': _msg_id_db, 'chat_id': req.chat_id,
                     'sender_id': str(myid), 'sender_name': str(sender_name),
                     'content': req.message, 'content_type': 1,
@@ -1199,32 +1216,32 @@ def create_orders_chat_router(ctx) -> APIRouter:
                 })
                 self_send_dedup.mark(cookie_id, req.chat_id, str(myid), req.message)
             except Exception as e:
-                logger.debug(f"客服 Web 发送后回显落库失败: {ctx.mask_sensitive_text(e)}")
+                logger.debug(f"客服 Web 发送后回显落库失败: {reply_server.mask_sensitive_text(e)}")
 
             return {'success': True, 'message': '发送成功'}
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"客服发送消息失败: {ctx.mask_sensitive_text(e)}")
+            logger.error(f"客服发送消息失败: {reply_server.mask_sensitive_text(e)}")
             raise HTTPException(status_code=500, detail="发送消息失败")
 
     @router.get('/api/chat/stream')
-    def stream_chat_messages(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def stream_chat_messages(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """聊天消息实时事件流"""
         user_id = current_user['user_id']
-        subscriber = ctx.chat_event_hub.subscribe(user_id)
+        subscriber = chat_event_hub.subscribe(user_id)
 
         def event_generator():
             try:
-                yield ctx.format_sse_event('stream.ready', {'type': 'stream.ready', 'timestamp': int(time.time() * 1000)})
+                yield reply_server.format_sse_event('stream.ready', {'type': 'stream.ready', 'timestamp': int(time.time() * 1000)})
                 while True:
                     try:
                         event = subscriber.get(timeout=25)
-                        yield ctx.format_sse_event(event.get('type', 'chat.message'), event)
-                    except ctx.queue.Empty:
-                        yield ctx.format_sse_event('ping', {'type': 'ping', 'timestamp': int(time.time() * 1000)})
+                        yield reply_server.format_sse_event(event.get('type', 'chat.message'), event)
+                    except queue.Empty:
+                        yield reply_server.format_sse_event('ping', {'type': 'ping', 'timestamp': int(time.time() * 1000)})
             finally:
-                ctx.chat_event_hub.unsubscribe(user_id, subscriber)
+                chat_event_hub.unsubscribe(user_id, subscriber)
 
         return StreamingResponse(
             event_generator(),
@@ -1237,105 +1254,105 @@ def create_orders_chat_router(ctx) -> APIRouter:
         )
 
     @router.get('/api/chat/accounts')
-    def get_chat_accounts(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_chat_accounts(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取当前用户的所有账号列表（在线客服三栏布局用）"""
         try:
-            user_cookies = ctx._get_user_cookies_map(current_user)
+            user_cookies = reply_server._get_user_cookies_map(current_user)
             accounts = []
             for cid in user_cookies.keys():
-                status = ctx._build_live_runtime_status(cid)
-                detail = ctx.db_manager.get_cookie_details(cid) or {}
+                status = reply_server._build_live_runtime_status(cid)
+                detail = db_manager.db_manager.get_cookie_details(cid) or {}
                 display_name = detail.get('remark') or detail.get('username') or cid
                 accounts.append({
                     'id': cid,
                     'name': display_name,
-                    'enabled': ctx.db_manager.get_cookie_status(cid),
+                    'enabled': db_manager.db_manager.get_cookie_status(cid),
                     'connected': status.get('connection_state') == 'connected' if status else False,
                 })
             return {'success': True, 'accounts': accounts}
         except Exception as e:
-            logger.error(f"获取聊天账号列表失败: {ctx.mask_sensitive_text(e)}")
+            logger.error(f"获取聊天账号列表失败: {reply_server.mask_sensitive_text(e)}")
             raise HTTPException(status_code=500, detail="获取账号列表失败")
 
     @router.get('/api/chat/keywords/{cid}/item/{item_id}')
     def get_item_keywords(
         cid: str, item_id: str,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """获取指定商品的关键词列表"""
         try:
-            cid = ctx._ensure_cookie_access(cid, current_user)
-            keywords = ctx.db_manager.get_keywords_by_item_id(cid, item_id)
-            item_reply_data = ctx.db_manager.get_item_reply(cid, item_id)
+            cid = reply_server._ensure_cookie_access(cid, current_user)
+            keywords = db_manager.db_manager.get_keywords_by_item_id(cid, item_id)
+            item_reply_data = db_manager.db_manager.get_item_reply(cid, item_id)
             item_reply = item_reply_data.get('reply_content') if item_reply_data else None
             return {'success': True, 'keywords': keywords, 'item_reply': item_reply}
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"获取商品关键词失败: {ctx.mask_sensitive_text(e)}")
+            logger.error(f"获取商品关键词失败: {reply_server.mask_sensitive_text(e)}")
             raise HTTPException(status_code=500, detail="获取商品关键词失败")
 
     @router.post('/api/chat/keywords/{cid}/item/{item_id}')
     def save_item_keywords(
         cid: str, item_id: str,
-        req: ctx.SaveItemKeywordsRequest,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        req: SaveItemKeywordsRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """保存指定商品的关键词和指定商品回复"""
         try:
-            cid = ctx._ensure_cookie_access(cid, current_user)
-            success = ctx.db_manager.save_keywords_for_item(cid, item_id, req.keywords)
+            cid = reply_server._ensure_cookie_access(cid, current_user)
+            success = db_manager.db_manager.save_keywords_for_item(cid, item_id, req.keywords)
             if req.item_reply is not None:
                 reply_content = str(req.item_reply or '').strip()
                 if reply_content:
-                    ctx.db_manager.update_item_reply(cid, item_id, reply_content)
+                    db_manager.db_manager.update_item_reply(cid, item_id, reply_content)
                 else:
-                    ctx.db_manager.delete_item_reply(cid, item_id)
+                    db_manager.db_manager.delete_item_reply(cid, item_id)
             return {'success': success, 'count': len(req.keywords)}
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"保存商品关键词失败: {ctx.mask_sensitive_text(e)}")
+            logger.error(f"保存商品关键词失败: {reply_server.mask_sensitive_text(e)}")
             raise HTTPException(status_code=500, detail="保存商品关键词失败")
 
     @router.post('/api/chat/keywords/{cid}/copy')
     def copy_item_keywords(
         cid: str,
-        req: ctx.CopyKeywordsRequest,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        req: CopyKeywordsRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """复制商品关键词和指定商品回复到其他商品"""
         try:
-            cid = ctx._ensure_cookie_access(cid, current_user)
+            cid = reply_server._ensure_cookie_access(cid, current_user)
             results = {}
-            source_reply = ctx.db_manager.get_item_reply(cid, req.source_item_id)
+            source_reply = db_manager.db_manager.get_item_reply(cid, req.source_item_id)
             source_reply_content = source_reply.get('reply_content', '') if source_reply else ''
 
             for target in req.target_item_ids:
                 if target == req.source_item_id:
                     continue
-                count = ctx.db_manager.copy_keywords_to_item(cid, req.source_item_id, target)
+                count = db_manager.db_manager.copy_keywords_to_item(cid, req.source_item_id, target)
                 results[target] = count
                 if source_reply_content:
-                    ctx.db_manager.update_item_reply(cid, target, source_reply_content)
+                    db_manager.db_manager.update_item_reply(cid, target, source_reply_content)
 
             return {'success': True, 'results': results, 'total': sum(results.values())}
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"复制商品关键词失败: {ctx.mask_sensitive_text(e)}")
+            logger.error(f"复制商品关键词失败: {reply_server.mask_sensitive_text(e)}")
             raise HTTPException(status_code=500, detail="复制商品关键词失败")
 
     @router.get('/api/chat/items/{cid}')
     def get_account_items(
         cid: str,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """获取账号下的商品列表（用于复制回复的目标选择）"""
         try:
-            cid = ctx._ensure_cookie_access(cid, current_user)
-            cursor = ctx.db_manager.conn.cursor()
-            ctx.db_manager._execute_sql(cursor, """
+            cid = reply_server._ensure_cookie_access(cid, current_user)
+            cursor = db_manager.db_manager.conn.cursor()
+            db_manager.db_manager._execute_sql(cursor, """
                 SELECT item_id, item_title FROM item_info
                 WHERE cookie_id = ? ORDER BY item_id
             """, (cid,))
@@ -1345,12 +1362,12 @@ def create_orders_chat_router(ctx) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"获取商品列表失败: {ctx.mask_sensitive_text(e)}")
+            logger.error(f"获取商品列表失败: {reply_server.mask_sensitive_text(e)}")
             raise HTTPException(status_code=500, detail="获取商品列表失败")
 
     @router.get('/', response_class=HTMLResponse)
     async def root():
-        login_path = os.path.join(ctx.static_dir, 'login.html')
+        login_path = os.path.join(state.STATIC_DIR, 'login.html')
         if os.path.exists(login_path):
             with open(login_path, 'r', encoding='utf-8') as f:
                 return HTMLResponse(f.read())
@@ -1359,7 +1376,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
 
     @router.get('/admin', response_class=HTMLResponse)
     async def admin_page():
-        index_path = os.path.join(ctx.static_dir, 'index.html')
+        index_path = os.path.join(state.STATIC_DIR, 'index.html')
         if not os.path.exists(index_path):
             return HTMLResponse('<h3>No front-end found</h3>')
     
@@ -1374,8 +1391,8 @@ def create_orders_chat_router(ctx) -> APIRouter:
                     logger.warning(f"获取文件 {file_path} 修改时间失败: {e}")
             return default
     
-        app_js_path = os.path.join(ctx.static_dir, 'js', 'app.js')
-        app_css_path = os.path.join(ctx.static_dir, 'css', 'app.css')
+        app_js_path = os.path.join(state.STATIC_DIR, 'js', 'app.js')
+        app_css_path = os.path.join(state.STATIC_DIR, 'css', 'app.css')
     
         js_version = get_file_version(app_js_path, '2.2.0')
         css_version = get_file_version(app_css_path, '1.0.0')
@@ -1403,7 +1420,7 @@ def create_orders_chat_router(ctx) -> APIRouter:
 
     @router.get('/download', response_class=HTMLResponse)
     async def download_page():
-        download_path = os.path.join(ctx.static_dir, 'download.html')
+        download_path = os.path.join(state.STATIC_DIR, 'download.html')
         if os.path.exists(download_path):
             with open(download_path, 'r', encoding='utf-8') as f:
                 return HTMLResponse(f.read())

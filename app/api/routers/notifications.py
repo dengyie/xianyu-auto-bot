@@ -1,7 +1,7 @@
 """Notification channels / messages / templates routes (Strangler Fig P2-B2b).
 
 Mechanically extracted from reply_server.py; behavior-preserving.
-External (reply_server) symbols resolve via ctx at request time - see app/api/state.py.
+Shared models/helpers/state live in app/api/models.py, app/api/common.py and app/api/state.py; reply_server-resident symbols are accessed late-bound (reply_server.X) so runtime rebinds stay visible.
 """
 
 from typing import Any, Dict, List, Optional, Tuple, Callable, Awaitable
@@ -31,26 +31,35 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
 from pydantic import BaseModel
 
+from app.api.models import (
+    MessageNotificationIn,
+    NotificationChannelIn,
+    NotificationChannelUpdate,
+    NotificationTemplateIn,
+    TestNotificationIn,
+)
+import db_manager
+import reply_server  # noqa: F401  (late-bound seam: runtime rebinds stay visible)
+from utils.notification_dispatcher import SUPPORTED_NOTIFICATION_TEMPLATE_TYPES
 
-def create_notifications_router(ctx) -> APIRouter:
+
+def create_notifications_router() -> APIRouter:
     router = APIRouter()
     @router.get('/notification-channels')
-    def get_notification_channels(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_notification_channels(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取所有通知渠道"""
-        from db_manager import db_manager
         try:
             user_id = current_user['user_id']
-            return ctx.db_manager.get_notification_channels(user_id)
+            return db_manager.db_manager.get_notification_channels(user_id)
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post('/notification-channels')
-    def create_notification_channel(channel_data: ctx.NotificationChannelIn, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def create_notification_channel(channel_data: NotificationChannelIn, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """创建通知渠道"""
-        from db_manager import db_manager
         try:
             user_id = current_user['user_id']
-            channel_id = ctx.db_manager.create_notification_channel(
+            channel_id = db_manager.db_manager.create_notification_channel(
                 channel_data.name,
                 channel_data.type,
                 channel_data.config,
@@ -61,12 +70,11 @@ def create_notifications_router(ctx) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(e))
 
     @router.get('/notification-channels/{channel_id}')
-    def get_notification_channel(channel_id: int, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_notification_channel(channel_id: int, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取指定通知渠道"""
-        from db_manager import db_manager
         try:
             user_id = current_user['user_id']
-            channel = ctx.db_manager.get_notification_channel(channel_id, user_id=user_id)
+            channel = db_manager.db_manager.get_notification_channel(channel_id, user_id=user_id)
             if not channel:
                 raise HTTPException(status_code=404, detail='通知渠道不存在')
             return channel
@@ -76,12 +84,11 @@ def create_notifications_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.put('/notification-channels/{channel_id}')
-    def update_notification_channel(channel_id: int, channel_data: ctx.NotificationChannelUpdate, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def update_notification_channel(channel_id: int, channel_data: NotificationChannelUpdate, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """更新通知渠道"""
-        from db_manager import db_manager
         try:
             user_id = current_user['user_id']
-            success = ctx.db_manager.update_notification_channel(
+            success = db_manager.db_manager.update_notification_channel(
                 channel_id,
                 channel_data.name,
                 channel_data.config,
@@ -98,12 +105,11 @@ def create_notifications_router(ctx) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(e))
 
     @router.delete('/notification-channels/{channel_id}')
-    def delete_notification_channel(channel_id: int, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def delete_notification_channel(channel_id: int, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """删除通知渠道"""
-        from db_manager import db_manager
         try:
             user_id = current_user['user_id']
-            success = ctx.db_manager.delete_notification_channel(channel_id, user_id=user_id)
+            success = db_manager.db_manager.delete_notification_channel(channel_id, user_id=user_id)
             if success:
                 return {'msg': 'notification channel deleted'}
             else:
@@ -114,15 +120,14 @@ def create_notifications_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get('/message-notifications')
-    def get_all_message_notifications(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_all_message_notifications(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取当前用户所有账号的消息通知配置"""
-        from db_manager import db_manager
         try:
             # 只返回当前用户的消息通知配置
             user_id = current_user['user_id']
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
-            all_notifications = ctx.db_manager.get_all_message_notifications()
+            all_notifications = db_manager.db_manager.get_all_message_notifications()
             # 过滤只属于当前用户的通知配置
             user_notifications = {cid: notifications for cid, notifications in all_notifications.items() if cid in user_cookies}
             return user_notifications
@@ -130,41 +135,39 @@ def create_notifications_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get('/message-notifications/{cid}')
-    def get_account_notifications(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_account_notifications(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取指定账号的消息通知配置"""
-        from db_manager import db_manager
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限访问该Cookie")
 
-            return ctx.db_manager.get_account_notifications(cid)
+            return db_manager.db_manager.get_account_notifications(cid)
         except HTTPException:
             raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post('/message-notifications/{cid}')
-    def set_message_notification(cid: str, notification_data: ctx.MessageNotificationIn, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def set_message_notification(cid: str, notification_data: MessageNotificationIn, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """设置账号的消息通知"""
-        from db_manager import db_manager
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
             # 检查通知渠道是否存在
-            channel = ctx.db_manager.get_notification_channel(notification_data.channel_id, user_id=user_id)
+            channel = db_manager.db_manager.get_notification_channel(notification_data.channel_id, user_id=user_id)
             if not channel:
                 raise HTTPException(status_code=404, detail='通知渠道不存在')
 
-            success = ctx.db_manager.set_message_notification(cid, notification_data.channel_id, notification_data.enabled)
+            success = db_manager.db_manager.set_message_notification(cid, notification_data.channel_id, notification_data.enabled)
             if success:
                 return {'msg': 'message notification set'}
             else:
@@ -175,16 +178,15 @@ def create_notifications_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.delete('/message-notifications/account/{cid}')
-    def delete_account_notifications(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def delete_account_notifications(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """删除账号的所有消息通知配置"""
-        from db_manager import db_manager
         try:
             user_id = current_user['user_id']
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
-            success = ctx.db_manager.delete_account_notifications(cid, user_id=user_id)
+            success = db_manager.db_manager.delete_account_notifications(cid, user_id=user_id)
             if success:
                 return {'msg': 'account notifications deleted'}
             else:
@@ -195,12 +197,11 @@ def create_notifications_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.delete('/message-notifications/{notification_id}')
-    def delete_message_notification(notification_id: int, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def delete_message_notification(notification_id: int, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """删除消息通知配置"""
-        from db_manager import db_manager
         try:
             user_id = current_user['user_id']
-            success = ctx.db_manager.delete_message_notification(notification_id, user_id=user_id)
+            success = db_manager.db_manager.delete_message_notification(notification_id, user_id=user_id)
             if success:
                 return {'msg': 'message notification deleted'}
             else:
@@ -211,28 +212,26 @@ def create_notifications_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get('/notification-templates')
-    def get_notification_templates(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_notification_templates(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取所有通知模板"""
-        from db_manager import db_manager
         try:
-            templates = ctx.db_manager.get_all_notification_templates()
+            templates = db_manager.db_manager.get_all_notification_templates()
             return {'templates': templates}
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post('/notification-templates/test')
-    async def test_notification_template(data: ctx.TestNotificationIn, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def test_notification_template(data: TestNotificationIn, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """发送测试通知"""
         import time as time_module
         import aiohttp
-        from db_manager import db_manager
 
         try:
-            if data.template_type not in ctx.SUPPORTED_NOTIFICATION_TEMPLATE_TYPES:
+            if data.template_type not in SUPPORTED_NOTIFICATION_TEMPLATE_TYPES:
                 raise HTTPException(status_code=400, detail='无效的模板类型')
 
             # 获取所有已启用的通知渠道
-            channels = ctx.db_manager.get_notification_channels(current_user['user_id'])
+            channels = db_manager.db_manager.get_notification_channels(current_user['user_id'])
             logger.info(f"获取到的通知渠道: {channels}")
             enabled_channels = [c for c in channels if c.get('enabled', False)]
             logger.info(f"已启用的通知渠道: {enabled_channels}")
@@ -474,19 +473,18 @@ def create_notifications_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get('/notification-templates/{template_type}')
-    def get_notification_template(template_type: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_notification_template(template_type: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取指定类型的通知模板"""
-        from db_manager import db_manager
         try:
-            if template_type not in ctx.SUPPORTED_NOTIFICATION_TEMPLATE_TYPES:
+            if template_type not in SUPPORTED_NOTIFICATION_TEMPLATE_TYPES:
                 raise HTTPException(status_code=400, detail='无效的模板类型')
 
-            template = ctx.db_manager.get_notification_template(template_type)
+            template = db_manager.db_manager.get_notification_template(template_type)
             if template:
                 return template
             else:
                 # 返回默认模板
-                default_template = ctx.db_manager.get_default_notification_template(template_type)
+                default_template = db_manager.db_manager.get_default_notification_template(template_type)
                 return {
                     'type': template_type,
                     'template': default_template,
@@ -498,25 +496,24 @@ def create_notifications_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.put('/notification-templates/{template_type}')
-    def update_notification_template(template_type: str, data: ctx.NotificationTemplateIn, current_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    def update_notification_template(template_type: str, data: NotificationTemplateIn, current_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """更新通知模板"""
-        from db_manager import db_manager
         try:
-            if template_type not in ctx.SUPPORTED_NOTIFICATION_TEMPLATE_TYPES:
+            if template_type not in SUPPORTED_NOTIFICATION_TEMPLATE_TYPES:
                 raise HTTPException(status_code=400, detail='无效的模板类型')
 
             # 如果模板不存在，先插入默认值
-            existing = ctx.db_manager.get_notification_template(template_type)
+            existing = db_manager.db_manager.get_notification_template(template_type)
             if not existing:
-                cursor = ctx.db_manager.conn.cursor()
-                default_template = ctx.db_manager.get_default_notification_template(template_type)
+                cursor = db_manager.db_manager.conn.cursor()
+                default_template = db_manager.db_manager.get_default_notification_template(template_type)
                 cursor.execute(
                     'INSERT INTO notification_templates (type, template) VALUES (?, ?)',
                     (template_type, default_template)
                 )
-                ctx.db_manager.conn.commit()
+                db_manager.db_manager.conn.commit()
 
-            success = ctx.db_manager.update_notification_template(template_type, data.template)
+            success = db_manager.db_manager.update_notification_template(template_type, data.template)
             if success:
                 return {'msg': 'notification template updated'}
             else:
@@ -527,17 +524,16 @@ def create_notifications_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post('/notification-templates/{template_type}/reset')
-    def reset_notification_template(template_type: str, current_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    def reset_notification_template(template_type: str, current_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """重置通知模板为默认值"""
-        from db_manager import db_manager
         try:
-            if template_type not in ctx.SUPPORTED_NOTIFICATION_TEMPLATE_TYPES:
+            if template_type not in SUPPORTED_NOTIFICATION_TEMPLATE_TYPES:
                 raise HTTPException(status_code=400, detail='无效的模板类型')
 
-            success = ctx.db_manager.reset_notification_template(template_type)
+            success = db_manager.db_manager.reset_notification_template(template_type)
             if success:
                 # 返回重置后的模板
-                template = ctx.db_manager.get_notification_template(template_type)
+                template = db_manager.db_manager.get_notification_template(template_type)
                 return {'msg': 'notification template reset', 'template': template}
             else:
                 raise HTTPException(status_code=400, detail='重置失败')
@@ -547,14 +543,13 @@ def create_notifications_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get('/notification-templates/{template_type}/default')
-    def get_default_notification_template(template_type: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_default_notification_template(template_type: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取默认通知模板"""
-        from db_manager import db_manager
         try:
-            if template_type not in ctx.SUPPORTED_NOTIFICATION_TEMPLATE_TYPES:
+            if template_type not in SUPPORTED_NOTIFICATION_TEMPLATE_TYPES:
                 raise HTTPException(status_code=400, detail='无效的模板类型')
 
-            default_template = ctx.db_manager.get_default_notification_template(template_type)
+            default_template = db_manager.db_manager.get_default_notification_template(template_type)
             if default_template:
                 return {'type': template_type, 'template': default_template}
             else:

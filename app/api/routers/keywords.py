@@ -1,7 +1,7 @@
 """Keywords + default-replies routes (Strangler Fig P2-B2c).
 
 Mechanically extracted from reply_server.py; behavior-preserving.
-External (reply_server) symbols resolve via ctx at request time - see app/api/state.py.
+Shared models/helpers/state live in app/api/models.py, app/api/common.py and app/api/state.py; reply_server-resident symbols are accessed late-bound (reply_server.X) so runtime rebinds stay visible.
 """
 
 from typing import Any, Dict, List, Optional, Tuple, Callable, Awaitable
@@ -31,24 +31,34 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
 from pydantic import BaseModel
 
+from app.api.models import (
+    DefaultReplyIn,
+    KeywordIn,
+    KeywordWithItemIdIn,
+)
+import db_manager
+import reply_server  # noqa: F401  (late-bound seam: runtime rebinds stay visible)
+from utils.image_utils import image_manager
+import cookie_manager
+import pandas as pd
 
-def create_keywords_router(ctx) -> APIRouter:
+
+def create_keywords_router() -> APIRouter:
     router = APIRouter()
     @router.get("/keywords/{cid}")
-    def get_keywords(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
-        if ctx.cookie_manager.manager is None:
+    def get_keywords(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
 
         # 检查cookie是否属于当前用户
         user_id = current_user['user_id']
-        from db_manager import db_manager
-        user_cookies = ctx.db_manager.get_all_cookies(user_id)
+        user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
         if cid not in user_cookies:
             raise HTTPException(status_code=403, detail="无权限访问该Cookie")
 
         # 直接从数据库获取所有关键词（避免重复计算）
-        item_keywords = ctx.db_manager.get_keywords_with_item_id(cid)
+        item_keywords = db_manager.db_manager.get_keywords_with_item_id(cid)
 
         # 转换为统一格式
         all_keywords = []
@@ -63,21 +73,20 @@ def create_keywords_router(ctx) -> APIRouter:
         return all_keywords
 
     @router.get("/keywords-with-item-id/{cid}")
-    def get_keywords_with_item_id(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_keywords_with_item_id(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取包含商品ID的关键词列表"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
 
         # 检查cookie是否属于当前用户
         user_id = current_user['user_id']
-        from db_manager import db_manager
-        user_cookies = ctx.db_manager.get_all_cookies(user_id)
+        user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
         if cid not in user_cookies:
             raise HTTPException(status_code=403, detail="无权限访问该Cookie")
 
         # 获取包含类型信息的关键词
-        keywords = ctx.db_manager.get_keywords_with_type(cid)
+        keywords = db_manager.db_manager.get_keywords_with_type(cid)
 
         # 转换为前端需要的格式
         result = []
@@ -94,39 +103,37 @@ def create_keywords_router(ctx) -> APIRouter:
         return result
 
     @router.post("/keywords/{cid}")
-    def update_keywords(cid: str, body: ctx.KeywordIn, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
-        if ctx.cookie_manager.manager is None:
+    def update_keywords(cid: str, body: KeywordIn, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
 
         # 检查cookie是否属于当前用户
         user_id = current_user['user_id']
-        from db_manager import db_manager
-        user_cookies = ctx.db_manager.get_all_cookies(user_id)
+        user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
         if cid not in user_cookies:
-            ctx.log_with_user('warning', f"尝试操作其他用户的Cookie关键字: {cid}", current_user)
+            reply_server.log_with_user('warning', f"尝试操作其他用户的Cookie关键字: {cid}", current_user)
             raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
         kw_list = [(k, v) for k, v in body.keywords.items()]
-        ctx.log_with_user('info', f"更新Cookie关键字: {cid}, 数量: {len(kw_list)}", current_user)
+        reply_server.log_with_user('info', f"更新Cookie关键字: {cid}, 数量: {len(kw_list)}", current_user)
 
-        ctx.cookie_manager.manager.update_keywords(cid, kw_list)
-        ctx.log_with_user('info', f"Cookie关键字更新成功: {cid}", current_user)
+        cookie_manager.manager.update_keywords(cid, kw_list)
+        reply_server.log_with_user('info', f"Cookie关键字更新成功: {cid}", current_user)
         return {"msg": "updated", "count": len(kw_list)}
 
     @router.post("/keywords-with-item-id/{cid}")
-    def update_keywords_with_item_id(cid: str, body: ctx.KeywordWithItemIdIn, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def update_keywords_with_item_id(cid: str, body: KeywordWithItemIdIn, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """更新包含商品ID的关键词列表"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
 
         # 检查cookie是否属于当前用户
         user_id = current_user['user_id']
-        from db_manager import db_manager
-        user_cookies = ctx.db_manager.get_all_cookies(user_id)
+        user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
         if cid not in user_cookies:
-            ctx.log_with_user('warning', f"尝试操作其他用户的Cookie关键字: {cid}", current_user)
+            reply_server.log_with_user('warning', f"尝试操作其他用户的Cookie关键字: {cid}", current_user)
             raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
         # 验证数据格式
@@ -152,7 +159,7 @@ def create_keywords_router(ctx) -> APIRouter:
 
         # 保存关键词（只保存文本关键词，保留图片关键词）
         try:
-            success = ctx.db_manager.save_text_keywords_only(cid, keywords_to_save)
+            success = db_manager.db_manager.save_text_keywords_only(cid, keywords_to_save)
             if not success:
                 raise HTTPException(status_code=500, detail="保存关键词失败")
         except Exception as e:
@@ -192,29 +199,28 @@ def create_keywords_router(ctx) -> APIRouter:
 
                 raise HTTPException(status_code=400, detail=detail_msg)
             else:
-                ctx.log_with_user('error', f"保存关键词时发生未知错误: {error_msg}", current_user)
+                reply_server.log_with_user('error', f"保存关键词时发生未知错误: {error_msg}", current_user)
                 raise HTTPException(status_code=500, detail="保存关键词失败")
 
-        ctx.log_with_user('info', f"更新Cookie关键字(含商品ID): {cid}, 数量: {len(keywords_to_save)}", current_user)
+        reply_server.log_with_user('info', f"更新Cookie关键字(含商品ID): {cid}, 数量: {len(keywords_to_save)}", current_user)
         return {"msg": "updated", "count": len(keywords_to_save)}
 
     @router.get("/keywords-export/{cid}")
-    def export_keywords(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def export_keywords(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """导出指定账号的关键词为Excel文件"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
 
         # 检查cookie是否属于当前用户
         user_id = current_user['user_id']
-        from db_manager import db_manager
-        user_cookies = ctx.db_manager.get_all_cookies(user_id)
+        user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
         if cid not in user_cookies:
             raise HTTPException(status_code=403, detail="无权限访问该Cookie")
 
         try:
             # 获取关键词数据（包含类型信息）
-            keywords = ctx.db_manager.get_keywords_with_type(cid)
+            keywords = db_manager.db_manager.get_keywords_with_type(cid)
 
             # 创建DataFrame，只导出文本类型的关键词
             data = []
@@ -229,13 +235,13 @@ def create_keywords_router(ctx) -> APIRouter:
 
             # 如果没有数据，创建空的DataFrame但保留列名（作为模板）
             if not data:
-                df = ctx.pd.DataFrame(columns=['关键词', '商品ID', '关键词内容'])
+                df = pd.DataFrame(columns=['关键词', '商品ID', '关键词内容'])
             else:
-                df = ctx.pd.DataFrame(data)
+                df = pd.DataFrame(data)
 
             # 创建Excel文件
             output = io.BytesIO()
-            with ctx.pd.ExcelWriter(output, engine='openpyxl') as writer:
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df.to_excel(writer, sheet_name='关键词数据', index=False)
 
                 # 如果是空模板，添加一些示例说明
@@ -285,15 +291,14 @@ def create_keywords_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"导出关键词失败: {str(e)}")
 
     @router.post("/keywords-import/{cid}")
-    async def import_keywords(cid: str, file: UploadFile = File(...), current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def import_keywords(cid: str, file: UploadFile = File(...), current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """导入Excel文件中的关键词到指定账号"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
 
         # 检查cookie是否属于当前用户
         user_id = current_user['user_id']
-        from db_manager import db_manager
-        user_cookies = ctx.db_manager.get_all_cookies(user_id)
+        user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
         if cid not in user_cookies:
             raise HTTPException(status_code=403, detail="无权限访问该Cookie")
@@ -305,7 +310,7 @@ def create_keywords_router(ctx) -> APIRouter:
         try:
             # 读取Excel文件
             contents = await file.read()
-            df = ctx.pd.read_excel(io.BytesIO(contents))
+            df = pd.read_excel(io.BytesIO(contents))
 
             # 检查必要的列
             required_columns = ['关键词', '商品ID', '关键词内容']
@@ -314,7 +319,7 @@ def create_keywords_router(ctx) -> APIRouter:
                 raise HTTPException(status_code=400, detail=f"Excel文件缺少必要的列: {', '.join(missing_columns)}")
 
             # 获取现有的文本类型关键词（用于比较更新/新增）
-            existing_keywords = ctx.db_manager.get_keywords_with_type(cid)
+            existing_keywords = db_manager.db_manager.get_keywords_with_type(cid)
             existing_dict = {}
             for keyword_data in existing_keywords:
                 # 只考虑文本类型的关键词
@@ -332,7 +337,7 @@ def create_keywords_router(ctx) -> APIRouter:
 
             for index, row in df.iterrows():
                 keyword = str(row['关键词']).strip()
-                item_id = str(row['商品ID']).strip() if ctx.pd.notna(row['商品ID']) and str(row['商品ID']).strip() else None
+                item_id = str(row['商品ID']).strip() if pd.notna(row['商品ID']) and str(row['商品ID']).strip() else None
                 reply = str(row['关键词内容']).strip()
 
                 if not keyword:
@@ -353,11 +358,11 @@ def create_keywords_router(ctx) -> APIRouter:
                 raise HTTPException(status_code=400, detail="Excel文件中没有有效的关键词数据")
 
             # 保存到数据库（只影响文本关键词，保留图片关键词）
-            success = ctx.db_manager.save_text_keywords_only(cid, import_data)
+            success = db_manager.db_manager.save_text_keywords_only(cid, import_data)
             if not success:
                 raise HTTPException(status_code=500, detail="保存关键词到数据库失败")
 
-            ctx.log_with_user('info', f"导入关键词成功: {cid}, 新增: {add_count}, 更新: {update_count}", current_user)
+            reply_server.log_with_user('info', f"导入关键词成功: {cid}, 新增: {add_count}, 更新: {update_count}", current_user)
 
             return {
                 "msg": "导入成功",
@@ -366,9 +371,9 @@ def create_keywords_router(ctx) -> APIRouter:
                 "updated": update_count
             }
 
-        except ctx.pd.errors.EmptyDataError:
+        except pd.errors.EmptyDataError:
             raise HTTPException(status_code=400, detail="Excel文件为空")
-        except ctx.pd.errors.ParserError:
+        except pd.errors.ParserError:
             raise HTTPException(status_code=400, detail="Excel文件格式错误")
         except Exception as e:
             logger.error(f"导入关键词失败: {e}")
@@ -380,12 +385,12 @@ def create_keywords_router(ctx) -> APIRouter:
         keyword: str = Form(...),
         item_id: str = Form(default=""),
         image: UploadFile = File(...),
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """添加图片关键词"""
         logger.info(f"接收到图片关键词添加请求: cid={cid}, keyword={keyword}, item_id={item_id}")
 
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
 
         # 检查参数
@@ -396,7 +401,7 @@ def create_keywords_router(ctx) -> APIRouter:
             raise HTTPException(status_code=400, detail="请选择图片文件")
 
         # 检查cookie是否属于当前用户
-        cookie_details = ctx.db_manager.get_cookie_details(cid)
+        cookie_details = db_manager.db_manager.get_cookie_details(cid)
         if not cookie_details or cookie_details['user_id'] != current_user['user_id']:
             raise HTTPException(status_code=404, detail="账号不存在或无权限")
 
@@ -413,7 +418,7 @@ def create_keywords_router(ctx) -> APIRouter:
             logger.info(f"读取图片数据成功，大小: {len(image_data)} bytes")
 
             # 保存图片
-            image_url = ctx.image_manager.save_image(image_data, image.filename)
+            image_url = image_manager.save_image(image_data, image.filename)
             if not image_url:
                 logger.error("图片保存失败")
                 raise HTTPException(status_code=400, detail="图片保存失败")
@@ -422,23 +427,23 @@ def create_keywords_router(ctx) -> APIRouter:
 
             # 先检查关键词是否已存在
             normalized_item_id = item_id if item_id and item_id.strip() else None
-            if ctx.db_manager.check_keyword_duplicate(cid, keyword, normalized_item_id):
+            if db_manager.db_manager.check_keyword_duplicate(cid, keyword, normalized_item_id):
                 # 删除已保存的图片
-                ctx.image_manager.delete_image(image_url)
+                image_manager.delete_image(image_url)
                 if normalized_item_id:
                     raise HTTPException(status_code=400, detail=f"关键词 '{keyword}' 在商品 '{normalized_item_id}' 中已存在")
                 else:
                     raise HTTPException(status_code=400, detail=f"通用关键词 '{keyword}' 已存在")
 
             # 保存图片关键词到数据库
-            success = ctx.db_manager.save_image_keyword(cid, keyword, image_url, item_id or None)
+            success = db_manager.db_manager.save_image_keyword(cid, keyword, image_url, item_id or None)
             if not success:
                 # 如果数据库保存失败，删除已保存的图片
                 logger.error("数据库保存失败，删除已保存的图片")
-                ctx.image_manager.delete_image(image_url)
+                image_manager.delete_image(image_url)
                 raise HTTPException(status_code=400, detail="图片关键词保存失败，请稍后重试")
 
-            ctx.log_with_user('info', f"添加图片关键词成功: {cid}, 关键词: {keyword}", current_user)
+            reply_server.log_with_user('info', f"添加图片关键词成功: {cid}, 关键词: {keyword}", current_user)
 
             return {
                 "msg": "图片关键词添加成功",
@@ -457,14 +462,14 @@ def create_keywords_router(ctx) -> APIRouter:
     async def add_image_keyword_batch(
         cid: str,
         request: Request,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """批量添加图片关键词（使用已上传的图片URL）"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
 
         # 检查cookie是否属于当前用户
-        cookie_details = ctx.db_manager.get_cookie_details(cid)
+        cookie_details = db_manager.db_manager.get_cookie_details(cid)
         if not cookie_details or cookie_details['user_id'] != current_user['user_id']:
             raise HTTPException(status_code=404, detail="账号不存在或无权限")
 
@@ -500,23 +505,23 @@ def create_keywords_router(ctx) -> APIRouter:
                     normalized_item_id = item_id if item_id and item_id.strip() else None
 
                     # 检查是否重复
-                    if ctx.db_manager.check_keyword_duplicate(cid, keyword, normalized_item_id):
+                    if db_manager.db_manager.check_keyword_duplicate(cid, keyword, normalized_item_id):
                         item_id_text = f"（商品ID: {normalized_item_id}）" if normalized_item_id else "（通用关键词）"
                         duplicates.append(f'"{keyword}" {item_id_text}')
                         fail_count += 1
                         continue
 
                     # 保存图片关键词
-                    success = ctx.db_manager.save_image_keyword(cid, keyword, image_url, normalized_item_id)
+                    success = db_manager.db_manager.save_image_keyword(cid, keyword, image_url, normalized_item_id)
                     if success:
                         success_count += 1
                     else:
                         fail_count += 1
 
             if duplicates:
-                ctx.log_with_user('warning', f"批量添加图片关键词有重复: {cid}, duplicates={duplicates}", current_user)
+                reply_server.log_with_user('warning', f"批量添加图片关键词有重复: {cid}, duplicates={duplicates}", current_user)
 
-            ctx.log_with_user('info', f"批量添加图片关键词完成: {cid}, success={success_count}, fail={fail_count}", current_user)
+            reply_server.log_with_user('info', f"批量添加图片关键词完成: {cid}, success={success_count}, fail={fail_count}", current_user)
 
             return {
                 "msg": "批量添加完成",
@@ -533,50 +538,50 @@ def create_keywords_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"批量添加图片关键词失败: {str(e)}")
 
     @router.get("/keywords-with-type/{cid}")
-    def get_keywords_with_type(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_keywords_with_type(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取包含类型信息的关键词列表"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
 
         # 检查cookie是否属于当前用户
-        cookie_details = ctx.db_manager.get_cookie_details(cid)
+        cookie_details = db_manager.db_manager.get_cookie_details(cid)
         if not cookie_details or cookie_details['user_id'] != current_user['user_id']:
             raise HTTPException(status_code=404, detail="账号不存在或无权限")
 
         try:
-            keywords = ctx.db_manager.get_keywords_with_type(cid)
+            keywords = db_manager.db_manager.get_keywords_with_type(cid)
             return keywords
         except Exception as e:
             logger.error(f"获取关键词列表失败: {e}")
             raise HTTPException(status_code=500, detail=f"获取关键词列表失败: {str(e)}")
 
     @router.delete("/keywords/{cid}/{index}")
-    def delete_keyword_by_index(cid: str, index: int, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def delete_keyword_by_index(cid: str, index: int, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """根据索引删除关键词"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
 
         # 检查cookie是否属于当前用户
-        cookie_details = ctx.db_manager.get_cookie_details(cid)
+        cookie_details = db_manager.db_manager.get_cookie_details(cid)
         if not cookie_details or cookie_details['user_id'] != current_user['user_id']:
             raise HTTPException(status_code=404, detail="账号不存在或无权限")
 
         try:
             # 先获取要删除的关键词信息（用于删除图片文件）
-            keywords = ctx.db_manager.get_keywords_with_type(cid)
+            keywords = db_manager.db_manager.get_keywords_with_type(cid)
             if 0 <= index < len(keywords):
                 keyword_data = keywords[index]
 
                 # 删除关键词
-                success = ctx.db_manager.delete_keyword_by_index(cid, index)
+                success = db_manager.db_manager.delete_keyword_by_index(cid, index)
                 if not success:
                     raise HTTPException(status_code=400, detail="删除关键词失败")
 
                 # 如果是图片关键词，删除对应的图片文件
                 if keyword_data.get('type') == 'image' and keyword_data.get('image_url'):
-                    ctx.image_manager.delete_image(keyword_data['image_url'])
+                    image_manager.delete_image(keyword_data['image_url'])
 
-                ctx.log_with_user('info', f"删除关键词成功: {cid}, 索引: {index}, 关键词: {keyword_data.get('keyword')}", current_user)
+                reply_server.log_with_user('info', f"删除关键词成功: {cid}, 索引: {index}, 关键词: {keyword_data.get('keyword')}", current_user)
 
                 return {"msg": "删除成功"}
             else:
@@ -589,10 +594,10 @@ def create_keywords_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"删除关键词失败: {str(e)}")
 
     @router.get("/debug/keywords-table-info")
-    def debug_keywords_table_info(admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    def debug_keywords_table_info(admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """调试：检查keywords表结构"""
         try:
-            cursor = ctx.db_manager.conn.cursor()
+            cursor = db_manager.db_manager.conn.cursor()
 
             # 获取表结构信息
             cursor.execute("PRAGMA table_info(keywords)")
@@ -612,18 +617,17 @@ def create_keywords_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"检查表结构失败: {str(e)}")
 
     @router.get('/default-replies/{cid}')
-    def get_default_reply(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_default_reply(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取指定账号的默认回复设置"""
-        from db_manager import db_manager
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限访问该Cookie")
 
-            result = ctx.db_manager.get_default_reply(cid)
+            result = db_manager.db_manager.get_default_reply(cid)
             if result is None:
                 # 如果没有设置，返回默认值
                 return {'enabled': False, 'reply_content': '', 'reply_once': False}
@@ -634,18 +638,17 @@ def create_keywords_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.put('/default-replies/{cid}')
-    def update_default_reply(cid: str, reply_data: ctx.DefaultReplyIn, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def update_default_reply(cid: str, reply_data: DefaultReplyIn, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """更新指定账号的默认回复设置"""
-        from db_manager import db_manager
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
-            ctx.db_manager.save_default_reply(cid, reply_data.enabled, reply_data.reply_content, reply_data.reply_once)
+            db_manager.db_manager.save_default_reply(cid, reply_data.enabled, reply_data.reply_content, reply_data.reply_once)
             return {'msg': 'default reply updated', 'enabled': reply_data.enabled, 'reply_once': reply_data.reply_once}
         except HTTPException:
             raise
@@ -653,15 +656,14 @@ def create_keywords_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get('/default-replies')
-    def get_all_default_replies(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_all_default_replies(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取当前用户所有账号的默认回复设置"""
-        from db_manager import db_manager
         try:
             # 只返回当前用户的默认回复设置
             user_id = current_user['user_id']
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
-            all_replies = ctx.db_manager.get_all_default_replies()
+            all_replies = db_manager.db_manager.get_all_default_replies()
             # 过滤只属于当前用户的回复设置
             user_replies = {cid: reply for cid, reply in all_replies.items() if cid in user_cookies}
             return user_replies
@@ -669,18 +671,17 @@ def create_keywords_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.delete('/default-replies/{cid}')
-    def delete_default_reply(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def delete_default_reply(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """删除指定账号的默认回复设置"""
-        from db_manager import db_manager
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
-            success = ctx.db_manager.delete_default_reply(cid)
+            success = db_manager.db_manager.delete_default_reply(cid)
             if success:
                 return {'msg': 'default reply deleted'}
             else:
@@ -691,18 +692,17 @@ def create_keywords_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post('/default-replies/{cid}/clear-records')
-    def clear_default_reply_records(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def clear_default_reply_records(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """清空指定账号的默认回复记录"""
-        from db_manager import db_manager
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
-            ctx.db_manager.clear_default_reply_records(cid)
+            db_manager.db_manager.clear_default_reply_records(cid)
             return {'msg': 'default reply records cleared'}
         except HTTPException:
             raise

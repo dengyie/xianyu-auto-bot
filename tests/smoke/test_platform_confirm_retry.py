@@ -1,6 +1,7 @@
 """Platform confirm pending/retry state machine smoke tests."""
 
 import reply_server
+import order_event_hub
 
 
 def _add_cookie(client, headers, cookie_id):
@@ -220,7 +221,7 @@ def test_confirm_retry_no_pending_record(client, user_auth, mocker):
     )
     runtime = _FakeRuntime()
     mocker.patch.object(reply_server.cookie_manager, "manager", _FakeCookieManager(runtime=runtime))
-    mocker.patch.object(reply_server, "publish_order_update_event")
+    mocker.patch.object(order_event_hub, "publish_order_update_event")
 
     resp = client.post("/api/orders/no-pending-confirm/confirm-retry", headers=user_auth)
     assert resp.status_code == 200
@@ -246,7 +247,7 @@ def test_confirm_retry_success_calls_runtime(client, user_auth, mocker):
     )
     runtime = _FakeRuntime()
     mocker.patch.object(reply_server.cookie_manager, "manager", _FakeCookieManager(runtime=runtime))
-    mocker.patch.object(reply_server, "publish_order_update_event")
+    mocker.patch.object(order_event_hub, "publish_order_update_event")
 
     resp = client.post("/api/orders/pending-confirm-1/confirm-retry", headers=user_auth)
     assert resp.status_code == 200

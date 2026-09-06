@@ -4,6 +4,7 @@ import glob
 import time
 
 import reply_server
+import auto_updater
 
 
 def _insert_sales_order(db, *, order_id, cookie_id, amount, status, paid_at):
@@ -492,7 +493,7 @@ def test_update_management_accepts_is_admin_user_without_admin_username(client, 
     assert db_manager.update_user_admin_status(1, False)
 
     fake_updater = _FakeUpdater()
-    mocker.patch.object(reply_server, "get_updater", return_value=fake_updater)
+    mocker.patch.object(auto_updater, "get_updater", return_value=fake_updater)
     scheduled = []
     mocker.patch.object(reply_server.asyncio, "create_task", side_effect=lambda task: scheduled.append(task))
     owner_auth = _make_auth_header(ops_manager["id"], "ops_manager", True)

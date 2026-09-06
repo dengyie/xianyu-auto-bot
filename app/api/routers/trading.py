@@ -1,7 +1,7 @@
 """Items / cards / delivery-rules / product-publish routes (Strangler Fig P2-B4).
 
 Mechanically extracted from reply_server.py; behavior-preserving.
-External (reply_server) symbols resolve via ctx at request time - see app/api/state.py.
+Shared models/helpers/state live in app/api/models.py, app/api/common.py and app/api/state.py; reply_server-resident symbols are accessed late-bound (reply_server.X) so runtime rebinds stay visible.
 """
 
 from typing import Any, Dict, List, Optional, Tuple, Callable, Awaitable
@@ -31,27 +31,51 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
 from pydantic import BaseModel
 
+from app.api.models import (
+    BatchDeleteRequest,
+    ItemDetailUpdate,
+    ItemSearchMultipleRequest,
+    ItemSearchRequest,
+    ProductBatchPublishRequest,
+    ProductMaterialRequest,
+    ProductMaterialUpdateRequest,
+    ProductSinglePublishRequest,
+)
+from app.api.common import (
+    _dedupe_int_list,
+    _dedupe_str_list,
+    _model_to_dict,
+    _normalize_product_publish_data,
+    _parse_form_bool,
+    _sanitize_material_images,
+    _validate_publish_images,
+)
+import db_manager
+import reply_server  # noqa: F401  (late-bound seam: runtime rebinds stay visible)
+from utils.image_utils import image_manager
+import cookie_manager
+import uuid
 
-def create_trading_router(ctx) -> APIRouter:
+
+def create_trading_router() -> APIRouter:
     router = APIRouter()
     @router.get("/items/{cid}")
-    def get_items_list(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_items_list(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取指定账号的商品列表"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
 
         # 检查cookie是否属于当前用户
         user_id = current_user['user_id']
-        from db_manager import db_manager
-        user_cookies = ctx.db_manager.get_all_cookies(user_id)
+        user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
         if cid not in user_cookies:
             raise HTTPException(status_code=403, detail="无权限访问该Cookie")
 
         try:
             # 获取该账号的所有商品
-            with ctx.db_manager.lock:
-                cursor = ctx.db_manager.conn.cursor()
+            with db_manager.db_manager.lock:
+                cursor = db_manager.db_manager.conn.cursor()
                 cursor.execute('''
                 SELECT item_id, item_title, item_price, created_at
                 FROM item_info
@@ -77,7 +101,7 @@ def create_trading_router(ctx) -> APIRouter:
     @router.post("/upload-image")
     async def upload_image(
         image: UploadFile = File(...),
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """上传图片（用于卡券等功能）"""
         try:
@@ -93,7 +117,7 @@ def create_trading_router(ctx) -> APIRouter:
             logger.info(f"读取图片数据成功，大小: {len(image_data)} bytes")
 
             # 保存图片
-            image_url = ctx.image_manager.save_image(image_data, image.filename)
+            image_url = image_manager.save_image(image_data, image.filename)
             if not image_url:
                 logger.error("图片保存失败")
                 raise HTTPException(status_code=400, detail="图片保存失败")
@@ -112,25 +136,23 @@ def create_trading_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"图片上传失败: {str(e)}")
 
     @router.get("/cards")
-    def get_cards(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_cards(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取当前用户的卡券列表"""
         try:
-            from db_manager import db_manager
             user_id = current_user['user_id']
-            cards = ctx.db_manager.get_all_cards(user_id)
+            cards = db_manager.db_manager.get_all_cards(user_id)
             return cards
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post("/cards")
-    def create_card(card_data: dict, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def create_card(card_data: dict, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """创建新卡券"""
         try:
-            from db_manager import db_manager
             user_id = current_user['user_id']
             card_name = card_data.get('name', '未命名卡券')
 
-            ctx.log_with_user('info', f"创建卡券: {card_name}", current_user)
+            reply_server.log_with_user('info', f"创建卡券: {card_name}", current_user)
 
             # 调试日志：记录接收到的多规格数据
             is_multi_spec = card_data.get('is_multi_spec', False)
@@ -145,7 +167,7 @@ def create_trading_router(ctx) -> APIRouter:
                 if not card_data.get('spec_name') or not card_data.get('spec_value'):
                     raise HTTPException(status_code=400, detail="多规格卡券必须提供规格名称和规格值")
 
-            card_id = ctx.db_manager.create_card(
+            card_id = db_manager.db_manager.create_card(
                 name=card_data.get('name'),
                 card_type=card_data.get('type'),
                 api_config=card_data.get('api_config'),
@@ -168,7 +190,7 @@ def create_trading_router(ctx) -> APIRouter:
             if generate_delivery_rule:
                 try:
                     # 生成发货规则
-                    rule_id = ctx.db_manager.create_delivery_rule(
+                    rule_id = db_manager.db_manager.create_delivery_rule(
                         keyword=card_data.get('name'),  # 商品关键字设置为卡券名称
                         card_id=card_id,  # 匹配卡券设置为当前新添加的卡券ID
                         delivery_count=1,  # 默认发货数量为1
@@ -176,24 +198,23 @@ def create_trading_router(ctx) -> APIRouter:
                         description=f"自动生成的发货规则 - 对应卡券: {card_data.get('name')}",
                         user_id=user_id
                     )
-                    ctx.log_with_user('info', f"自动生成发货规则成功: 卡券ID={card_id}, 规则ID={rule_id}", current_user)
+                    reply_server.log_with_user('info', f"自动生成发货规则成功: 卡券ID={card_id}, 规则ID={rule_id}", current_user)
                 except Exception as e:
-                    ctx.log_with_user('error', f"生成发货规则失败: {str(e)}", current_user)
+                    reply_server.log_with_user('error', f"生成发货规则失败: {str(e)}", current_user)
                     # 不影响卡券创建，仅记录错误
 
-            ctx.log_with_user('info', f"卡券创建成功: {card_name} (ID: {card_id})", current_user)
+            reply_server.log_with_user('info', f"卡券创建成功: {card_name} (ID: {card_id})", current_user)
             return {"id": card_id, "message": "卡券创建成功"}
         except Exception as e:
-            ctx.log_with_user('error', f"创建卡券失败: {card_data.get('name', '未知')} - {str(e)}", current_user)
+            reply_server.log_with_user('error', f"创建卡券失败: {card_data.get('name', '未知')} - {str(e)}", current_user)
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get("/cards/{card_id}")
-    def get_card(card_id: int, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_card(card_id: int, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取单个卡券详情"""
         try:
-            from db_manager import db_manager
             user_id = current_user['user_id']
-            card = ctx.db_manager.get_card_by_id(card_id, user_id)
+            card = db_manager.db_manager.get_card_by_id(card_id, user_id)
             if card:
                 return card
             else:
@@ -204,10 +225,9 @@ def create_trading_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.put("/cards/{card_id}")
-    def update_card(card_id: int, card_data: dict, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def update_card(card_id: int, card_data: dict, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """更新卡券"""
         try:
-            from db_manager import db_manager
             user_id = current_user['user_id']
 
             # 调试日志：记录接收到的多规格数据
@@ -223,7 +243,7 @@ def create_trading_router(ctx) -> APIRouter:
                 if not card_data.get('spec_name') or not card_data.get('spec_value'):
                     raise HTTPException(status_code=400, detail="多规格卡券必须提供规格名称和规格值")
 
-            success = ctx.db_manager.update_card(
+            success = db_manager.db_manager.update_card(
                 card_id=card_id,
                 name=card_data.get('name'),
                 card_type=card_data.get('type'),
@@ -264,7 +284,7 @@ def create_trading_router(ctx) -> APIRouter:
         spec_value: str = Form(default=""),
         spec_name_2: str = Form(default=""),
         spec_value_2: str = Form(default=""),
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """更新带图片的卡券"""
         try:
@@ -286,7 +306,7 @@ def create_trading_router(ctx) -> APIRouter:
             logger.info(f"读取图片数据成功，大小: {len(image_data)} bytes")
 
             # 保存图片
-            image_url = ctx.image_manager.save_image(image_data, image.filename)
+            image_url = image_manager.save_image(image_data, image.filename)
             if not image_url:
                 logger.error("图片保存失败")
                 raise HTTPException(status_code=400, detail="图片保存失败")
@@ -294,8 +314,7 @@ def create_trading_router(ctx) -> APIRouter:
             logger.info(f"图片保存成功: {image_url}")
 
             # 更新卡券
-            from db_manager import db_manager
-            success = ctx.db_manager.update_card(
+            success = db_manager.db_manager.update_card(
                 card_id=card_id,
                 name=name,
                 card_type=type,
@@ -316,7 +335,7 @@ def create_trading_router(ctx) -> APIRouter:
                 return {"message": "卡券更新成功", "image_url": image_url}
             else:
                 # 如果数据库更新失败，删除已保存的图片
-                ctx.image_manager.delete_image(image_url)
+                image_manager.delete_image(image_url)
                 raise HTTPException(status_code=404, detail="卡券不存在")
 
         except HTTPException:
@@ -326,12 +345,11 @@ def create_trading_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.delete("/cards/{card_id}")
-    def delete_card(card_id: int, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def delete_card(card_id: int, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """删除卡券"""
         try:
-            from db_manager import db_manager
             user_id = current_user['user_id']
-            success = ctx.db_manager.delete_card(card_id, user_id)
+            success = db_manager.db_manager.delete_card(card_id, user_id)
             if success:
                 return {"message": "卡券删除成功"}
             else:
@@ -342,32 +360,29 @@ def create_trading_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get("/delivery-rules")
-    def get_delivery_rules(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_delivery_rules(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取发货规则列表"""
         try:
-            from db_manager import db_manager
             user_id = current_user['user_id']
-            rules = ctx.db_manager.get_all_delivery_rules(user_id)
+            rules = db_manager.db_manager.get_all_delivery_rules(user_id)
             return rules
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get("/delivery-rules/stats")
-    def get_delivery_stats(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_delivery_stats(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取发货统计信息"""
         try:
-            from db_manager import db_manager
             user_id = current_user['user_id']
-            today_count = ctx.db_manager.get_today_delivery_count(user_id)
+            today_count = db_manager.db_manager.get_today_delivery_count(user_id)
             return {"today_delivery_count": today_count}
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get("/delivery-logs/recent")
-    def get_recent_delivery_logs(limit: int = 20, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_recent_delivery_logs(limit: int = 20, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取最近发货日志（真实发货事件，含失败原因）"""
         try:
-            from db_manager import db_manager
 
             def extract_spec_mode_context(reason: str):
                 reason_text = (reason or '').strip()
@@ -417,7 +432,7 @@ def create_trading_router(ctx) -> APIRouter:
 
             user_id = current_user['user_id']
             safe_limit = max(1, min(int(limit), 200))
-            raw_logs = ctx.db_manager.get_recent_delivery_logs(user_id=user_id, limit=min(safe_limit * 3, 600))
+            raw_logs = db_manager.db_manager.get_recent_delivery_logs(user_id=user_id, limit=min(safe_limit * 3, 600))
             successful_orders = {
                 str(log.get('order_id') or '').strip()
                 for log in raw_logs
@@ -439,19 +454,18 @@ def create_trading_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post("/delivery-rules")
-    def create_delivery_rule(rule_data: dict, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def create_delivery_rule(rule_data: dict, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """创建新发货规则"""
         try:
-            from db_manager import db_manager
             user_id = current_user['user_id']
             card_id = rule_data.get('card_id')
 
             if card_id is not None:
-                card = ctx.db_manager.get_card_by_id(card_id, user_id)
+                card = db_manager.db_manager.get_card_by_id(card_id, user_id)
                 if not card:
                     raise HTTPException(status_code=404, detail="卡券不存在")
 
-            rule_id = ctx.db_manager.create_delivery_rule(
+            rule_id = db_manager.db_manager.create_delivery_rule(
                 keyword=rule_data.get('keyword'),
                 card_id=card_id,
                 delivery_count=rule_data.get('delivery_count', 1),
@@ -466,12 +480,11 @@ def create_trading_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get("/delivery-rules/{rule_id}")
-    def get_delivery_rule(rule_id: int, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_delivery_rule(rule_id: int, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取单个发货规则详情"""
         try:
-            from db_manager import db_manager
             user_id = current_user['user_id']
-            rule = ctx.db_manager.get_delivery_rule_by_id(rule_id, user_id)
+            rule = db_manager.db_manager.get_delivery_rule_by_id(rule_id, user_id)
             if rule:
                 return rule
             else:
@@ -482,19 +495,18 @@ def create_trading_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.put("/delivery-rules/{rule_id}")
-    def update_delivery_rule(rule_id: int, rule_data: dict, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def update_delivery_rule(rule_id: int, rule_data: dict, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """更新发货规则"""
         try:
-            from db_manager import db_manager
             user_id = current_user['user_id']
             card_id = rule_data.get('card_id')
 
             if card_id is not None:
-                card = ctx.db_manager.get_card_by_id(card_id, user_id)
+                card = db_manager.db_manager.get_card_by_id(card_id, user_id)
                 if not card:
                     raise HTTPException(status_code=404, detail="卡券不存在")
 
-            success = ctx.db_manager.update_delivery_rule(
+            success = db_manager.db_manager.update_delivery_rule(
                 rule_id=rule_id,
                 keyword=rule_data.get('keyword'),
                 card_id=card_id,
@@ -513,12 +525,11 @@ def create_trading_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.delete("/delivery-rules/{rule_id}")
-    def delete_delivery_rule(rule_id: int, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def delete_delivery_rule(rule_id: int, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """删除发货规则"""
         try:
-            from db_manager import db_manager
             user_id = current_user['user_id']
-            success = ctx.db_manager.delete_delivery_rule(rule_id, user_id)
+            success = db_manager.db_manager.delete_delivery_rule(rule_id, user_id)
             if success:
                 return {"message": "发货规则删除成功"}
             else:
@@ -529,17 +540,16 @@ def create_trading_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get("/items")
-    def get_all_items(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_all_items(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取当前用户的所有商品信息"""
         try:
             # 只返回当前用户的商品信息
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             all_items = []
             for cookie_id in user_cookies.keys():
-                items = ctx.db_manager.get_items_by_cookie(cookie_id)
+                items = db_manager.db_manager.get_items_by_cookie(cookie_id)
                 all_items.extend(items)
 
             return {"items": all_items}
@@ -548,8 +558,8 @@ def create_trading_router(ctx) -> APIRouter:
 
     @router.post("/items/search")
     async def search_items(
-        search_request: ctx.ItemSearchRequest,
-        current_user: Optional[Dict[str, Any]] = Depends(ctx.get_current_user_optional)
+        search_request: ItemSearchRequest,
+        current_user: Optional[Dict[str, Any]] = Depends(reply_server.get_current_user_optional)
     ):
         """搜索闲鱼商品"""
         user_info = f"【{current_user.get('username', 'unknown')}#{current_user.get('user_id', 'unknown')}】" if current_user else "【未登录】"
@@ -597,8 +607,8 @@ def create_trading_router(ctx) -> APIRouter:
 
     @router.post("/items/search_multiple")
     async def search_multiple_pages(
-        search_request: ctx.ItemSearchMultipleRequest,
-        current_user: Optional[Dict[str, Any]] = Depends(ctx.get_current_user_optional)
+        search_request: ItemSearchMultipleRequest,
+        current_user: Optional[Dict[str, Any]] = Depends(reply_server.get_current_user_optional)
     ):
         """搜索多页闲鱼商品"""
         user_info = f"【{current_user.get('username', 'unknown')}#{current_user.get('user_id', 'unknown')}】" if current_user else "【未登录】"
@@ -644,18 +654,17 @@ def create_trading_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"多页商品搜索失败: {error_msg}")
 
     @router.get("/items/cookie/{cookie_id}")
-    def get_items_by_cookie(cookie_id: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_items_by_cookie(cookie_id: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取指定Cookie的商品信息"""
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cookie_id not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限访问该Cookie")
 
-            items = ctx.db_manager.get_items_by_cookie(cookie_id)
+            items = db_manager.db_manager.get_items_by_cookie(cookie_id)
             return {"items": items}
         except HTTPException:
             raise
@@ -663,18 +672,17 @@ def create_trading_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"获取商品信息失败: {str(e)}")
 
     @router.get("/items/{cookie_id}/{item_id}")
-    def get_item_detail(cookie_id: str, item_id: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_item_detail(cookie_id: str, item_id: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取商品详情"""
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cookie_id not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限访问该Cookie")
 
-            item = ctx.db_manager.get_item_info(cookie_id, item_id)
+            item = db_manager.db_manager.get_item_info(cookie_id, item_id)
             if not item:
                 raise HTTPException(status_code=404, detail="商品不存在")
             return {"item": item}
@@ -687,20 +695,19 @@ def create_trading_router(ctx) -> APIRouter:
     def update_item_detail(
         cookie_id: str,
         item_id: str,
-        update_data: ctx.ItemDetailUpdate,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        update_data: ItemDetailUpdate,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """更新商品详情"""
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cookie_id not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
-            success = ctx.db_manager.update_item_detail(cookie_id, item_id, update_data.item_detail)
+            success = db_manager.db_manager.update_item_detail(cookie_id, item_id, update_data.item_detail)
             if success:
                 return {"message": "商品详情更新成功"}
             else:
@@ -714,19 +721,18 @@ def create_trading_router(ctx) -> APIRouter:
     def delete_item_info(
         cookie_id: str,
         item_id: str,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """删除商品信息"""
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cookie_id not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
-            success = ctx.db_manager.delete_item_info(cookie_id, item_id)
+            success = db_manager.db_manager.delete_item_info(cookie_id, item_id)
             if success:
                 return {"message": "商品信息删除成功"}
             else:
@@ -739,15 +745,15 @@ def create_trading_router(ctx) -> APIRouter:
 
     @router.delete("/items/batch")
     def batch_delete_items(
-        request: ctx.BatchDeleteRequest,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        request: BatchDeleteRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """批量删除商品信息"""
         try:
             if not request.items:
                 raise HTTPException(status_code=400, detail="删除列表不能为空")
 
-            success_count = ctx.db_manager.batch_delete_item_info(request.items)
+            success_count = db_manager.db_manager.batch_delete_item_info(request.items)
             total_count = len(request.items)
 
             return {
@@ -761,19 +767,18 @@ def create_trading_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"服务器错误: {str(e)}")
 
     @router.put("/items/{cookie_id}/{item_id}/multi-spec")
-    def update_item_multi_spec(cookie_id: str, item_id: str, spec_data: dict, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def update_item_multi_spec(cookie_id: str, item_id: str, spec_data: dict, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """更新商品的多规格状态"""
         try:
-            from db_manager import db_manager
 
             user_id = current_user['user_id']
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
             if cookie_id not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
             is_multi_spec = spec_data.get('is_multi_spec', False)
 
-            success = ctx.db_manager.update_item_multi_spec_status(cookie_id, item_id, is_multi_spec)
+            success = db_manager.db_manager.update_item_multi_spec_status(cookie_id, item_id, is_multi_spec)
 
             if success:
                 return {"message": f"商品多规格状态已{'开启' if is_multi_spec else '关闭'}"}
@@ -786,19 +791,18 @@ def create_trading_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.put("/items/{cookie_id}/{item_id}/multi-quantity-delivery")
-    def update_item_multi_quantity_delivery(cookie_id: str, item_id: str, delivery_data: dict, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def update_item_multi_quantity_delivery(cookie_id: str, item_id: str, delivery_data: dict, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """更新商品的多数量发货状态"""
         try:
-            from db_manager import db_manager
 
             user_id = current_user['user_id']
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
             if cookie_id not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
             multi_quantity_delivery = delivery_data.get('multi_quantity_delivery', False)
 
-            success = ctx.db_manager.update_item_multi_quantity_delivery_status(cookie_id, item_id, multi_quantity_delivery)
+            success = db_manager.db_manager.update_item_multi_quantity_delivery_status(cookie_id, item_id, multi_quantity_delivery)
 
             if success:
                 return {"message": f"商品多数量发货状态已{'开启' if multi_quantity_delivery else '关闭'}"}
@@ -811,16 +815,16 @@ def create_trading_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post("/items/get-all-from-account")
-    async def get_all_items_from_account(request: dict, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def get_all_items_from_account(request: dict, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """从指定账号获取所有商品信息"""
         try:
             cookie_id = request.get('cookie_id')
             if not cookie_id:
                 return {"success": False, "message": "缺少cookie_id参数"}
-            cookie_id = ctx._ensure_cookie_access(cookie_id, current_user)
+            cookie_id = reply_server._ensure_cookie_access(cookie_id, current_user)
 
             # 获取指定账号的cookie信息
-            cookie_info = ctx.db_manager.get_cookie_by_id(cookie_id)
+            cookie_info = db_manager.db_manager.get_cookie_by_id(cookie_id)
             if not cookie_info:
                 return {"success": False, "message": "未找到指定的账号信息"}
 
@@ -860,7 +864,7 @@ def create_trading_router(ctx) -> APIRouter:
             return {"success": False, "message": f"获取商品信息异常: {str(e)}"}
 
     @router.post("/items/get-by-page")
-    async def get_items_by_page(request: dict, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def get_items_by_page(request: dict, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """从指定账号按页获取商品信息"""
         try:
             # 验证参数
@@ -870,7 +874,7 @@ def create_trading_router(ctx) -> APIRouter:
 
             if not cookie_id:
                 return {"success": False, "message": "缺少cookie_id参数"}
-            cookie_id = ctx._ensure_cookie_access(cookie_id, current_user)
+            cookie_id = reply_server._ensure_cookie_access(cookie_id, current_user)
 
             # 验证分页参数
             try:
@@ -886,7 +890,7 @@ def create_trading_router(ctx) -> APIRouter:
                 return {"success": False, "message": "每页数量必须在1-100之间"}
 
             # 获取账号信息
-            account = ctx.db_manager.get_cookie_by_id(cookie_id)
+            account = db_manager.db_manager.get_cookie_by_id(cookie_id)
             if not account:
                 return {"success": False, "message": "账号不存在"}
 
@@ -929,37 +933,37 @@ def create_trading_router(ctx) -> APIRouter:
     def list_product_materials(
         page: int = 1,
         page_size: int = 20,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """分页获取当前用户的商品发布素材。"""
         return {
             "success": True,
-            **ctx.db_manager.list_product_materials(current_user['user_id'], page=page, page_size=page_size),
+            **db_manager.db_manager.list_product_materials(current_user['user_id'], page=page, page_size=page_size),
         }
 
     @router.post("/product-materials")
     def create_product_material(
-        request: ctx.ProductMaterialRequest,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        request: ProductMaterialRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """保存商品发布素材。"""
-        data = ctx._normalize_product_publish_data(ctx._model_to_dict(request), partial=False)
-        data['images'] = ctx._sanitize_material_images(data.get('images') or [], require_images=True)
-        material_id = ctx.db_manager.add_product_material(current_user['user_id'], data)
+        data = _normalize_product_publish_data(_model_to_dict(request), partial=False)
+        data['images'] = _sanitize_material_images(data.get('images') or [], require_images=True)
+        material_id = db_manager.db_manager.add_product_material(current_user['user_id'], data)
         if not material_id:
             raise HTTPException(status_code=500, detail="保存商品素材失败")
         return {
             "success": True,
             "message": "商品素材保存成功",
-            "material": ctx.db_manager.get_product_material(material_id, current_user['user_id']),
+            "material": db_manager.db_manager.get_product_material(material_id, current_user['user_id']),
         }
 
     @router.get("/product-materials/{material_id}")
     def get_product_material(
         material_id: int,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
-        material = ctx.db_manager.get_product_material(material_id, current_user['user_id'])
+        material = db_manager.db_manager.get_product_material(material_id, current_user['user_id'])
         if not material:
             raise HTTPException(status_code=404, detail="商品素材不存在")
         return {"success": True, "material": material}
@@ -967,40 +971,40 @@ def create_trading_router(ctx) -> APIRouter:
     @router.put("/product-materials/{material_id}")
     def update_product_material(
         material_id: int,
-        request: ctx.ProductMaterialUpdateRequest,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        request: ProductMaterialUpdateRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
-        existing = ctx.db_manager.get_product_material(material_id, current_user['user_id'])
+        existing = db_manager.db_manager.get_product_material(material_id, current_user['user_id'])
         if not existing:
             raise HTTPException(status_code=404, detail="商品素材不存在")
 
-        update_payload = ctx._model_to_dict(request, exclude_unset=True)
+        update_payload = _model_to_dict(request, exclude_unset=True)
         if not update_payload:
             raise HTTPException(status_code=400, detail="没有可更新的字段")
 
         merged_payload = dict(existing)
         merged_payload.update(update_payload)
-        normalized_full = ctx._normalize_product_publish_data(merged_payload, partial=False)
+        normalized_full = _normalize_product_publish_data(merged_payload, partial=False)
         data = {key: normalized_full.get(key) for key in update_payload.keys() if key in normalized_full}
         if not data:
             raise HTTPException(status_code=400, detail="没有可更新的字段")
         if 'images' in data:
-            data['images'] = ctx._sanitize_material_images(data.get('images') or [], require_images=True)
+            data['images'] = _sanitize_material_images(data.get('images') or [], require_images=True)
 
-        if not ctx.db_manager.update_product_material(material_id, current_user['user_id'], data):
+        if not db_manager.db_manager.update_product_material(material_id, current_user['user_id'], data):
             raise HTTPException(status_code=500, detail="更新商品素材失败")
         return {
             "success": True,
             "message": "商品素材更新成功",
-            "material": ctx.db_manager.get_product_material(material_id, current_user['user_id']),
+            "material": db_manager.db_manager.get_product_material(material_id, current_user['user_id']),
         }
 
     @router.delete("/product-materials/{material_id}")
     def delete_product_material(
         material_id: int,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
-        if not ctx.db_manager.delete_product_material(material_id, current_user['user_id']):
+        if not db_manager.db_manager.delete_product_material(material_id, current_user['user_id']):
             raise HTTPException(status_code=404, detail="商品素材不存在")
         return {"success": True, "message": "商品素材删除成功"}
 
@@ -1011,13 +1015,13 @@ def create_trading_router(ctx) -> APIRouter:
         batch_id: Optional[str] = None,
         page: int = 1,
         page_size: int = 20,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         if account_id:
-            ctx._ensure_cookie_access(account_id, current_user)
+            reply_server._ensure_cookie_access(account_id, current_user)
         return {
             "success": True,
-            **ctx.db_manager.list_publish_logs(
+            **db_manager.db_manager.list_publish_logs(
                 user_id=current_user['user_id'],
                 account_id=account_id,
                 status=status,
@@ -1030,18 +1034,18 @@ def create_trading_router(ctx) -> APIRouter:
     @router.delete("/publish-logs/old")
     def clear_old_publish_logs(
         days: int = 30,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
-        deleted = ctx.db_manager.clear_old_publish_logs(current_user['user_id'], days=days)
+        deleted = db_manager.db_manager.clear_old_publish_logs(current_user['user_id'], days=days)
         return {"success": True, "message": f"已清理 {deleted} 条发布日志", "deleted": deleted}
 
     @router.post("/product-publish")
     async def publish_product_json(
-        request: ctx.ProductSinglePublishRequest,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        request: ProductSinglePublishRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """通过 JSON 素材发布单个商品，图片支持已上传 URL 或 Base64。"""
-        data = ctx._normalize_product_publish_data({
+        data = _normalize_product_publish_data({
             "title": request.title,
             "description": request.description,
             "price": request.price,
@@ -1056,12 +1060,12 @@ def create_trading_router(ctx) -> APIRouter:
         }, partial=False)
         material_id = request.material_id
         if material_id is not None:
-            material = ctx.db_manager.get_product_material(int(material_id), current_user['user_id'])
+            material = db_manager.db_manager.get_product_material(int(material_id), current_user['user_id'])
             if not material:
                 raise HTTPException(status_code=404, detail="商品素材不存在")
             material_id = int(material_id)
 
-        return await ctx._publish_product_to_account(
+        return await reply_server._publish_product_to_account(
             current_user=current_user,
             account_id=request.account_id,
             title=data['title'],
@@ -1077,17 +1081,17 @@ def create_trading_router(ctx) -> APIRouter:
 
     @router.post("/product-publish/batch")
     async def batch_publish_products(
-        request: ctx.ProductBatchPublishRequest,
+        request: ProductBatchPublishRequest,
         background_tasks: BackgroundTasks,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """按账号和素材组合启动后台批量发布。"""
-        account_ids = ctx._dedupe_str_list(request.account_ids, "发布账号")
-        material_ids = ctx._dedupe_int_list(request.material_ids, "商品素材")
+        account_ids = _dedupe_str_list(request.account_ids, "发布账号")
+        material_ids = _dedupe_int_list(request.material_ids, "商品素材")
         for account_id in account_ids:
-            ctx._ensure_cookie_access(account_id, current_user)
+            reply_server._ensure_cookie_access(account_id, current_user)
 
-        materials = ctx.db_manager.list_product_materials_by_ids(material_ids, current_user['user_id'])
+        materials = db_manager.db_manager.list_product_materials_by_ids(material_ids, current_user['user_id'])
         found_ids = {int(material.get('id')) for material in materials}
         missing_ids = [mid for mid in material_ids if mid not in found_ids]
         if missing_ids:
@@ -1097,12 +1101,12 @@ def create_trading_router(ctx) -> APIRouter:
         if total_jobs > 100:
             raise HTTPException(status_code=400, detail="单次批量发布最多支持 100 个任务")
 
-        batch_id = f"product_publish_{ctx.uuid.uuid4()}"
+        batch_id = f"product_publish_{uuid.uuid4()}"
         jobs: List[Dict[str, Any]] = []
         for material in materials:
-            ctx._validate_publish_images(material.get('images') or [])
+            _validate_publish_images(material.get('images') or [])
             for account_id in account_ids:
-                log_id = ctx.db_manager.add_publish_log(
+                log_id = db_manager.db_manager.add_publish_log(
                     current_user['user_id'],
                     account_id,
                     material.get('title') or '',
@@ -1114,7 +1118,7 @@ def create_trading_router(ctx) -> APIRouter:
                 )
                 jobs.append({"log_id": log_id, "account_id": account_id, "material": material})
 
-        background_tasks.add_task(ctx._run_product_batch_publish, batch_id, jobs, dict(current_user))
+        background_tasks.add_task(reply_server._run_product_batch_publish, batch_id, jobs, dict(current_user))
         return {
             "success": True,
             "message": "批量发布任务已启动",
@@ -1128,11 +1132,11 @@ def create_trading_router(ctx) -> APIRouter:
         batch_id: str,
         page: int = 1,
         page_size: int = 50,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         return {
             "success": True,
-            **ctx.db_manager.get_publish_batch_status(
+            **db_manager.db_manager.get_publish_batch_status(
                 batch_id,
                 current_user['user_id'],
                 page=page,
@@ -1151,7 +1155,7 @@ def create_trading_router(ctx) -> APIRouter:
         post_price: str = Form(default=""),
         can_self_pickup: str = Form(default="false"),
         images: List[UploadFile] = File(...),
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """发布单个商品，并在成功后同步到本地商品列表。"""
         image_payloads = []
@@ -1168,7 +1172,7 @@ def create_trading_router(ctx) -> APIRouter:
                 "content": image_content,
             })
 
-        return await ctx._publish_product_to_account(
+        return await reply_server._publish_product_to_account(
             current_user=current_user,
             account_id=cookie_id,
             title=title,
@@ -1178,21 +1182,20 @@ def create_trading_router(ctx) -> APIRouter:
             original_price=original_price,
             delivery_choice=delivery_choice,
             post_price=post_price,
-            can_self_pickup=ctx._parse_form_bool(can_self_pickup),
+            can_self_pickup=_parse_form_bool(can_self_pickup),
         )
 
     @router.get("/itemReplays")
-    def get_all_items(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_all_items(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取当前用户的所有商品回复信息"""
         try:
             # 只返回当前用户的商品信息
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             all_items = []
             for cookie_id in user_cookies.keys():
-                items = ctx.db_manager.get_itemReplays_by_cookie(cookie_id)
+                items = db_manager.db_manager.get_itemReplays_by_cookie(cookie_id)
                 all_items.extend(items)
 
             return {"items": all_items}
@@ -1200,18 +1203,17 @@ def create_trading_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"获取商品回复信息失败: {str(e)}")
 
     @router.get("/itemReplays/cookie/{cookie_id}")
-    def get_items_by_cookie(cookie_id: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_items_by_cookie(cookie_id: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取指定Cookie的商品信息"""
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cookie_id not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限访问该Cookie")
 
-            items = ctx.db_manager.get_itemReplays_by_cookie(cookie_id)
+            items = db_manager.db_manager.get_itemReplays_by_cookie(cookie_id)
             return {"items": items}
         except HTTPException:
             raise
@@ -1223,17 +1225,16 @@ def create_trading_router(ctx) -> APIRouter:
         cookie_id: str,
         item_id: str,
         data: dict,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """
         更新指定账号和商品的回复内容
         """
         try:
             user_id = current_user['user_id']
-            from db_manager import db_manager
 
             # 验证cookie是否属于用户
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
             if cookie_id not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限访问该Cookie")
 
@@ -1241,7 +1242,7 @@ def create_trading_router(ctx) -> APIRouter:
             if not reply_content:
                 raise HTTPException(status_code=400, detail="回复内容不能为空")
 
-            ctx.db_manager.update_item_reply(cookie_id=cookie_id, item_id=item_id, reply_content=reply_content)
+            db_manager.db_manager.update_item_reply(cookie_id=cookie_id, item_id=item_id, reply_content=reply_content)
 
             return {"message": "商品回复更新成功"}
 
@@ -1251,17 +1252,17 @@ def create_trading_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"更新商品回复失败: {str(e)}")
 
     @router.delete("/item-reply/{cookie_id}/{item_id}")
-    def delete_item_reply(cookie_id: str, item_id: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def delete_item_reply(cookie_id: str, item_id: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """
         删除指定账号cookie_id和商品item_id的商品回复
         """
         try:
             user_id = current_user['user_id']
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
             if cookie_id not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限访问该Cookie")
 
-            success = ctx.db_manager.delete_item_reply(cookie_id, item_id)
+            success = db_manager.db_manager.delete_item_reply(cookie_id, item_id)
             if not success:
                 raise HTTPException(status_code=404, detail="商品回复不存在")
 
@@ -1274,41 +1275,40 @@ def create_trading_router(ctx) -> APIRouter:
 
     @router.delete("/item-reply/batch")
     async def batch_delete_item_reply(
-        req: ctx.BatchDeleteRequest,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        req: BatchDeleteRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """
         批量删除商品回复
         """
         user_id = current_user['user_id']
-        from db_manager import db_manager
 
         # 先校验当前用户是否有权限删除每个cookie对应的回复
-        user_cookies = ctx.db_manager.get_all_cookies(user_id)
+        user_cookies = db_manager.db_manager.get_all_cookies(user_id)
         for item in req.items:
             if item.cookie_id not in user_cookies:
                 raise HTTPException(status_code=403, detail=f"无权限访问Cookie {item.cookie_id}")
 
-        result = ctx.db_manager.batch_delete_item_replies([item.dict() for item in req.items])
+        result = db_manager.db_manager.batch_delete_item_replies([item.dict() for item in req.items])
         return {
             "success_count": result["success_count"],
             "failed_count": result["failed_count"]
         }
 
     @router.get("/item-reply/{cookie_id}/{item_id}")
-    def get_item_reply(cookie_id: str, item_id: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_item_reply(cookie_id: str, item_id: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """
         获取指定账号cookie_id和商品item_id的商品回复内容
         """
         try:
             user_id = current_user['user_id']
             # 校验cookie_id是否属于当前用户
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
             if cookie_id not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限访问该Cookie")
 
             # 获取指定商品回复
-            item_replies = ctx.db_manager.get_itemReplays_by_cookie(cookie_id)
+            item_replies = db_manager.db_manager.get_itemReplays_by_cookie(cookie_id)
             # 找对应item_id的回复
             item_reply = next((r for r in item_replies if r['item_id'] == item_id), None)
 
@@ -1324,8 +1324,8 @@ def create_trading_router(ctx) -> APIRouter:
 
     @router.post("/items/search")
     async def search_items(
-        search_request: ctx.ItemSearchRequest,
-        current_user: Optional[Dict[str, Any]] = Depends(ctx.get_current_user_optional)
+        search_request: ItemSearchRequest,
+        current_user: Optional[Dict[str, Any]] = Depends(reply_server.get_current_user_optional)
     ):
         """搜索闲鱼商品"""
         user_info = f"【{current_user.get('username', 'unknown')}#{current_user.get('user_id', 'unknown')}】" if current_user else "【未登录】"
@@ -1373,8 +1373,8 @@ def create_trading_router(ctx) -> APIRouter:
 
     @router.post("/items/search_multiple")
     async def search_multiple_pages(
-        search_request: ctx.ItemSearchMultipleRequest,
-        current_user: Optional[Dict[str, Any]] = Depends(ctx.get_current_user_optional)
+        search_request: ItemSearchMultipleRequest,
+        current_user: Optional[Dict[str, Any]] = Depends(reply_server.get_current_user_optional)
     ):
         """搜索多页闲鱼商品"""
         user_info = f"【{current_user.get('username', 'unknown')}#{current_user.get('user_id', 'unknown')}】" if current_user else "【未登录】"

@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import reply_server
 
+from app.api import state
+
 
 class _FakeSlider:
     def __init__(self):
@@ -20,10 +22,9 @@ class _FakeSlider:
 @pytest.fixture(autouse=True)
 def _isolate_import_sessions():
     """Isolate manual_cookie_import_sessions dict between tests."""
-    original = reply_server.manual_cookie_import_sessions
-    reply_server.manual_cookie_import_sessions = {}
+    state.manual_cookie_import_sessions.clear()
     yield
-    reply_server.manual_cookie_import_sessions = original
+    state.manual_cookie_import_sessions.clear()
 
 
 class TestReplyServerManualCookieImportFlow:
@@ -32,7 +33,7 @@ class TestReplyServerManualCookieImportFlow:
     def test_execute_manual_cookie_import_short_circuits_when_cookie_precheck_is_already_valid(self, mocker):
         session_id = "manual_import_cookie_valid_session"
         account_id = "manual_import_cookie_valid_account"
-        reply_server.manual_cookie_import_sessions[session_id] = {
+        state.manual_cookie_import_sessions[session_id] = {
             "account_id": account_id,
             "status": "processing",
             "verification_url": None,
@@ -107,12 +108,12 @@ class TestReplyServerManualCookieImportFlow:
 
         deadline = time.time() + 2
         while (
-            reply_server.manual_cookie_import_sessions[session_id]["status"] == "processing"
+            state.manual_cookie_import_sessions[session_id]["status"] == "processing"
             and time.time() < deadline
         ):
             time.sleep(0.01)
 
-        session = reply_server.manual_cookie_import_sessions[session_id]
+        session = state.manual_cookie_import_sessions[session_id]
         assert session["status"] == "success"
         assert not fake_slider.run_called
         save_cookie_mock.assert_called_once()
@@ -125,7 +126,7 @@ class TestReplyServerManualCookieImportFlow:
     def test_execute_manual_cookie_import_marks_failed_when_runtime_handoff_future_fails(self, mocker):
         session_id = "manual_import_runtime_handoff_failed_session"
         account_id = "manual_import_runtime_handoff_failed_account"
-        reply_server.manual_cookie_import_sessions[session_id] = {
+        state.manual_cookie_import_sessions[session_id] = {
             "account_id": account_id,
             "status": "processing",
             "verification_url": None,
@@ -195,11 +196,11 @@ class TestReplyServerManualCookieImportFlow:
 
         deadline = time.time() + 2
         while (
-            reply_server.manual_cookie_import_sessions[session_id]["status"] == "processing"
+            state.manual_cookie_import_sessions[session_id]["status"] == "processing"
             and time.time() < deadline
         ):
             time.sleep(0.01)
 
-        session = reply_server.manual_cookie_import_sessions[session_id]
+        session = state.manual_cookie_import_sessions[session_id]
         assert session["status"] == "failed"
         assert "runtime handoff failed" in session["error"]

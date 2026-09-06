@@ -1,7 +1,7 @@
 """Core cookies CRUD routes (Strangler Fig P1).
 
 Mechanically extracted from reply_server.py at main@0aa4100; behavior-preserving.
-External (reply_server) symbols resolve via ctx at request time - see app/api/state.py.
+Shared models/helpers/state live in app/api/models.py, app/api/common.py and app/api/state.py; reply_server-resident symbols are accessed late-bound (reply_server.X) so runtime rebinds stay visible.
 """
 
 from typing import Any, Dict, List, Optional, Tuple, Callable, Awaitable
@@ -31,35 +31,50 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
 from pydantic import BaseModel
 
+from app.api.models import (
+    AutoCommentUpdate,
+    AutoConfirmUpdate,
+    CommentTemplateCreate,
+    CommentTemplateUpdate,
+    CookieAccountInfo,
+    CookieIn,
+    CookieStatusIn,
+    PauseDurationUpdate,
+    ProxyConfig,
+    RemarkUpdate,
+)
+import db_manager
+import reply_server  # noqa: F401  (late-bound seam: runtime rebinds stay visible)
+import cookie_manager
 
-def create_cookies_router(ctx) -> APIRouter:
+
+def create_cookies_router() -> APIRouter:
     router = APIRouter()
     @router.get("/cookies")
-    def list_cookies(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
-        if ctx.cookie_manager.manager is None:
+    def list_cookies(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
+        if cookie_manager.manager is None:
             return []
 
         # 获取当前用户的cookies
         user_id = current_user['user_id']
-        from db_manager import db_manager
-        user_cookies = ctx.db_manager.get_all_cookies(user_id)
+        user_cookies = db_manager.db_manager.get_all_cookies(user_id)
         return list(user_cookies.keys())
 
     @router.get("/cookies/details")
-    def get_cookies_details(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_cookies_details(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取所有Cookie的详细信息（包括值和状态）"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             return []
 
-        user_cookies = ctx._get_user_cookies_map(current_user)
+        user_cookies = reply_server._get_user_cookies_map(current_user)
 
         result = []
         for cookie_id, cookie_value in user_cookies.items():
-            cookie_enabled = ctx.cookie_manager.manager.get_cookie_status(cookie_id)
-            auto_confirm = ctx.db_manager.get_auto_confirm(cookie_id)
-            auto_comment = ctx.db_manager.get_auto_comment(cookie_id)
+            cookie_enabled = cookie_manager.manager.get_cookie_status(cookie_id)
+            auto_confirm = db_manager.db_manager.get_auto_confirm(cookie_id)
+            auto_comment = db_manager.db_manager.get_auto_comment(cookie_id)
             # 获取备注信息
-            cookie_details = ctx.db_manager.get_cookie_details(cookie_id)
+            cookie_details = db_manager.db_manager.get_cookie_details(cookie_id)
             remark = cookie_details.get('remark', '') if cookie_details else ''
             status_note = cookie_details.get('status_note', '') if cookie_details else ''
             username = cookie_details.get('username', '') if cookie_details else ''
@@ -67,7 +82,7 @@ def create_cookies_router(ctx) -> APIRouter:
 
             result.append({
                 'id': cookie_id,
-                'value': ctx.mask_cookie_value(cookie_value),
+                'value': reply_server.mask_cookie_value(cookie_value),
                 'has_cookie_value': bool(cookie_value),
                 'enabled': cookie_enabled,
                 'auto_confirm': auto_confirm,
@@ -77,63 +92,61 @@ def create_cookies_router(ctx) -> APIRouter:
                 'username': username,
                 'has_password': has_password,
                 'pause_duration': cookie_details.get('pause_duration', 10) if cookie_details else 10,
-                'runtime_status': ctx._build_live_runtime_status(cookie_id),
+                'runtime_status': reply_server._build_live_runtime_status(cookie_id),
             })
         return result
 
     @router.post("/cookies")
-    def add_cookie(item: ctx.CookieIn, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
-        if ctx.cookie_manager.manager is None:
+    def add_cookie(item: CookieIn, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
         try:
             # 添加cookie时绑定到当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
 
-            ctx.log_with_user('info', f"尝试添加Cookie: {item.id}, 当前用户ID: {user_id}, 用户名: {current_user.get('username', 'unknown')}", current_user)
+            reply_server.log_with_user('info', f"尝试添加Cookie: {item.id}, 当前用户ID: {user_id}, 用户名: {current_user.get('username', 'unknown')}", current_user)
 
             # 检查cookie是否已存在且属于其他用户
-            existing_cookies = ctx.db_manager.get_all_cookies()
+            existing_cookies = db_manager.db_manager.get_all_cookies()
             if item.id in existing_cookies:
                 # 检查是否属于当前用户
-                user_cookies = ctx.db_manager.get_all_cookies(user_id)
+                user_cookies = db_manager.db_manager.get_all_cookies(user_id)
                 if item.id not in user_cookies:
-                    ctx.log_with_user('warning', f"Cookie ID冲突: {item.id} 已被其他用户使用", current_user)
+                    reply_server.log_with_user('warning', f"Cookie ID冲突: {item.id} 已被其他用户使用", current_user)
                     raise HTTPException(status_code=400, detail="该Cookie ID已被其他用户使用")
 
             # 保存到数据库时指定用户ID
-            ctx.db_manager.save_cookie(item.id, item.value, user_id)
+            db_manager.db_manager.save_cookie(item.id, item.value, user_id)
 
             # 添加到CookieManager，同时指定用户ID
-            handoff_result = ctx.cookie_manager.manager.add_cookie(item.id, item.value, user_id=user_id)
-            ctx._consume_cookie_manager_handoff(handoff_result)
-            ctx.log_with_user('info', f"Cookie添加成功: {item.id}", current_user)
+            handoff_result = cookie_manager.manager.add_cookie(item.id, item.value, user_id=user_id)
+            reply_server._consume_cookie_manager_handoff(handoff_result)
+            reply_server.log_with_user('info', f"Cookie添加成功: {item.id}", current_user)
             return {"msg": "success"}
         except HTTPException:
             raise
         except Exception as e:
-            ctx.log_with_user('error', f"添加Cookie失败: {item.id} - {ctx.mask_sensitive_text(e)}", current_user)
-            raise HTTPException(status_code=400, detail=ctx.safe_client_error("添加Cookie失败，请检查输入后重试"))
+            reply_server.log_with_user('error', f"添加Cookie失败: {item.id} - {reply_server.mask_sensitive_text(e)}", current_user)
+            raise HTTPException(status_code=400, detail=reply_server.safe_client_error("添加Cookie失败，请检查输入后重试"))
 
     @router.put('/cookies/{cid}')
-    def update_cookie(cid: str, item: ctx.CookieIn, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
-        if ctx.cookie_manager.manager is None:
+    def update_cookie(cid: str, item: CookieIn, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail='CookieManager 未就绪')
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
             # 获取旧的 cookie 值，用于判断是否需要重启任务
-            old_cookie_details = ctx.db_manager.get_cookie_details(cid)
+            old_cookie_details = db_manager.db_manager.get_cookie_details(cid)
             old_cookie_value = old_cookie_details.get('value') if old_cookie_details else None
 
             # 使用 update_cookie_account_info 更新（只更新cookie值，不覆盖其他字段）
-            success = ctx.db_manager.update_cookie_account_info(cid, cookie_value=item.value)
+            success = db_manager.db_manager.update_cookie_account_info(cid, cookie_value=item.value)
         
             if not success:
                 raise HTTPException(status_code=400, detail="更新Cookie失败")
@@ -141,8 +154,8 @@ def create_cookies_router(ctx) -> APIRouter:
             # 只有当 cookie 值真的发生变化时才重启任务
             if item.value != old_cookie_value:
                 logger.info(f"Cookie值已变化，重启任务: {cid}")
-                handoff_result = ctx.cookie_manager.manager.update_cookie(cid, item.value, save_to_db=False)
-                ctx._consume_cookie_manager_handoff(handoff_result)
+                handoff_result = cookie_manager.manager.update_cookie(cid, item.value, save_to_db=False)
+                reply_server._consume_cookie_manager_handoff(handoff_result)
             else:
                 logger.info(f"Cookie值未变化，无需重启任务: {cid}")
         
@@ -150,29 +163,28 @@ def create_cookies_router(ctx) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"更新Cookie失败: {cid} - {ctx.mask_sensitive_text(e)}")
-            raise HTTPException(status_code=400, detail=ctx.safe_client_error("更新Cookie失败，请稍后重试"))
+            logger.error(f"更新Cookie失败: {cid} - {reply_server.mask_sensitive_text(e)}")
+            raise HTTPException(status_code=400, detail=reply_server.safe_client_error("更新Cookie失败，请稍后重试"))
 
     @router.post("/cookie/{cid}/account-info")
-    def update_cookie_account_info(cid: str, info: ctx.CookieAccountInfo, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def update_cookie_account_info(cid: str, info: CookieAccountInfo, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """更新账号信息（Cookie、用户名、密码、显示浏览器设置）"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail='CookieManager 未就绪')
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
             # 获取旧的 cookie 值，用于判断是否需要重启任务
-            old_cookie_details = ctx.db_manager.get_cookie_details(cid)
+            old_cookie_details = db_manager.db_manager.get_cookie_details(cid)
             old_cookie_value = old_cookie_details.get('value') if old_cookie_details else None
         
             # 更新数据库
-            success = ctx.db_manager.update_cookie_account_info(
+            success = db_manager.db_manager.update_cookie_account_info(
                 cid, 
                 cookie_value=info.value,
                 username=info.username,
@@ -186,8 +198,8 @@ def create_cookies_router(ctx) -> APIRouter:
             # 只有当 cookie 值真的发生变化时才重启任务
             if info.value is not None and info.value != old_cookie_value:
                 logger.info(f"Cookie值已变化，重启任务: {cid}")
-                handoff_result = ctx.cookie_manager.manager.update_cookie(cid, info.value, save_to_db=False)
-                ctx._consume_cookie_manager_handoff(handoff_result)
+                handoff_result = cookie_manager.manager.update_cookie(cid, info.value, save_to_db=False)
+                reply_server._consume_cookie_manager_handoff(handoff_result)
             else:
                 logger.info(f"Cookie值未变化，无需重启任务: {cid}")
         
@@ -195,29 +207,29 @@ def create_cookies_router(ctx) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"更新账号信息失败: {ctx.mask_sensitive_text(e)}")
-            raise HTTPException(status_code=400, detail=ctx.safe_client_error("更新账号信息失败，请稍后重试"))
+            logger.error(f"更新账号信息失败: {reply_server.mask_sensitive_text(e)}")
+            raise HTTPException(status_code=400, detail=reply_server.safe_client_error("更新账号信息失败，请稍后重试"))
 
     @router.get("/cookie/{cid}/details")
-    def get_cookie_account_details(cid: str, include_secrets: bool = False, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_cookie_account_details(cid: str, include_secrets: bool = False, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取账号详细信息（包括用户名、密码、显示浏览器设置）"""
         try:
-            cid = ctx._ensure_cookie_access(cid, current_user)
+            cid = reply_server._ensure_cookie_access(cid, current_user)
 
             # 获取详细信息
-            details = ctx.db_manager.get_cookie_details(cid)
+            details = db_manager.db_manager.get_cookie_details(cid)
         
             if not details:
                 raise HTTPException(status_code=404, detail="账号不存在")
 
-            runtime_status = ctx._build_live_runtime_status(cid)
+            runtime_status = reply_server._build_live_runtime_status(cid)
 
             if not include_secrets:
                 details = {
                     **details,
-                    'value': ctx.mask_cookie_value(details.get('value')),
-                    'password': ctx.mask_secret_value(details.get('password')),
-                    'proxy_pass': ctx.mask_secret_value(details.get('proxy_pass')),
+                    'value': reply_server.mask_cookie_value(details.get('value')),
+                    'password': reply_server.mask_secret_value(details.get('password')),
+                    'proxy_pass': reply_server.mask_secret_value(details.get('proxy_pass')),
                     'has_cookie_value': bool(details.get('value')),
                     'has_password': bool(details.get('password')),
                     'has_proxy_pass': bool(details.get('proxy_pass')),
@@ -233,34 +245,34 @@ def create_cookies_router(ctx) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"获取账号详情失败: {ctx.mask_sensitive_text(e)}")
-            raise HTTPException(status_code=400, detail=ctx.safe_client_error("获取账号详情失败，请稍后重试"))
+            logger.error(f"获取账号详情失败: {reply_server.mask_sensitive_text(e)}")
+            raise HTTPException(status_code=400, detail=reply_server.safe_client_error("获取账号详情失败，请稍后重试"))
 
     @router.get("/cookies/{cid}/runtime-status")
-    def get_cookie_runtime_status(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_cookie_runtime_status(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取账号运行态状态，便于排查保活/连接问题。"""
         try:
-            cid = ctx._ensure_cookie_access(cid, current_user)
+            cid = reply_server._ensure_cookie_access(cid, current_user)
             return {
                 'cookie_id': cid,
-                'runtime_status': ctx._build_live_runtime_status(cid),
+                'runtime_status': reply_server._build_live_runtime_status(cid),
             }
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"获取账号运行态失败: {cid} - {ctx.mask_sensitive_text(e)}")
-            raise HTTPException(status_code=400, detail=ctx.safe_client_error("获取账号运行态失败，请稍后重试"))
+            logger.error(f"获取账号运行态失败: {cid} - {reply_server.mask_sensitive_text(e)}")
+            raise HTTPException(status_code=400, detail=reply_server.safe_client_error("获取账号运行态失败，请稍后重试"))
 
     @router.get("/cookies/{cid}/conversations/{conversation_id}/history")
     async def get_conversation_history(
         cid: str,
         conversation_id: str,
         page_size: int = 20,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """获取指定会话的历史消息。"""
         try:
-            cid = ctx._ensure_cookie_access(cid, current_user)
+            cid = reply_server._ensure_cookie_access(cid, current_user)
             normalized_conversation_id = str(conversation_id or '').strip().split('@')[0]
             if not normalized_conversation_id:
                 raise HTTPException(status_code=400, detail="缺少会话ID")
@@ -272,12 +284,12 @@ def create_cookies_router(ctx) -> APIRouter:
             if not live_instance:
                 raise HTTPException(status_code=400, detail="账号未启动，暂无法查询历史消息")
 
-            ctx.log_with_user(
+            reply_server.log_with_user(
                 'info',
                 f"开始查询账号 {cid} 会话 {normalized_conversation_id} 的历史消息，page_size={normalized_page_size}",
                 current_user
             )
-            history_messages = await ctx._run_live_instance_on_manager_loop(
+            history_messages = await reply_server._run_live_instance_on_manager_loop(
                 cid,
                 lambda: live_instance.list_all_conversations(
                     normalized_conversation_id,
@@ -292,33 +304,33 @@ def create_cookies_router(ctx) -> APIRouter:
                 'page_size': normalized_page_size,
                 'count': len(history_messages),
                 'messages': history_messages,
-                'runtime_status': ctx._build_live_runtime_status(cid),
+                'runtime_status': reply_server._build_live_runtime_status(cid),
             }
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"获取历史消息失败: {cid}/{conversation_id} - {ctx.mask_sensitive_text(e)}")
-            raise HTTPException(status_code=400, detail=ctx.safe_client_error("获取历史消息失败，请稍后重试"))
+            logger.error(f"获取历史消息失败: {cid}/{conversation_id} - {reply_server.mask_sensitive_text(e)}")
+            raise HTTPException(status_code=400, detail=reply_server.safe_client_error("获取历史消息失败，请稍后重试"))
 
     @router.post("/cookies/{cid}/session-keepalive")
-    async def trigger_session_keepalive(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def trigger_session_keepalive(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """手动触发一次轻量会话保活。"""
         try:
-            cid = ctx._ensure_cookie_access(cid, current_user)
+            cid = reply_server._ensure_cookie_access(cid, current_user)
 
             from XianyuAutoAsync import XianyuLive
             live_instance = XianyuLive.get_instance(cid)
             if not live_instance:
                 try:
-                    live_instance = getattr(ctx.cookie_manager.manager, 'live_instances', {}).get(cid) if ctx.cookie_manager.manager else None
+                    live_instance = getattr(cookie_manager.manager, 'live_instances', {}).get(cid) if cookie_manager.manager else None
                 except Exception:
                     live_instance = None
 
-            ctx.log_with_user('info', f"手动触发账号 {cid} 的轻量会话保活", current_user)
+            reply_server.log_with_user('info', f"手动触发账号 {cid} 的轻量会话保活", current_user)
             used_temporary_instance = False
 
             if live_instance:
-                keepalive_ok = await ctx._run_live_instance_on_manager_loop(
+                keepalive_ok = await reply_server._run_live_instance_on_manager_loop(
                     cid,
                     lambda: live_instance.keep_session_alive(),
                     timeout=40,
@@ -326,7 +338,7 @@ def create_cookies_router(ctx) -> APIRouter:
             else:
                 # 账号刚完成扫码/手动刷新、或旧误暂停导致主任务尚未恢复时，仍允许用数据库中的
                 # 最新 Cookie 做一次 one-shot 轻保活；普通扫码登录不应因为“实例未注册”而无法验证会话。
-                cookie_value = ctx.db_manager.get_cookie(cid)
+                cookie_value = db_manager.db_manager.get_cookie(cid)
                 if not cookie_value:
                     raise HTTPException(status_code=400, detail="账号Cookie不存在，暂无法执行轻量保活")
 
@@ -338,16 +350,16 @@ def create_cookies_router(ctx) -> APIRouter:
                         try:
                             await temp_live.close_session()
                         except Exception as close_e:
-                            logger.warning(f"临时轻量保活关闭会话失败: {cid} - {ctx.mask_sensitive_text(close_e)}")
+                            logger.warning(f"临时轻量保活关闭会话失败: {cid} - {reply_server.mask_sensitive_text(close_e)}")
 
-                keepalive_ok = await ctx._run_live_instance_on_manager_loop(
+                keepalive_ok = await reply_server._run_live_instance_on_manager_loop(
                     cid,
                     _run_temporary_keepalive,
                     timeout=40,
                 )
                 used_temporary_instance = True
 
-            runtime_status = ctx._build_live_runtime_status(cid)
+            runtime_status = reply_server._build_live_runtime_status(cid)
             return {
                 'success': keepalive_ok,
                 'cookie_id': cid,
@@ -358,28 +370,27 @@ def create_cookies_router(ctx) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"手动轻量保活失败: {cid} - {ctx.mask_sensitive_text(e)}")
-            raise HTTPException(status_code=400, detail=ctx.safe_client_error("手动轻量保活失败，请稍后重试"))
+            logger.error(f"手动轻量保活失败: {cid} - {reply_server.mask_sensitive_text(e)}")
+            raise HTTPException(status_code=400, detail=reply_server.safe_client_error("手动轻量保活失败，请稍后重试"))
 
     @router.get("/cookie/{cid}/proxy")
-    def get_cookie_proxy_config(cid: str, include_secret: bool = False, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_cookie_proxy_config(cid: str, include_secret: bool = False, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取账号的代理配置"""
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
             # 获取代理配置
-            proxy_config = ctx.db_manager.get_cookie_proxy_config(cid)
+            proxy_config = db_manager.db_manager.get_cookie_proxy_config(cid)
 
             if not include_secret:
                 proxy_config = {
                     **proxy_config,
-                    'proxy_pass': ctx.mask_secret_value(proxy_config.get('proxy_pass')),
+                    'proxy_pass': reply_server.mask_secret_value(proxy_config.get('proxy_pass')),
                     'has_proxy_pass': bool(proxy_config.get('proxy_pass')),
                 }
         
@@ -390,19 +401,18 @@ def create_cookies_router(ctx) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"获取代理配置失败: {ctx.mask_sensitive_text(e)}")
-            raise HTTPException(status_code=400, detail=ctx.safe_client_error("获取代理配置失败，请稍后重试"))
+            logger.error(f"获取代理配置失败: {reply_server.mask_sensitive_text(e)}")
+            raise HTTPException(status_code=400, detail=reply_server.safe_client_error("获取代理配置失败，请稍后重试"))
 
     @router.post("/cookie/{cid}/proxy")
-    def update_cookie_proxy_config(cid: str, config: ctx.ProxyConfig, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def update_cookie_proxy_config(cid: str, config: ProxyConfig, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """更新账号的代理配置"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail='CookieManager 未就绪')
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
@@ -420,7 +430,7 @@ def create_cookies_router(ctx) -> APIRouter:
                     raise HTTPException(status_code=400, detail="代理端口无效")
 
             # 更新数据库
-            success = ctx.db_manager.update_cookie_proxy_config(
+            success = db_manager.db_manager.update_cookie_proxy_config(
                 cid,
                 proxy_type=config.proxy_type,
                 proxy_host=config.proxy_host,
@@ -436,8 +446,8 @@ def create_cookies_router(ctx) -> APIRouter:
             logger.info(f"代理配置已更新，重启账号任务: {cid}")
             cookie_value = user_cookies.get(cid)
             if cookie_value:
-                handoff_result = ctx.cookie_manager.manager.update_cookie(cid, cookie_value, save_to_db=False)
-                ctx._consume_cookie_manager_handoff(handoff_result)
+                handoff_result = cookie_manager.manager.update_cookie(cid, cookie_value, save_to_db=False)
+                reply_server._consume_cookie_manager_handoff(handoff_result)
         
             return {
                 'success': True,
@@ -446,48 +456,46 @@ def create_cookies_router(ctx) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"更新代理配置失败: {ctx.mask_sensitive_text(e)}")
-            raise HTTPException(status_code=400, detail=ctx.safe_client_error("更新代理配置失败，请稍后重试"))
+            logger.error(f"更新代理配置失败: {reply_server.mask_sensitive_text(e)}")
+            raise HTTPException(status_code=400, detail=reply_server.safe_client_error("更新代理配置失败，请稍后重试"))
 
     @router.delete("/cookies/{cid}")
-    def remove_cookie(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
-        if ctx.cookie_manager.manager is None:
+    def remove_cookie(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
-            ctx.cookie_manager.manager.remove_cookie(cid)
+            cookie_manager.manager.remove_cookie(cid)
             return {"msg": "removed"}
         except HTTPException:
             raise
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
     @router.put('/cookies/{cid}/status')
-    def update_cookie_status(cid: str, status_data: ctx.CookieStatusIn, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def update_cookie_status(cid: str, status_data: CookieStatusIn, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """更新账号的启用/禁用状态"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail='CookieManager 未就绪')
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
-            ctx.cookie_manager.manager.update_cookie_status(cid, status_data.enabled)
+            cookie_manager.manager.update_cookie_status(cid, status_data.enabled)
             status_note = ''
             if status_data.enabled:
-                ctx.db_manager.update_cookie_status_note(cid, '')
+                db_manager.db_manager.update_cookie_status_note(cid, '')
             else:
-                cookie_details = ctx.db_manager.get_cookie_details(cid)
+                cookie_details = db_manager.db_manager.get_cookie_details(cid)
                 status_note = cookie_details.get('status_note', '') if cookie_details else ''
             return {'msg': 'status updated', 'enabled': status_data.enabled, 'status_note': status_note}
         except HTTPException:
@@ -496,27 +504,26 @@ def create_cookies_router(ctx) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(e))
 
     @router.put("/cookies/{cid}/auto-confirm")
-    def update_auto_confirm(cid: str, update_data: ctx.AutoConfirmUpdate, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def update_auto_confirm(cid: str, update_data: AutoConfirmUpdate, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """更新账号的自动确认发货设置"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
             # 更新数据库中的auto_confirm设置
-            success = ctx.db_manager.update_auto_confirm(cid, update_data.auto_confirm)
+            success = db_manager.db_manager.update_auto_confirm(cid, update_data.auto_confirm)
             if not success:
                 raise HTTPException(status_code=500, detail="更新自动确认发货设置失败")
 
             # 通知CookieManager更新设置（如果账号正在运行）
-            if hasattr(ctx.cookie_manager.manager, 'update_auto_confirm_setting'):
-                ctx.cookie_manager.manager.update_auto_confirm_setting(cid, update_data.auto_confirm)
+            if hasattr(cookie_manager.manager, 'update_auto_confirm_setting'):
+                cookie_manager.manager.update_auto_confirm_setting(cid, update_data.auto_confirm)
 
             return {
                 "msg": "success",
@@ -529,21 +536,20 @@ def create_cookies_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get("/cookies/{cid}/auto-confirm")
-    def get_auto_confirm(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_auto_confirm(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取账号的自动确认发货设置"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
             # 获取auto_confirm设置
-            auto_confirm = ctx.db_manager.get_auto_confirm(cid)
+            auto_confirm = db_manager.db_manager.get_auto_confirm(cid)
             return {
                 "auto_confirm": auto_confirm,
                 "message": f"自动确认发货当前{'开启' if auto_confirm else '关闭'}"
@@ -554,21 +560,20 @@ def create_cookies_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.put("/cookies/{cid}/auto-comment")
-    def update_auto_comment(cid: str, update_data: ctx.AutoCommentUpdate, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def update_auto_comment(cid: str, update_data: AutoCommentUpdate, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """更新账号的自动好评设置"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
             # 更新数据库中的auto_comment设置
-            success = ctx.db_manager.update_auto_comment(cid, update_data.auto_comment)
+            success = db_manager.db_manager.update_auto_comment(cid, update_data.auto_comment)
             if not success:
                 raise HTTPException(status_code=500, detail="更新自动好评设置失败")
 
@@ -583,21 +588,20 @@ def create_cookies_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get("/cookies/{cid}/auto-comment")
-    def get_auto_comment(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_auto_comment(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取账号的自动好评设置"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
             # 获取auto_comment设置
-            auto_comment = ctx.db_manager.get_auto_comment(cid)
+            auto_comment = db_manager.db_manager.get_auto_comment(cid)
             return {
                 "auto_comment": auto_comment,
                 "message": f"自动好评当前{'开启' if auto_comment else '关闭'}"
@@ -608,20 +612,19 @@ def create_cookies_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get("/cookies/{cid}/comment-templates")
-    def get_comment_templates(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_comment_templates(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取账号的好评模板列表"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
-            templates = ctx.db_manager.get_comment_templates(cid)
+            templates = db_manager.db_manager.get_comment_templates(cid)
             return {
                 "templates": templates,
                 "message": "获取好评模板列表成功"
@@ -632,20 +635,19 @@ def create_cookies_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post("/cookies/{cid}/comment-templates")
-    def add_comment_template(cid: str, template_data: ctx.CommentTemplateCreate, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def add_comment_template(cid: str, template_data: CommentTemplateCreate, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """添加好评模板"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
-            template_id = ctx.db_manager.add_comment_template(
+            template_id = db_manager.db_manager.add_comment_template(
                 cid, 
                 template_data.name, 
                 template_data.content, 
@@ -665,20 +667,19 @@ def create_cookies_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.put("/cookies/{cid}/comment-templates/{template_id}")
-    def update_comment_template(cid: str, template_id: int, template_data: ctx.CommentTemplateUpdate, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def update_comment_template(cid: str, template_id: int, template_data: CommentTemplateUpdate, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """更新好评模板"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
-            success = ctx.db_manager.update_comment_template(
+            success = db_manager.db_manager.update_comment_template(
                 template_id,
                 name=template_data.name,
                 content=template_data.content,
@@ -698,20 +699,19 @@ def create_cookies_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.delete("/cookies/{cid}/comment-templates/{template_id}")
-    def delete_comment_template(cid: str, template_id: int, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def delete_comment_template(cid: str, template_id: int, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """删除好评模板"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
-            success = ctx.db_manager.delete_comment_template(template_id, cookie_id=cid)
+            success = db_manager.db_manager.delete_comment_template(template_id, cookie_id=cid)
             if not success:
                 raise HTTPException(status_code=404, detail="好评模板不存在")
 
@@ -725,20 +725,19 @@ def create_cookies_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.put("/cookies/{cid}/comment-templates/{template_id}/activate")
-    def activate_comment_template(cid: str, template_id: int, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def activate_comment_template(cid: str, template_id: int, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """激活指定的好评模板"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
-            success = ctx.db_manager.set_active_comment_template(cid, template_id)
+            success = db_manager.db_manager.set_active_comment_template(cid, template_id)
             if not success:
                 raise HTTPException(status_code=404, detail="好评模板不存在")
 
@@ -752,23 +751,22 @@ def create_cookies_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.put("/cookies/{cid}/remark")
-    def update_cookie_remark(cid: str, update_data: ctx.RemarkUpdate, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def update_cookie_remark(cid: str, update_data: RemarkUpdate, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """更新账号备注"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
             # 更新备注
-            success = ctx.db_manager.update_cookie_remark(cid, update_data.remark)
+            success = db_manager.db_manager.update_cookie_remark(cid, update_data.remark)
             if success:
-                ctx.log_with_user('info', f"更新账号备注: {cid} -> {update_data.remark}", current_user)
+                reply_server.log_with_user('info', f"更新账号备注: {cid} -> {update_data.remark}", current_user)
                 return {
                     "message": "备注更新成功",
                     "remark": update_data.remark
@@ -781,21 +779,20 @@ def create_cookies_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get("/cookies/{cid}/remark")
-    def get_cookie_remark(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_cookie_remark(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取账号备注"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
             # 获取Cookie详细信息（包含备注）
-            cookie_details = ctx.db_manager.get_cookie_details(cid)
+            cookie_details = db_manager.db_manager.get_cookie_details(cid)
             if cookie_details:
                 return {
                     "remark": cookie_details.get('remark', ''),
@@ -809,15 +806,14 @@ def create_cookies_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.put("/cookies/{cid}/pause-duration")
-    def update_cookie_pause_duration(cid: str, update_data: ctx.PauseDurationUpdate, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def update_cookie_pause_duration(cid: str, update_data: PauseDurationUpdate, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """更新账号自动回复暂停时间"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
@@ -827,9 +823,9 @@ def create_cookies_router(ctx) -> APIRouter:
                 raise HTTPException(status_code=400, detail="暂停时间必须在0-60分钟之间（0表示不暂停）")
 
             # 更新暂停时间
-            success = ctx.db_manager.update_cookie_pause_duration(cid, update_data.pause_duration)
+            success = db_manager.db_manager.update_cookie_pause_duration(cid, update_data.pause_duration)
             if success:
-                ctx.log_with_user('info', f"更新账号自动回复暂停时间: {cid} -> {update_data.pause_duration}分钟", current_user)
+                reply_server.log_with_user('info', f"更新账号自动回复暂停时间: {cid} -> {update_data.pause_duration}分钟", current_user)
                 return {
                     "message": "暂停时间更新成功",
                     "pause_duration": update_data.pause_duration
@@ -842,21 +838,20 @@ def create_cookies_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get("/cookies/{cid}/pause-duration")
-    def get_cookie_pause_duration(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_cookie_pause_duration(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取账号自动回复暂停时间"""
-        if ctx.cookie_manager.manager is None:
+        if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail="CookieManager 未就绪")
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cid not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
             # 获取暂停时间
-            pause_duration = ctx.db_manager.get_cookie_pause_duration(cid)
+            pause_duration = db_manager.db_manager.get_cookie_pause_duration(cid)
             return {
                 "pause_duration": pause_duration,
                 "message": "获取暂停时间成功"
@@ -868,11 +863,11 @@ def create_cookies_router(ctx) -> APIRouter:
 
     @router.get("/cookies/check")
     async def check_valid_cookies(
-        current_user: Optional[Dict[str, Any]] = Depends(ctx.get_current_user_optional)
+        current_user: Optional[Dict[str, Any]] = Depends(reply_server.get_current_user_optional)
     ):
         """检查是否有有效的cookies账户（必须是启用状态）"""
         try:
-            if ctx.cookie_manager.manager is None:
+            if cookie_manager.manager is None:
                 return {
                     "success": True,
                     "hasValidCookies": False,
@@ -881,7 +876,6 @@ def create_cookies_router(ctx) -> APIRouter:
                     "totalCount": 0
                 }
 
-            from db_manager import db_manager
 
             if not current_user:
                 return {
@@ -893,7 +887,7 @@ def create_cookies_router(ctx) -> APIRouter:
                 }
 
             # 获取当前用户的cookies
-            all_cookies = ctx.db_manager.get_all_cookies(current_user["user_id"])
+            all_cookies = db_manager.db_manager.get_all_cookies(current_user["user_id"])
 
             # 检查启用状态和有效性
             valid_cookies = []
@@ -901,7 +895,7 @@ def create_cookies_router(ctx) -> APIRouter:
 
             for cookie_id, cookie_value in all_cookies.items():
                 # 检查是否启用
-                is_enabled = ctx.cookie_manager.manager.get_cookie_status(cookie_id)
+                is_enabled = cookie_manager.manager.get_cookie_status(cookie_id)
                 if is_enabled:
                     enabled_cookies.append(cookie_id)
                     # 检查是否有效（长度大于50）
@@ -926,11 +920,11 @@ def create_cookies_router(ctx) -> APIRouter:
 
     @router.get("/cookies/check")
     async def check_valid_cookies(
-        current_user: Optional[Dict[str, Any]] = Depends(ctx.get_current_user_optional)
+        current_user: Optional[Dict[str, Any]] = Depends(reply_server.get_current_user_optional)
     ):
         """检查是否有有效的cookies账户（必须是启用状态）"""
         try:
-            if ctx.cookie_manager.manager is None:
+            if cookie_manager.manager is None:
                 return {
                     "success": True,
                     "hasValidCookies": False,
@@ -939,10 +933,9 @@ def create_cookies_router(ctx) -> APIRouter:
                     "totalCount": 0
                 }
 
-            from db_manager import db_manager
 
             # 获取所有cookies
-            all_cookies = ctx.db_manager.get_all_cookies()
+            all_cookies = db_manager.db_manager.get_all_cookies()
 
             # 检查启用状态和有效性
             valid_cookies = []
@@ -950,7 +943,7 @@ def create_cookies_router(ctx) -> APIRouter:
 
             for cookie_id, cookie_value in all_cookies.items():
                 # 检查是否启用
-                is_enabled = ctx.cookie_manager.manager.get_cookie_status(cookie_id)
+                is_enabled = cookie_manager.manager.get_cookie_status(cookie_id)
                 if is_enabled:
                     enabled_cookies.append(cookie_id)
                     # 检查是否有效（长度大于50）

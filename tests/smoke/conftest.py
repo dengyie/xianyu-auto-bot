@@ -84,7 +84,12 @@ def api_source() -> str:
     reply_server.py into app/api/routers/*; contracts guard the existence of
     implementation markers, not which file they live in, so we aggregate.
     """
-    parts = [(Path("reply_server.py")).read_text(encoding="utf-8")]
+    parts = [
+        Path("reply_server.py").read_text(encoding="utf-8"),
+        Path("app/api/models.py").read_text(encoding="utf-8"),
+        Path("app/api/common.py").read_text(encoding="utf-8"),
+        Path("app/api/state.py").read_text(encoding="utf-8"),
+    ]
     routers_dir = Path("app/api/routers")
     if routers_dir.exists():
         for f in sorted(routers_dir.glob("*.py")):

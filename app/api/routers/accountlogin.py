@@ -1,7 +1,7 @@
 """QR/password/manual-cookie face-verification login routes (Strangler Fig P2-B3).
 
 Mechanically extracted from reply_server.py; behavior-preserving.
-External (reply_server) symbols resolve via ctx at request time - see app/api/state.py.
+Shared models/helpers/state live in app/api/models.py, app/api/common.py and app/api/state.py; reply_server-resident symbols are accessed late-bound (reply_server.X) so runtime rebinds stay visible.
 """
 
 from typing import Any, Dict, List, Optional, Tuple, Callable, Awaitable
@@ -31,13 +31,33 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
 from pydantic import BaseModel
 
+from app.api.models import (
+    ManualCookieImportRequest,
+    QRLoginSubmitCookiesRequest,
+    QRLoginSubmitUrlRequest,
+)
+from app.api.common import (
+    PASSWORD_LOGIN_TERMINAL_STATUSES,
+    _build_face_verification_screenshot_info,
+    _evaluate_screenshot_freshness,
+    _is_password_login_verification_timeout_message,
+    _is_timed_out_verification_risk_log,
+)
+from app.api import state
+import db_manager
+import reply_server  # noqa: F401  (late-bound seam: runtime rebinds stay visible)
+from utils.image_utils import image_manager
+from utils.qr_login import qr_login_manager
+import cookie_manager
+import uuid
 
-def create_account_login_router(ctx) -> APIRouter:
+
+def create_account_login_router() -> APIRouter:
     router = APIRouter()
     @router.post("/manual-cookie-import")
     async def manual_cookie_import(
-        request: ctx.ManualCookieImportRequest,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        request: ManualCookieImportRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """手动导入 Cookie，并按单次调试链路执行真实浏览器滑块验证。"""
         try:
@@ -49,14 +69,14 @@ def create_account_login_router(ctx) -> APIRouter:
             if not account_id or not cookie_value:
                 return {'success': False, 'message': '账号ID和Cookie不能为空'}
 
-            existing_cookies = ctx.db_manager.get_all_cookies()
+            existing_cookies = db_manager.db_manager.get_all_cookies()
             if account_id in existing_cookies:
-                user_cookies = ctx.db_manager.get_all_cookies(user_id)
+                user_cookies = db_manager.db_manager.get_all_cookies(user_id)
                 if account_id not in user_cookies:
                     return {'success': False, 'message': '该账号ID已被其他用户使用'}
 
             session_id = secrets.token_urlsafe(16)
-            ctx.manual_cookie_import_sessions[session_id] = {
+            state.manual_cookie_import_sessions[session_id] = {
                 'account_id': account_id,
                 'show_browser': show_browser,
                 'status': 'processing',
@@ -70,7 +90,7 @@ def create_account_login_router(ctx) -> APIRouter:
                 'user_id': user_id,
             }
 
-            task = asyncio.create_task(ctx._execute_manual_cookie_import(
+            task = asyncio.create_task(reply_server._execute_manual_cookie_import(
                 session_id,
                 account_id,
                 cookie_value,
@@ -78,7 +98,7 @@ def create_account_login_router(ctx) -> APIRouter:
                 user_id,
                 current_user,
             ))
-            ctx.manual_cookie_import_sessions[session_id]['task'] = task
+            state.manual_cookie_import_sessions[session_id]['task'] = task
 
             return {
                 'success': True,
@@ -87,7 +107,7 @@ def create_account_login_router(ctx) -> APIRouter:
                 'message': 'Cookie导入验证任务已启动，请等待...',
             }
         except Exception as exc:
-            ctx.log_with_user('error', f"手动导入 Cookie 异常: {str(exc)}", current_user)
+            reply_server.log_with_user('error', f"手动导入 Cookie 异常: {str(exc)}", current_user)
             import traceback
             logger.error(traceback.format_exc())
             return {'success': False, 'message': f'手动导入 Cookie 失败: {str(exc)}'}
@@ -95,25 +115,25 @@ def create_account_login_router(ctx) -> APIRouter:
     @router.get("/manual-cookie-import/check/{session_id}")
     async def check_manual_cookie_import_status(
         session_id: str,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """检查手动导入 Cookie 的执行状态。"""
         try:
             current_time = time.time()
             expired_sessions = [
-                sid for sid, session in ctx.manual_cookie_import_sessions.items()
+                sid for sid, session in state.manual_cookie_import_sessions.items()
                 if (
                     session.get('completed_at') and current_time - session['completed_at'] > 300
                 ) or current_time - session['timestamp'] > 3600
             ]
             for sid in expired_sessions:
-                if sid in ctx.manual_cookie_import_sessions:
-                    del ctx.manual_cookie_import_sessions[sid]
+                if sid in state.manual_cookie_import_sessions:
+                    del state.manual_cookie_import_sessions[sid]
 
-            if session_id not in ctx.manual_cookie_import_sessions:
+            if session_id not in state.manual_cookie_import_sessions:
                 return {'status': 'not_found', 'message': '会话不存在或已过期'}
 
-            session = ctx.manual_cookie_import_sessions[session_id]
+            session = state.manual_cookie_import_sessions[session_id]
             if session['user_id'] != current_user['user_id']:
                 return {'status': 'forbidden', 'message': '无权限访问该会话'}
 
@@ -149,13 +169,13 @@ def create_account_login_router(ctx) -> APIRouter:
                 'message': 'Cookie 导入验证处理中，请稍候...',
             }
         except Exception as exc:
-            ctx.log_with_user('error', f"检查手动导入 Cookie 状态异常: {str(exc)}", current_user)
+            reply_server.log_with_user('error', f"检查手动导入 Cookie 状态异常: {str(exc)}", current_user)
             return {'status': 'error', 'message': str(exc)}
 
     @router.post("/password-login")
     async def password_login(
         request: Dict[str, Any],
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """账号密码登录接口（异步，支持人脸认证）"""
         try:
@@ -173,7 +193,7 @@ def create_account_login_router(ctx) -> APIRouter:
             # 刷新模式：从数据库读取已保存的账号密码
             if refresh_mode and account_id:
                 from XianyuAutoAsync import XianyuLive
-                cookie_info = ctx.db_manager.get_cookie_details(account_id)
+                cookie_info = db_manager.db_manager.get_cookie_details(account_id)
                 if not cookie_info:
                     return {'success': False, 'message': f'未找到账号: {account_id}'}
 
@@ -191,7 +211,7 @@ def create_account_login_router(ctx) -> APIRouter:
                 if not show_browser_specified:
                     show_browser = cookie_info.get('show_browser', False)
 
-                ctx.log_with_user('info', f"刷新Cookie模式: {account_id}, 用户名: {account}, show_browser: {show_browser}", current_user)
+                reply_server.log_with_user('info', f"刷新Cookie模式: {account_id}, 用户名: {account}, show_browser: {show_browser}", current_user)
 
                 if XianyuLive.is_manual_refresh_active(account_id):
                     return {'success': False, 'message': f'账号 {account_id} 正在执行手动刷新，请稍候再试'}
@@ -199,17 +219,17 @@ def create_account_login_router(ctx) -> APIRouter:
             if not account_id or not account or not password:
                 return {'success': False, 'message': '账号ID、登录账号和密码不能为空'}
 
-            ctx.log_with_user('info', f"开始账号密码登录: {account_id}, 账号: {account}", current_user)
+            reply_server.log_with_user('info', f"开始账号密码登录: {account_id}, 账号: {account}", current_user)
         
             # 生成会话ID
             session_id = secrets.token_urlsafe(16)
-            risk_session_id = ctx._new_risk_log_session_id('pwd')
+            risk_session_id = reply_server._new_risk_log_session_id('pwd')
 
             # 记录手动刷新Cookie到风控日志
             risk_log_id = None
             if refresh_mode:
                 try:
-                    risk_log_id = ctx.db_manager.add_risk_control_log(
+                    risk_log_id = db_manager.db_manager.add_risk_control_log(
                         cookie_id=account_id,
                         event_type='cookie_refresh',
                         session_id=risk_session_id,
@@ -217,7 +237,7 @@ def create_account_login_router(ctx) -> APIRouter:
                         result_code='manual_cookie_refresh_started',
                         event_description='手动触发账密Cookie刷新',
                         processing_status='processing',
-                        event_meta=ctx._build_risk_event_meta({
+                        event_meta=reply_server._build_risk_event_meta({
                             'account_id': account_id,
                             'show_browser': bool(show_browser),
                             'refresh_mode': True,
@@ -230,7 +250,7 @@ def create_account_login_router(ctx) -> APIRouter:
             user_id = current_user['user_id']
         
             # 创建登录会话
-            ctx.password_login_sessions[session_id] = {
+            state.password_login_sessions[session_id] = {
                 'account_id': account_id,
                 'account': account,
                 'show_browser': show_browser,
@@ -250,10 +270,10 @@ def create_account_login_router(ctx) -> APIRouter:
             }
         
             # 启动后台登录任务
-            task = asyncio.create_task(ctx._execute_password_login(
+            task = asyncio.create_task(reply_server._execute_password_login(
                 session_id, account_id, account, password, show_browser, user_id, current_user
             ))
-            ctx.password_login_sessions[session_id]['task'] = task
+            state.password_login_sessions[session_id]['task'] = task
         
             return {
                 'success': True,
@@ -263,7 +283,7 @@ def create_account_login_router(ctx) -> APIRouter:
             }
         
         except Exception as e:
-            ctx.log_with_user('error', f"账号密码登录异常: {str(e)}", current_user)
+            reply_server.log_with_user('error', f"账号密码登录异常: {str(e)}", current_user)
             import traceback
             logger.error(traceback.format_exc())
             return {'success': False, 'message': f'登录失败: {str(e)}'}
@@ -271,38 +291,38 @@ def create_account_login_router(ctx) -> APIRouter:
     @router.get("/password-login/check/{session_id}")
     async def check_password_login_status(
         session_id: str,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """检查账号密码登录状态"""
         try:
             # 清理过期会话（超过1小时）
             current_time = time.time()
             expired_sessions = [
-                sid for sid, session in ctx.password_login_sessions.items()
+                sid for sid, session in state.password_login_sessions.items()
                 if (
                     session.get('completed_at') and current_time - session['completed_at'] > 300
                 ) or current_time - session['timestamp'] > 3600
             ]
             for sid in expired_sessions:
-                expired_session = ctx.password_login_sessions.get(sid)
+                expired_session = state.password_login_sessions.get(sid)
                 if expired_session:
                     expired_screenshot_path = expired_session.get('screenshot_path')
                     if expired_screenshot_path:
                         try:
                             from utils.image_utils import image_manager
-                            if ctx.image_manager.delete_image(expired_screenshot_path):
-                                ctx.log_with_user('info', f"密码登录会话过期，已删除验证截图: {expired_screenshot_path}", current_user)
+                            if image_manager.delete_image(expired_screenshot_path):
+                                reply_server.log_with_user('info', f"密码登录会话过期，已删除验证截图: {expired_screenshot_path}", current_user)
                             else:
-                                ctx.log_with_user('warning', f"密码登录会话过期，但删除验证截图失败: {expired_screenshot_path}", current_user)
+                                reply_server.log_with_user('warning', f"密码登录会话过期，但删除验证截图失败: {expired_screenshot_path}", current_user)
                         except Exception as cleanup_err:
-                            ctx.log_with_user('error', f"清理过期密码登录截图时出错: {str(cleanup_err)}", current_user)
-                if sid in ctx.password_login_sessions:
-                    del ctx.password_login_sessions[sid]
+                            reply_server.log_with_user('error', f"清理过期密码登录截图时出错: {str(cleanup_err)}", current_user)
+                if sid in state.password_login_sessions:
+                    del state.password_login_sessions[sid]
         
-            if session_id not in ctx.password_login_sessions:
+            if session_id not in state.password_login_sessions:
                 return {'status': 'not_found', 'message': '会话不存在或已过期'}
         
-            session = ctx.password_login_sessions[session_id]
+            session = state.password_login_sessions[session_id]
         
             # 检查用户权限
             if session['user_id'] != current_user['user_id']:
@@ -333,7 +353,7 @@ def create_account_login_router(ctx) -> APIRouter:
                 }
             elif status == 'failed':
                 error_msg = session.get('error', '登录失败')
-                ctx.log_with_user('info', f"返回登录失败状态: {session_id}, 错误消息: {error_msg}", current_user)  # 添加日志
+                reply_server.log_with_user('info', f"返回登录失败状态: {session_id}, 错误消息: {error_msg}", current_user)  # 添加日志
                 return {
                     'status': 'failed',
                     'message': error_msg,
@@ -352,17 +372,17 @@ def create_account_login_router(ctx) -> APIRouter:
                 }
         
         except Exception as e:
-            ctx.log_with_user('error', f"检查账号密码登录状态异常: {str(e)}", current_user)
+            reply_server.log_with_user('error', f"检查账号密码登录状态异常: {str(e)}", current_user)
             return {'status': 'error', 'message': str(e)}
 
     @router.post("/password-login/cancel/{session_id}")
     async def cancel_password_login(
         session_id: str,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """取消账号密码登录/刷新 Cookie 会话，避免前端反复弹出验证窗口。"""
         try:
-            session = ctx.password_login_sessions.get(session_id)
+            session = state.password_login_sessions.get(session_id)
             if not session:
                 return {'success': False, 'status': 'not_found', 'message': '会话不存在或已过期'}
 
@@ -370,16 +390,16 @@ def create_account_login_router(ctx) -> APIRouter:
                 return {'success': False, 'status': 'forbidden', 'message': '无权限访问该会话'}
 
             current_status = str(session.get('status') or '').strip().lower()
-            if current_status in ctx.PASSWORD_LOGIN_TERMINAL_STATUSES:
+            if current_status in PASSWORD_LOGIN_TERMINAL_STATUSES:
                 return {
                     'success': True,
                     'status': current_status,
                     'message': session.get('error') or '会话已结束'
                 }
 
-            ctx._set_password_login_session_status(session_id, 'cancelled', error='用户取消登录')
-            ctx._update_session_risk_log(session_id, 'failed', error_message='用户取消登录')
-            ctx._close_password_login_pending_verification_risk_logs(
+            reply_server._set_password_login_session_status(session_id, 'cancelled', error='用户取消登录')
+            reply_server._update_session_risk_log(session_id, 'failed', error_message='用户取消登录')
+            reply_server._close_password_login_pending_verification_risk_logs(
                 session_id,
                 'failed',
                 error_message='用户取消登录',
@@ -390,9 +410,9 @@ def create_account_login_router(ctx) -> APIRouter:
             if slider_instance:
                 try:
                     slider_instance.close_browser()
-                    ctx.log_with_user('info', f"已关闭密码登录浏览器实例: {session_id}", current_user)
+                    reply_server.log_with_user('info', f"已关闭密码登录浏览器实例: {session_id}", current_user)
                 except Exception as close_err:
-                    ctx.log_with_user('warning', f"关闭密码登录浏览器实例失败: {session_id}, 错误: {close_err}", current_user)
+                    reply_server.log_with_user('warning', f"关闭密码登录浏览器实例失败: {session_id}, 错误: {close_err}", current_user)
 
             return {
                 'success': True,
@@ -400,7 +420,7 @@ def create_account_login_router(ctx) -> APIRouter:
                 'message': '登录已取消'
             }
         except Exception as exc:
-            ctx.log_with_user('error', f"取消账号密码登录异常: {str(exc)}", current_user)
+            reply_server.log_with_user('error', f"取消账号密码登录异常: {str(exc)}", current_user)
             import traceback
             logger.error(traceback.format_exc())
             return {'success': False, 'status': 'error', 'message': str(exc)}
@@ -408,7 +428,7 @@ def create_account_login_router(ctx) -> APIRouter:
     @router.get("/face-verification/screenshot/{account_id}")
     async def get_account_face_verification_screenshot(
         account_id: str,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """获取指定账号的人脸验证截图"""
         try:
@@ -422,9 +442,9 @@ def create_account_login_router(ctx) -> APIRouter:
             is_admin = username == 'admin'
         
             if not is_admin:
-                cookie_info = ctx.db_manager.get_cookie_details(account_id)
+                cookie_info = db_manager.db_manager.get_cookie_details(account_id)
                 if not cookie_info:
-                    ctx.log_with_user('warning', f"账号 {account_id} 不存在", current_user)
+                    reply_server.log_with_user('warning', f"账号 {account_id} 不存在", current_user)
                     return {
                         'success': False,
                         'message': '账号不存在'
@@ -432,14 +452,14 @@ def create_account_login_router(ctx) -> APIRouter:
             
                 cookie_user_id = cookie_info.get('user_id')
                 if cookie_user_id != user_id:
-                    ctx.log_with_user('warning', f"用户 {user_id} 尝试访问账号 {account_id}（归属用户: {cookie_user_id}）", current_user)
+                    reply_server.log_with_user('warning', f"用户 {user_id} 尝试访问账号 {account_id}（归属用户: {cookie_user_id}）", current_user)
                     return {
                         'success': False,
                         'message': '无权访问该账号'
                     }
 
             session_scope_user_id = None if is_admin else user_id
-            latest_password_login_session = ctx._get_latest_password_login_session_for_account(
+            latest_password_login_session = reply_server._get_latest_password_login_session_for_account(
                 account_id,
                 user_id=session_scope_user_id,
             )
@@ -448,8 +468,8 @@ def create_account_login_router(ctx) -> APIRouter:
                 session_screenshot_path = latest_password_login_session.get('screenshot_path')
 
                 if session_status == 'verification_required' and session_screenshot_path and os.path.exists(session_screenshot_path):
-                    screenshot_info = ctx._build_face_verification_screenshot_info(account_id, session_screenshot_path)
-                    ctx.log_with_user('info', f"优先返回账号 {account_id} 当前登录会话的验证截图", current_user)
+                    screenshot_info = _build_face_verification_screenshot_info(account_id, session_screenshot_path)
+                    reply_server.log_with_user('info', f"优先返回账号 {account_id} 当前登录会话的验证截图", current_user)
                     return {
                         'success': True,
                         'screenshot': screenshot_info
@@ -457,49 +477,49 @@ def create_account_login_router(ctx) -> APIRouter:
 
                 if session_status == 'failed':
                     session_error_message = str(latest_password_login_session.get('error') or '').strip()
-                    if ctx._is_password_login_verification_timeout_message(session_error_message):
-                        ctx.log_with_user('info', f"账号 {account_id} 最近一次验证已超时，忽略历史截图", current_user)
+                    if _is_password_login_verification_timeout_message(session_error_message):
+                        reply_server.log_with_user('info', f"账号 {account_id} 最近一次验证已超时，忽略历史截图", current_user)
                         return {
                             'success': False,
                             'message': session_error_message
                         }
 
-            latest_verification_log = ctx._get_latest_verification_risk_log_for_account(account_id)
+            latest_verification_log = reply_server._get_latest_verification_risk_log_for_account(account_id)
             if latest_verification_log:
                 log_status = str(latest_verification_log.get('processing_status') or '').strip().lower()
-                if log_status == 'failed' and ctx._is_timed_out_verification_risk_log(latest_verification_log):
+                if log_status == 'failed' and _is_timed_out_verification_risk_log(latest_verification_log):
                     timeout_message = (
                         str(latest_verification_log.get('error_message') or '').strip()
                         or '当前验证页面已超时/失效，请重新发起验证'
                     )
-                    ctx.log_with_user('info', f"账号 {account_id} 最新验证风控已超时，忽略历史截图", current_user)
+                    reply_server.log_with_user('info', f"账号 {account_id} 最新验证风控已超时，忽略历史截图", current_user)
                     return {
                         'success': False,
                         'message': timeout_message
                     }
                 if log_status == 'success':
                     # 最近一次验证已完成，历史截图仅作留档，不应再当成待处理验证展示
-                    ctx.log_with_user('info', f"账号 {account_id} 最新验证已完成，无待处理验证", current_user)
+                    reply_server.log_with_user('info', f"账号 {account_id} 最新验证已完成，无待处理验证", current_user)
                     return {
                         'success': False,
                         'message': '最近一次验证已完成，当前没有待处理的验证'
                     }
 
             # 获取该账号的验证截图
-            screenshots_dir = os.path.join(ctx.static_dir, 'uploads', 'images')
+            screenshots_dir = os.path.join(state.STATIC_DIR, 'uploads', 'images')
             pattern_jpg = os.path.join(screenshots_dir, f'face_verify_{account_id}_*.jpg')
             pattern_png = os.path.join(screenshots_dir, f'face_verify_{account_id}_*.png')
             screenshot_files = glob.glob(pattern_jpg) + glob.glob(pattern_png)
             screenshot_files = [file_path for file_path in screenshot_files if os.path.exists(file_path)]
         
-            ctx.log_with_user(
+            reply_server.log_with_user(
                 'debug',
                 f"查找截图: {pattern_jpg} / {pattern_png}, 找到 {len(screenshot_files)} 个有效文件",
                 current_user,
             )
         
             if not screenshot_files:
-                ctx.log_with_user('warning', f"账号 {account_id} 没有找到验证截图", current_user)
+                reply_server.log_with_user('warning', f"账号 {account_id} 没有找到验证截图", current_user)
                 return {
                     'success': False,
                     'message': '未找到验证截图'
@@ -511,18 +531,18 @@ def create_account_login_router(ctx) -> APIRouter:
             # 新鲜度门槛：若最近一次风控事件（含 slider_captcha 等不产生截图的类型）
             # 比这张截图还新，说明当前问题不是这张截图对应的验证（如滑块被风控硬拒），
             # 旧截图不应再当成待处理验证展示，避免"当前提醒被历史截图覆盖"的误导
-            latest_risk_epoch = ctx._get_latest_risk_log_epoch_for_account(account_id)
-            freshness_status, freshness_message = ctx._evaluate_screenshot_freshness(latest_file, latest_risk_epoch)
+            latest_risk_epoch = reply_server._get_latest_risk_log_epoch_for_account(account_id)
+            freshness_status, freshness_message = _evaluate_screenshot_freshness(latest_file, latest_risk_epoch)
             if freshness_status == 'unavailable':
-                ctx.log_with_user('warning', f"账号 {account_id} 截图不可用: {freshness_message}", current_user)
+                reply_server.log_with_user('warning', f"账号 {account_id} 截图不可用: {freshness_message}", current_user)
                 return {'success': False, 'message': freshness_message}
             if freshness_status == 'stale':
-                ctx.log_with_user('info', f"账号 {account_id} 最新风控事件晚于历史截图，判定截图已过期，不展示", current_user)
+                reply_server.log_with_user('info', f"账号 {account_id} 最新风控事件晚于历史截图，判定截图已过期，不展示", current_user)
                 return {'success': False, 'message': freshness_message}
 
-            screenshot_info = ctx._build_face_verification_screenshot_info(account_id, latest_file)
+            screenshot_info = _build_face_verification_screenshot_info(account_id, latest_file)
 
-            ctx.log_with_user('info', f"获取账号 {account_id} 的验证截图", current_user)
+            reply_server.log_with_user('info', f"获取账号 {account_id} 的验证截图", current_user)
 
             return {
                 'success': True,
@@ -530,7 +550,7 @@ def create_account_login_router(ctx) -> APIRouter:
             }
         
         except Exception as e:
-            ctx.log_with_user('error', f"获取验证截图失败: {str(e)}", current_user)
+            reply_server.log_with_user('error', f"获取验证截图失败: {str(e)}", current_user)
             return {
                 'success': False,
                 'message': str(e)
@@ -539,7 +559,7 @@ def create_account_login_router(ctx) -> APIRouter:
     @router.delete("/face-verification/screenshot/{account_id}")
     async def delete_account_face_verification_screenshot(
         account_id: str,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """删除指定账号的人脸验证截图"""
         try:
@@ -547,7 +567,7 @@ def create_account_login_router(ctx) -> APIRouter:
         
             # 检查账号是否属于当前用户
             user_id = current_user['user_id']
-            cookie_info = ctx.db_manager.get_cookie_details(account_id)
+            cookie_info = db_manager.db_manager.get_cookie_details(account_id)
             if not cookie_info or cookie_info.get('user_id') != user_id:
                 return {
                     'success': False,
@@ -555,7 +575,7 @@ def create_account_login_router(ctx) -> APIRouter:
                 }
         
             # 删除该账号的所有验证截图
-            screenshots_dir = os.path.join(ctx.static_dir, 'uploads', 'images')
+            screenshots_dir = os.path.join(state.STATIC_DIR, 'uploads', 'images')
             pattern = os.path.join(screenshots_dir, f'face_verify_{account_id}_*.jpg')
             screenshot_files = glob.glob(pattern)
         
@@ -565,9 +585,9 @@ def create_account_login_router(ctx) -> APIRouter:
                     if os.path.exists(file_path):
                         os.remove(file_path)
                         deleted_count += 1
-                        ctx.log_with_user('info', f"删除账号 {account_id} 的验证截图: {os.path.basename(file_path)}", current_user)
+                        reply_server.log_with_user('info', f"删除账号 {account_id} 的验证截图: {os.path.basename(file_path)}", current_user)
                 except Exception as e:
-                    ctx.log_with_user('error', f"删除截图失败 {file_path}: {str(e)}", current_user)
+                    reply_server.log_with_user('error', f"删除截图失败 {file_path}: {str(e)}", current_user)
         
             return {
                 'success': True,
@@ -576,49 +596,49 @@ def create_account_login_router(ctx) -> APIRouter:
             }
         
         except Exception as e:
-            ctx.log_with_user('error', f"删除验证截图失败: {str(e)}", current_user)
+            reply_server.log_with_user('error', f"删除验证截图失败: {str(e)}", current_user)
             return {
                 'success': False,
                 'message': str(e)
             }
 
     @router.post("/qr-login/generate")
-    async def generate_qr_code(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def generate_qr_code(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """生成扫码登录二维码"""
         try:
-            ctx.log_with_user('info', "请求生成扫码登录二维码", current_user)
+            reply_server.log_with_user('info', "请求生成扫码登录二维码", current_user)
 
-            result = await ctx.qr_login_manager.generate_qr_code(user_id=current_user['user_id'])
+            result = await qr_login_manager.generate_qr_code(user_id=current_user['user_id'])
 
             if result['success']:
-                ctx.log_with_user('info', f"扫码登录二维码生成成功: {result['session_id']}", current_user)
+                reply_server.log_with_user('info', f"扫码登录二维码生成成功: {result['session_id']}", current_user)
             else:
-                ctx.log_with_user('warning', f"扫码登录二维码生成失败: {result.get('message', '未知错误')}", current_user)
+                reply_server.log_with_user('warning', f"扫码登录二维码生成失败: {result.get('message', '未知错误')}", current_user)
 
             return result
 
         except Exception as e:
-            ctx.log_with_user('error', f"生成扫码登录二维码异常: {str(e)}", current_user)
+            reply_server.log_with_user('error', f"生成扫码登录二维码异常: {str(e)}", current_user)
             return {'success': False, 'message': f'生成二维码失败: {str(e)}'}
 
     @router.get("/qr-login/check/{session_id}")
-    async def check_qr_code_status(session_id: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def check_qr_code_status(session_id: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """检查扫码登录状态"""
         try:
             # 清理过期记录
-            await ctx.cleanup_qr_check_records()
+            await reply_server.cleanup_qr_check_records()
 
             # 检查是否已经处理过
-            if session_id in ctx.qr_check_processed:
-                record = ctx.qr_check_processed[session_id]
+            if session_id in state.qr_check_processed:
+                record = state.qr_check_processed[session_id]
                 if record['processed']:
-                    ctx.log_with_user('debug', f"扫码登录session {session_id} 已处理过，直接返回", current_user)
+                    reply_server.log_with_user('debug', f"扫码登录session {session_id} 已处理过，直接返回", current_user)
                     if record.get('error'):
                         return {'status': 'error', 'message': record['error']}
 
                     account_info = record.get('account_info')
                     if account_info:
-                        handoff_error = ctx._qr_runtime_handoff_error(account_info)
+                        handoff_error = reply_server._qr_runtime_handoff_error(account_info)
                         if handoff_error:
                             return {
                                 'status': 'error',
@@ -636,24 +656,24 @@ def create_account_login_router(ctx) -> APIRouter:
                     return {'status': 'already_processed', 'message': '该会话已处理完成'}
 
             # 获取该session的锁
-            session_lock = ctx.qr_check_locks[session_id]
+            session_lock = state.qr_check_locks[session_id]
 
             # 使用非阻塞方式尝试获取锁
             if session_lock.locked():
-                ctx.log_with_user('debug', f"扫码登录session {session_id} 正在被其他请求处理，跳过", current_user)
+                reply_server.log_with_user('debug', f"扫码登录session {session_id} 正在被其他请求处理，跳过", current_user)
                 return {'status': 'processing', 'message': '正在处理中，请稍候...'}
 
             async with session_lock:
                 # 再次检查是否已处理（双重检查）
-                if session_id in ctx.qr_check_processed and ctx.qr_check_processed[session_id]['processed']:
-                    ctx.log_with_user('debug', f"扫码登录session {session_id} 在获取锁后发现已处理，直接返回", current_user)
-                    record = ctx.qr_check_processed[session_id]
+                if session_id in state.qr_check_processed and state.qr_check_processed[session_id]['processed']:
+                    reply_server.log_with_user('debug', f"扫码登录session {session_id} 在获取锁后发现已处理，直接返回", current_user)
+                    record = state.qr_check_processed[session_id]
                     if record.get('error'):
                         return {'status': 'error', 'message': record['error']}
 
                     account_info = record.get('account_info')
                     if account_info:
-                        handoff_error = ctx._qr_runtime_handoff_error(account_info)
+                        handoff_error = reply_server._qr_runtime_handoff_error(account_info)
                         if handoff_error:
                             return {
                                 'status': 'error',
@@ -671,69 +691,69 @@ def create_account_login_router(ctx) -> APIRouter:
                     return {'status': 'already_processed', 'message': '该会话已处理完成'}
 
                 # 清理过期会话
-                ctx.qr_login_manager.cleanup_expired_sessions()
+                qr_login_manager.cleanup_expired_sessions()
 
                 # 获取会话状态
-                session = ctx.qr_login_manager.sessions.get(session_id)
+                session = qr_login_manager.sessions.get(session_id)
                 if session and session.user_id is not None and session.user_id != current_user['user_id']:
                     return {'status': 'forbidden', 'message': '无权限访问该会话'}
 
-                status_info = ctx.qr_login_manager.get_session_status(session_id)
-                ctx.log_with_user(
+                status_info = qr_login_manager.get_session_status(session_id)
+                reply_server.log_with_user(
                     'info',
                     f"获取会话状态: session={session_id}, status={status_info.get('status')}",
                     current_user,
                 )
                 if status_info['status'] == 'success':
-                    ctx.log_with_user(
+                    reply_server.log_with_user(
                         'info',
                         f"会话已成功: session={session_id}, unb_present={bool(status_info.get('unb'))}",
                         current_user,
                     )
 
                     # 检查是否已经在后台处理中
-                    if session_id in ctx.qr_check_processed and ctx.qr_check_processed[session_id].get('processing'):
+                    if session_id in state.qr_check_processed and state.qr_check_processed[session_id].get('processing'):
                         return {'status': 'confirmed', 'message': '已确认，正在获取Cookie...'}
 
                     # 标记为处理中，立即返回"已确认"状态（不阻塞前端）
-                    ctx.qr_check_processed[session_id] = {
+                    state.qr_check_processed[session_id] = {
                         'processed': False,
                         'processing': True,
                         'timestamp': time.time()
                     }
 
                     # 获取 Cookie 信息
-                    cookies_info = ctx.qr_login_manager.get_session_cookies(session_id)
+                    cookies_info = qr_login_manager.get_session_cookies(session_id)
                     # 安全：只记录 Cookie key 名，绝不落 value（含 unb/cookie2/_tb_token_ 等劫持素材）
                     if cookies_info:
                         _cookie_keys = sorted((cookies_info.get('cookies') or {}).keys()) if isinstance(cookies_info.get('cookies'), dict) else 'redacted'
-                        ctx.log_with_user(
+                        reply_server.log_with_user(
                             'info',
                             f"获取会话Cookie: session={session_id}, unb_present={bool(cookies_info.get('unb'))}, keys={_cookie_keys}",
                             current_user,
                         )
                     else:
-                        ctx.log_with_user('info', f"获取会话Cookie: session={session_id}, empty", current_user)
+                        reply_server.log_with_user('info', f"获取会话Cookie: session={session_id}, empty", current_user)
 
                     if cookies_info:
                         # 异步处理 Cookie（不阻塞当前请求）
                         async def _process_cookies_background():
                             try:
-                                account_info = await ctx.process_qr_login_cookies(
+                                account_info = await reply_server.process_qr_login_cookies(
                                     cookies_info['cookies'],
                                     cookies_info['unb'],
                                     current_user
                                 )
-                                ctx.log_with_user('info', f"扫码登录处理完成: {session_id}, 账号: {account_info.get('account_id', 'unknown')}", current_user)
-                                ctx.qr_check_processed[session_id] = {
+                                reply_server.log_with_user('info', f"扫码登录处理完成: {session_id}, 账号: {account_info.get('account_id', 'unknown')}", current_user)
+                                state.qr_check_processed[session_id] = {
                                     'processed': True,
                                     'processing': False,
                                     'timestamp': time.time(),
                                     'account_info': account_info
                                 }
                             except Exception as bg_e:
-                                ctx.log_with_user('error', f"后台处理扫码Cookie失败: {bg_e}", current_user)
-                                ctx.qr_check_processed[session_id] = {
+                                reply_server.log_with_user('error', f"后台处理扫码Cookie失败: {bg_e}", current_user)
+                                state.qr_check_processed[session_id] = {
                                     'processed': True,
                                     'processing': False,
                                     'timestamp': time.time(),
@@ -746,13 +766,13 @@ def create_account_login_router(ctx) -> APIRouter:
                     return {'status': 'confirmed', 'message': '已确认，正在获取Cookie...'}
 
                 # 检查后台处理是否已完成
-                if session_id in ctx.qr_check_processed:
-                    record = ctx.qr_check_processed[session_id]
+                if session_id in state.qr_check_processed:
+                    record = state.qr_check_processed[session_id]
                     if record.get('processed') and not record.get('processing'):
                         if record.get('error'):
                             return {'status': 'error', 'message': record['error']}
                         account_info = record.get('account_info', {})
-                        handoff_error = ctx._qr_runtime_handoff_error(account_info)
+                        handoff_error = reply_server._qr_runtime_handoff_error(account_info)
                         if handoff_error:
                             return {
                                 'status': 'error',
@@ -768,14 +788,14 @@ def create_account_login_router(ctx) -> APIRouter:
                 return status_info
 
         except Exception as e:
-            ctx.log_with_user('error', f"检查扫码登录状态异常: {str(e)}", current_user)
+            reply_server.log_with_user('error', f"检查扫码登录状态异常: {str(e)}", current_user)
             return {'status': 'error', 'message': str(e)}
 
     @router.post("/qr-login/submit-cookies/{session_id}")
     async def submit_qr_login_cookies(
         session_id: str,
-        request: ctx.QRLoginSubmitCookiesRequest,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        request: QRLoginSubmitCookiesRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """用户侧人脸/验证成功后回传 Cookie，以用户成功为准完成扫码登录。
 
@@ -783,7 +803,7 @@ def create_account_login_router(ctx) -> APIRouter:
         落在用户侧浏览器；此接口把该 Cookie 写回当前扫码会话并走原有收口。
         """
         try:
-            session = ctx.qr_login_manager.sessions.get(session_id)
+            session = qr_login_manager.sessions.get(session_id)
             if not session:
                 return {'success': False, 'status': 'not_found', 'message': '会话不存在或已过期'}
             if session.user_id is not None and session.user_id != current_user['user_id']:
@@ -796,39 +816,39 @@ def create_account_login_router(ctx) -> APIRouter:
                 return {'success': False, 'status': 'invalid', 'message': 'Cookie过长，请只粘贴闲鱼相关Cookie'}
 
             # 与 /qr-login/check 共用锁，避免双开 process_qr_login_cookies
-            session_lock = ctx.qr_check_locks[session_id]
+            session_lock = state.qr_check_locks[session_id]
             async with session_lock:
-                apply_result = ctx.qr_login_manager.apply_external_cookies(
+                apply_result = qr_login_manager.apply_external_cookies(
                     session_id,
                     cookie_text,
                     source='user',
                 )
                 if not apply_result.get('success'):
-                    ctx.log_with_user(
+                    reply_server.log_with_user(
                         'warning',
                         f"用户侧Cookie提交失败: {session_id}, {apply_result.get('message')}",
                         current_user,
                     )
                     return apply_result
 
-                ctx.log_with_user(
+                reply_server.log_with_user(
                     'info',
                     f"用户侧Cookie提交成功: {session_id}, unb={apply_result.get('unb')}",
                     current_user,
                 )
-                return await ctx._finish_qr_login_after_external_success(
+                return await reply_server._finish_qr_login_after_external_success(
                     session_id, apply_result, current_user, '用户侧Cookie'
                 )
 
         except Exception as e:
-            ctx.log_with_user('error', f"提交用户侧Cookie异常: {str(e)}", current_user)
+            reply_server.log_with_user('error', f"提交用户侧Cookie异常: {str(e)}", current_user)
             return {'success': False, 'status': 'error', 'message': f'提交失败: {str(e)}'}
 
     @router.post("/qr-login/submit-url/{session_id}")
     async def submit_qr_login_url(
         session_id: str,
-        request: ctx.QRLoginSubmitUrlRequest,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        request: QRLoginSubmitUrlRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """用户粘贴验证成功后的回调/跳转 URL，由服务端在原会话里换 Cookie。
 
@@ -836,7 +856,7 @@ def create_account_login_router(ctx) -> APIRouter:
         Playwright 打开该 URL（带当前扫码会话 Cookie）后收口。
         """
         try:
-            session = ctx.qr_login_manager.sessions.get(session_id)
+            session = qr_login_manager.sessions.get(session_id)
             if not session:
                 return {'success': False, 'status': 'not_found', 'message': '会话不存在或已过期'}
             if session.user_id is not None and session.user_id != current_user['user_id']:
@@ -848,44 +868,44 @@ def create_account_login_router(ctx) -> APIRouter:
             if len(url_text) > 8000:
                 return {'success': False, 'status': 'invalid', 'message': 'URL过长'}
 
-            session_lock = ctx.qr_check_locks[session_id]
+            session_lock = state.qr_check_locks[session_id]
             async with session_lock:
-                apply_result = await ctx.qr_login_manager.apply_external_callback_url(
+                apply_result = await qr_login_manager.apply_external_callback_url(
                     session_id,
                     url_text,
                     source='user_url',
                 )
                 if not apply_result.get('success'):
-                    ctx.log_with_user(
+                    reply_server.log_with_user(
                         'warning',
                         f"用户回调URL提交失败: {session_id}, {apply_result.get('message')}",
                         current_user,
                     )
                     return apply_result
 
-                ctx.log_with_user(
+                reply_server.log_with_user(
                     'info',
                     f"用户回调URL提交成功: {session_id}, unb={apply_result.get('unb')}, "
                     f"via={apply_result.get('via')}",
                     current_user,
                 )
-                return await ctx._finish_qr_login_after_external_success(
+                return await reply_server._finish_qr_login_after_external_success(
                     session_id, apply_result, current_user, '回调URL'
                 )
 
         except Exception as e:
-            ctx.log_with_user('error', f"提交回调URL异常: {str(e)}", current_user)
+            reply_server.log_with_user('error', f"提交回调URL异常: {str(e)}", current_user)
             return {'success': False, 'status': 'error', 'message': f'提交失败: {str(e)}'}
 
     @router.post("/qr-login-lite/generate")
-    async def generate_qr_code_lite(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def generate_qr_code_lite(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """生成轻量扫码登录(纯 HTTP)二维码"""
         try:
-            ctx.log_with_user('info', "请求生成轻量扫码登录二维码", current_user)
-            ctx._cleanup_qr_lite_sessions()
+            reply_server.log_with_user('info', "请求生成轻量扫码登录二维码", current_user)
+            reply_server._cleanup_qr_lite_sessions()
 
-            session_id = ctx.uuid.uuid4().hex
-            ctx.qr_lite_sessions[session_id] = {
+            session_id = uuid.uuid4().hex
+            state.qr_lite_sessions[session_id] = {
                 'state': 'pending',
                 'qr_data_url': None,
                 'error_message': None,
@@ -895,37 +915,37 @@ def create_account_login_router(ctx) -> APIRouter:
                 'user_id': current_user.get('user_id'),
             }
 
-            asyncio.create_task(ctx._run_qr_login_lite(session_id, current_user))
+            asyncio.create_task(reply_server._run_qr_login_lite(session_id, current_user))
 
             # 等 build_initial_cookies + node tfstk + mini_login + generate.do 出二维码
             deadline = time.time() + 30
             while time.time() < deadline:
-                st = ctx.qr_lite_sessions[session_id]
+                st = state.qr_lite_sessions[session_id]
                 if st.get('qr_data_url') or st.get('error_message') or st.get('finished'):
                     break
                 await asyncio.sleep(0.3)
 
-            st = ctx.qr_lite_sessions[session_id]
+            st = state.qr_lite_sessions[session_id]
             if st.get('error_message'):
                 return {'success': False, 'message': st['error_message']}
             if not st.get('qr_data_url'):
                 return {'success': False, 'message': '生成二维码超时（>30s），可能 node/网络异常'}
 
-            ctx.log_with_user('info', f"轻量扫码登录二维码生成成功: {session_id}", current_user)
+            reply_server.log_with_user('info', f"轻量扫码登录二维码生成成功: {session_id}", current_user)
             return {
                 'success': True,
                 'session_id': session_id,
                 'qr_code_url': st['qr_data_url'],
             }
         except Exception as e:
-            ctx.log_with_user('error', f"生成轻量扫码登录二维码异常: {str(e)}", current_user)
+            reply_server.log_with_user('error', f"生成轻量扫码登录二维码异常: {str(e)}", current_user)
             return {'success': False, 'message': f'生成二维码失败: {str(e)}'}
 
     @router.get("/qr-login-lite/check/{session_id}")
-    async def check_qr_code_status_lite(session_id: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def check_qr_code_status_lite(session_id: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """检查轻量扫码登录状态"""
         try:
-            st = ctx.qr_lite_sessions.get(session_id)
+            st = state.qr_lite_sessions.get(session_id)
             if not st:
                 return {'status': 'error', 'message': '会话不存在或已过期'}
 
@@ -954,13 +974,13 @@ def create_account_login_router(ctx) -> APIRouter:
             # error
             return {'status': 'error', 'message': st.get('error_message') or '扫码登录失败'}
         except Exception as e:
-            ctx.log_with_user('error', f"检查轻量扫码登录状态异常: {str(e)}", current_user)
+            reply_server.log_with_user('error', f"检查轻量扫码登录状态异常: {str(e)}", current_user)
             return {'status': 'error', 'message': str(e)}
 
     @router.post("/qr-login/refresh-cookies")
     async def refresh_cookies_from_qr_login(
         request: Dict[str, Any],
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """使用扫码登录获取的cookie访问指定界面获取真实cookie并存入数据库"""
         try:
@@ -973,18 +993,18 @@ def create_account_login_router(ctx) -> APIRouter:
             if not cookie_id:
                 return {'success': False, 'message': '缺少cookie_id'}
 
-            user_cookies = ctx.db_manager.get_all_cookies(current_user['user_id'])
+            user_cookies = db_manager.db_manager.get_all_cookies(current_user['user_id'])
             if cookie_id not in user_cookies:
                 return {'success': False, 'message': 'forbidden'}
 
-            ctx.log_with_user('info', f"开始使用扫码cookie刷新真实cookie: {cookie_id}", current_user)
+            reply_server.log_with_user('info', f"开始使用扫码cookie刷新真实cookie: {cookie_id}", current_user)
 
             # 记录扫码刷新Cookie到风控日志
             risk_log_id = None
-            risk_session_id = ctx._new_risk_log_session_id('qrrefresh')
+            risk_session_id = reply_server._new_risk_log_session_id('qrrefresh')
             risk_log_started_at = time.time()
             try:
-                risk_log_id = ctx.db_manager.add_risk_control_log(
+                risk_log_id = db_manager.db_manager.add_risk_control_log(
                     cookie_id=cookie_id,
                     event_type='cookie_refresh',
                     session_id=risk_session_id,
@@ -992,7 +1012,7 @@ def create_account_login_router(ctx) -> APIRouter:
                     result_code='manual_qr_refresh_started',
                     event_description='手动触发扫码Cookie刷新',
                     processing_status='processing',
-                    event_meta=ctx._build_risk_event_meta({'account_id': cookie_id})
+                    event_meta=reply_server._build_risk_event_meta({'account_id': cookie_id})
                 )
             except Exception as log_e:
                 logger.error(f"记录风控日志失败: {log_e}")
@@ -1016,12 +1036,12 @@ def create_account_login_router(ctx) -> APIRouter:
             )
 
             if success:
-                ctx.log_with_user('info', f"扫码cookie刷新成功: {cookie_id}", current_user)
+                reply_server.log_with_user('info', f"扫码cookie刷新成功: {cookie_id}", current_user)
 
                 # 更新风控日志状态
                 if risk_log_id:
                     try:
-                        ctx.db_manager.update_risk_control_log(
+                        db_manager.db_manager.update_risk_control_log(
                             log_id=risk_log_id,
                             processing_status='success',
                             processing_result='扫码Cookie刷新成功',
@@ -1029,24 +1049,24 @@ def create_account_login_router(ctx) -> APIRouter:
                             trigger_scene='manual_qr_refresh',
                             result_code='manual_qr_refresh_success',
                             duration_ms=max(0, int((time.time() - risk_log_started_at) * 1000)),
-                            event_meta=ctx._build_risk_event_meta({'account_id': cookie_id})
+                            event_meta=reply_server._build_risk_event_meta({'account_id': cookie_id})
                         )
                     except Exception:
                         pass
 
                 # 如果cookie_manager存在，更新其中的cookie
-                if ctx.cookie_manager.manager:
+                if cookie_manager.manager:
                     # 从数据库获取更新后的cookie
-                    updated_cookie_info = ctx.db_manager.get_cookie_by_id(cookie_id)
+                    updated_cookie_info = db_manager.db_manager.get_cookie_by_id(cookie_id)
                     if updated_cookie_info:
                         # refresh_cookies_from_qr_login 已经保存到数据库了，这里不需要再保存
-                        handoff_result = ctx.cookie_manager.manager.update_cookie(
+                        handoff_result = cookie_manager.manager.update_cookie(
                             cookie_id,
                             updated_cookie_info['cookies_str'],
                             save_to_db=False,
                         )
-                        ctx._consume_cookie_manager_handoff(handoff_result)
-                        ctx.log_with_user('info', f"已更新cookie_manager中的cookie: {cookie_id}", current_user)
+                        reply_server._consume_cookie_manager_handoff(handoff_result)
+                        reply_server.log_with_user('info', f"已更新cookie_manager中的cookie: {cookie_id}", current_user)
 
                 return {
                     'success': True,
@@ -1054,11 +1074,11 @@ def create_account_login_router(ctx) -> APIRouter:
                     'cookie_id': cookie_id
                 }
             else:
-                ctx.log_with_user('error', f"扫码cookie刷新失败: {cookie_id}", current_user)
+                reply_server.log_with_user('error', f"扫码cookie刷新失败: {cookie_id}", current_user)
                 # 更新风控日志状态
                 if risk_log_id:
                     try:
-                        ctx.db_manager.update_risk_control_log(
+                        db_manager.db_manager.update_risk_control_log(
                             log_id=risk_log_id,
                             processing_status='failed',
                             error_message='获取真实cookie失败',
@@ -1066,18 +1086,18 @@ def create_account_login_router(ctx) -> APIRouter:
                             trigger_scene='manual_qr_refresh',
                             result_code='manual_qr_refresh_failed',
                             duration_ms=max(0, int((time.time() - risk_log_started_at) * 1000)),
-                            event_meta=ctx._build_risk_event_meta({'account_id': cookie_id})
+                            event_meta=reply_server._build_risk_event_meta({'account_id': cookie_id})
                         )
                     except Exception:
                         pass
                 return {'success': False, 'message': '获取真实cookie失败'}
 
         except Exception as e:
-            ctx.log_with_user('error', f"扫码cookie刷新异常: {str(e)}", current_user)
+            reply_server.log_with_user('error', f"扫码cookie刷新异常: {str(e)}", current_user)
             # 更新风控日志状态
             if risk_log_id:
                 try:
-                    ctx.db_manager.update_risk_control_log(
+                    db_manager.db_manager.update_risk_control_log(
                         log_id=risk_log_id,
                         processing_status='failed',
                         error_message=str(e)[:200],
@@ -1085,7 +1105,7 @@ def create_account_login_router(ctx) -> APIRouter:
                         trigger_scene='manual_qr_refresh',
                         result_code='manual_qr_refresh_exception',
                         duration_ms=max(0, int((time.time() - risk_log_started_at) * 1000)),
-                        event_meta=ctx._build_risk_event_meta({'account_id': cookie_id})
+                        event_meta=reply_server._build_risk_event_meta({'account_id': cookie_id})
                     )
                 except Exception:
                     pass
@@ -1094,28 +1114,28 @@ def create_account_login_router(ctx) -> APIRouter:
     @router.post("/qr-login/reset-cooldown/{cookie_id}")
     async def reset_qr_cookie_refresh_cooldown(
         cookie_id: str,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """重置指定账号的扫码登录Cookie刷新冷却时间"""
         try:
-            ctx.log_with_user('info', f"重置扫码登录Cookie刷新冷却时间: {cookie_id}", current_user)
+            reply_server.log_with_user('info', f"重置扫码登录Cookie刷新冷却时间: {cookie_id}", current_user)
 
             # 检查cookie是否存在
-            cookie_info = ctx.db_manager.get_cookie_by_id(cookie_id)
+            cookie_info = db_manager.db_manager.get_cookie_by_id(cookie_id)
             if not cookie_info:
                 return {'success': False, 'message': '账号不存在'}
 
-            user_cookies = ctx.db_manager.get_all_cookies(current_user['user_id'])
+            user_cookies = db_manager.db_manager.get_all_cookies(current_user['user_id'])
             if cookie_id not in user_cookies:
                 return {'success': False, 'message': 'forbidden'}
 
             # 如果cookie_manager中有对应的实例，直接重置
-            instance = ctx.cookie_manager.manager.get_xianyu_instance(cookie_id) if ctx.cookie_manager.manager else None
+            instance = cookie_manager.manager.get_xianyu_instance(cookie_id) if cookie_manager.manager else None
             if instance:
                 remaining_time_before = instance.get_qr_cookie_refresh_remaining_time()
                 instance.reset_qr_cookie_refresh_flag()
 
-                ctx.log_with_user('info', f"已重置账号 {cookie_id} 的扫码登录冷却时间，原剩余时间: {remaining_time_before}秒", current_user)
+                reply_server.log_with_user('info', f"已重置账号 {cookie_id} 的扫码登录冷却时间，原剩余时间: {remaining_time_before}秒", current_user)
 
                 return {
                     'success': True,
@@ -1125,7 +1145,7 @@ def create_account_login_router(ctx) -> APIRouter:
                 }
             else:
                 # 如果没有活跃实例，返回成功（因为没有冷却时间需要重置）
-                ctx.log_with_user('info', f"账号 {cookie_id} 没有活跃实例，无需重置冷却时间", current_user)
+                reply_server.log_with_user('info', f"账号 {cookie_id} 没有活跃实例，无需重置冷却时间", current_user)
                 return {
                     'success': True,
                     'message': '账号没有活跃实例，无需重置冷却时间',
@@ -1133,27 +1153,27 @@ def create_account_login_router(ctx) -> APIRouter:
                 }
 
         except Exception as e:
-            ctx.log_with_user('error', f"重置扫码登录冷却时间异常: {str(e)}", current_user)
+            reply_server.log_with_user('error', f"重置扫码登录冷却时间异常: {str(e)}", current_user)
             return {'success': False, 'message': f'重置冷却时间失败: {str(e)}'}
 
     @router.get("/qr-login/cooldown-status/{cookie_id}")
     async def get_qr_cookie_refresh_cooldown_status(
         cookie_id: str,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """获取指定账号的扫码登录Cookie刷新冷却状态"""
         try:
             # 检查cookie是否存在
-            cookie_info = ctx.db_manager.get_cookie_by_id(cookie_id)
+            cookie_info = db_manager.db_manager.get_cookie_by_id(cookie_id)
             if not cookie_info:
                 return {'success': False, 'message': '账号不存在'}
 
-            user_cookies = ctx.db_manager.get_all_cookies(current_user['user_id'])
+            user_cookies = db_manager.db_manager.get_all_cookies(current_user['user_id'])
             if cookie_id not in user_cookies:
                 return {'success': False, 'message': 'forbidden'}
 
             # 如果cookie_manager中有对应的实例，获取冷却状态
-            instance = ctx.cookie_manager.manager.get_xianyu_instance(cookie_id) if ctx.cookie_manager.manager else None
+            instance = cookie_manager.manager.get_xianyu_instance(cookie_id) if cookie_manager.manager else None
             if instance:
                 remaining_time = instance.get_qr_cookie_refresh_remaining_time()
                 cooldown_duration = instance.qr_cookie_refresh_cooldown
@@ -1181,7 +1201,7 @@ def create_account_login_router(ctx) -> APIRouter:
                 }
 
         except Exception as e:
-            ctx.log_with_user('error', f"获取扫码登录冷却状态异常: {str(e)}", current_user)
+            reply_server.log_with_user('error', f"获取扫码登录冷却状态异常: {str(e)}", current_user)
             return {'success': False, 'message': f'获取冷却状态失败: {str(e)}'}
 
     return router

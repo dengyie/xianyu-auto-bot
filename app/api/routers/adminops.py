@@ -1,7 +1,7 @@
 """Admin / ops / logs / backup / update / files / groups / blacklist routes (P2-B5).
 
 Mechanically extracted from reply_server.py; behavior-preserving.
-External (reply_server) symbols resolve via ctx at request time - see app/api/state.py.
+Shared models/helpers/state live in app/api/models.py, app/api/common.py and app/api/state.py; reply_server-resident symbols are accessed late-bound (reply_server.X) so runtime rebinds stay visible.
 """
 
 from typing import Any, Dict, List, Optional, Tuple, Callable, Awaitable
@@ -31,22 +31,58 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
 from pydantic import BaseModel
 
+from app.api.models import (
+    AIConfigPreset,
+    AIReplySettings,
+    ActionEvent,
+    AddMembersRequest,
+    AutoCommentBatchRateRequest,
+    ClientErrorRequest,
+    CreateGroupRequest,
+    PersonalBlacklistBatchDeleteRequest,
+    PersonalBlacklistCreateRequest,
+    PersonalBlacklistToggleRequest,
+)
+from app.api.common import (
+    TASK_LOG_TYPE_LABELS,
+    _empty_slider_session_stats,
+    _extract_merchant_rate_item_meta,
+    _extract_merchant_rate_order_id,
+    _normalize_task_log_limit,
+    _normalize_task_log_offset,
+    _normalize_task_log_row,
+    _parse_enabled_flag,
+    _parse_random_delay,
+    _parse_run_hour,
+    _redact_admin_table_data,
+    _task_log_created_at_sort_value,
+)
+from app.api import state
+import db_manager
+import reply_server  # noqa: F401  (late-bound seam: runtime rebinds stay visible)
+from ai_reply_engine import ai_reply_engine
+import auto_updater
+from file_log_collector import get_file_log_collector
+from utils.blacklist_service import blacklist_service
+from pathlib import Path
+import cookie_manager
+import uuid
 
-def create_admin_ops_router(ctx) -> APIRouter:
+
+def create_admin_ops_router() -> APIRouter:
     router = APIRouter()
     @router.get("/ai-reply-settings/{cookie_id}")
-    def get_ai_reply_settings(cookie_id: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_ai_reply_settings(cookie_id: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取指定账号的AI回复设置"""
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cookie_id not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限访问该Cookie")
 
-            settings = ctx.db_manager.get_ai_reply_settings(cookie_id)
+            settings = db_manager.db_manager.get_ai_reply_settings(cookie_id)
             return settings
         except HTTPException:
             raise
@@ -55,24 +91,23 @@ def create_admin_ops_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"服务器错误: {str(e)}")
 
     @router.put("/ai-reply-settings/{cookie_id}")
-    def update_ai_reply_settings(cookie_id: str, settings: ctx.AIReplySettings, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def update_ai_reply_settings(cookie_id: str, settings: AIReplySettings, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """更新指定账号的AI回复设置"""
         try:
             # 检查cookie是否属于当前用户
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cookie_id not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
             # 检查账号是否存在
-            if ctx.cookie_manager.manager is None:
+            if cookie_manager.manager is None:
                 raise HTTPException(status_code=500, detail='CookieManager 未就绪')
 
             # 保存设置
             settings_dict = settings.model_dump()
-            success = ctx.db_manager.save_ai_reply_settings(cookie_id, settings_dict)
+            success = db_manager.db_manager.save_ai_reply_settings(cookie_id, settings_dict)
 
             if success:
 
@@ -92,15 +127,14 @@ def create_admin_ops_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"服务器错误: {str(e)}")
 
     @router.get("/ai-reply-settings")
-    def get_all_ai_reply_settings(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_all_ai_reply_settings(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取当前用户所有账号的AI回复设置"""
         try:
             # 只返回当前用户的AI回复设置
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
-            all_settings = ctx.db_manager.get_all_ai_reply_settings()
+            all_settings = db_manager.db_manager.get_all_ai_reply_settings()
             # 过滤只属于当前用户的设置
             user_settings = {cid: settings for cid, settings in all_settings.items() if cid in user_cookies}
             return user_settings
@@ -109,12 +143,11 @@ def create_admin_ops_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"服务器错误: {str(e)}")
 
     @router.get("/ai-config-presets")
-    def list_ai_config_presets(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def list_ai_config_presets(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取当前用户的AI配置预设列表"""
         try:
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            presets = ctx.db_manager.get_ai_config_presets(user_id)
+            presets = db_manager.db_manager.get_ai_config_presets(user_id)
             return presets
         except Exception as e:
             logger.error(f"获取AI配置预设列表异常: {e}")
@@ -122,21 +155,20 @@ def create_admin_ops_router(ctx) -> APIRouter:
 
     @router.post("/ai-config-presets")
     def save_ai_config_preset(
-        preset: ctx.AIConfigPreset,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        preset: AIConfigPreset,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """创建或更新AI配置预设"""
         try:
             user_id = current_user['user_id']
-            from db_manager import db_manager
 
             # 检查预设数量上限
-            existing = ctx.db_manager.get_ai_config_presets(user_id)
+            existing = db_manager.db_manager.get_ai_config_presets(user_id)
             existing_names = [p['preset_name'] for p in existing]
             if preset.preset_name not in existing_names and len(existing) >= 20:
                 raise HTTPException(status_code=400, detail="预设数量已达上限（最多20个）")
 
-            preset_id = ctx.db_manager.save_ai_config_preset(
+            preset_id = db_manager.db_manager.save_ai_config_preset(
                 user_id=user_id,
                 preset_name=preset.preset_name,
                 model_name=preset.model_name,
@@ -154,13 +186,12 @@ def create_admin_ops_router(ctx) -> APIRouter:
     @router.delete("/ai-config-presets/{preset_id}")
     def delete_ai_config_preset(
         preset_id: int,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user)
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user)
     ):
         """删除AI配置预设"""
         try:
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            deleted = ctx.db_manager.delete_ai_config_preset(user_id, preset_id)
+            deleted = db_manager.db_manager.delete_ai_config_preset(user_id, preset_id)
             if not deleted:
                 raise HTTPException(status_code=404, detail="预设不存在或无权删除")
             return {"message": "预设删除成功"}
@@ -171,25 +202,24 @@ def create_admin_ops_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"服务器错误: {str(e)}")
 
     @router.post("/ai-reply-test/{cookie_id}")
-    def test_ai_reply(cookie_id: str, test_data: dict, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def test_ai_reply(cookie_id: str, test_data: dict, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """测试AI回复功能"""
         try:
             user_id = current_user['user_id']
-            from db_manager import db_manager
-            user_cookies = ctx.db_manager.get_all_cookies(user_id)
+            user_cookies = db_manager.db_manager.get_all_cookies(user_id)
 
             if cookie_id not in user_cookies:
                 raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
             # 检查账号是否存在
-            if ctx.cookie_manager.manager is None:
+            if cookie_manager.manager is None:
                 raise HTTPException(status_code=500, detail='CookieManager 未就绪')
 
-            if cookie_id not in ctx.cookie_manager.manager.cookies:
+            if cookie_id not in cookie_manager.manager.cookies:
                 raise HTTPException(status_code=404, detail='账号不存在')
 
             # 检查是否启用AI回复
-            if not ctx.ai_reply_engine.is_ai_enabled(cookie_id):
+            if not ai_reply_engine.is_ai_enabled(cookie_id):
                 raise HTTPException(status_code=400, detail='该账号未启用AI回复')
 
             # 构造测试数据
@@ -201,7 +231,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
             }
 
             # 生成测试回复（跳过去抖等待）
-            reply = ctx.ai_reply_engine.generate_reply(
+            reply = ai_reply_engine.generate_reply(
                 message=test_message,
                 item_info=test_item_info,
                 chat_id=f"test_{int(time.time())}",
@@ -228,26 +258,26 @@ def create_admin_ops_router(ctx) -> APIRouter:
         cookie_id: str = None,
         limit: int = 100,
         offset: int = 0,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """查询系统日志页的统一任务日志。"""
         try:
-            safe_limit = ctx._normalize_task_log_limit(limit)
-            safe_offset = ctx._normalize_task_log_offset(offset)
+            safe_limit = _normalize_task_log_limit(limit)
+            safe_offset = _normalize_task_log_offset(offset)
             requested_type = str(task_type or 'all').strip() or 'all'
-            if requested_type not in {'all', *ctx.TASK_LOG_TYPE_LABELS.keys()}:
+            if requested_type not in {'all', *TASK_LOG_TYPE_LABELS.keys()}:
                 requested_type = 'all'
 
             scoped_cookie_id = None
             if cookie_id:
-                scoped_cookie_id = ctx._ensure_cookie_access(cookie_id, current_user)
+                scoped_cookie_id = reply_server._ensure_cookie_access(cookie_id, current_user)
 
             logs: List[Dict[str, Any]] = []
 
             if requested_type in {'all', 'auto_comment'}:
                 logs.extend(
-                    ctx._normalize_task_log_row(log, 'auto_comment')
-                    for log in ctx.db_manager.get_scheduled_rate_logs(
+                    _normalize_task_log_row(log, 'auto_comment')
+                    for log in db_manager.db_manager.get_scheduled_rate_logs(
                         user_id=current_user['user_id'],
                         cookie_id=scoped_cookie_id,
                         limit=safe_limit,
@@ -266,7 +296,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                 generic_task_type = '__skip__'
 
             if generic_task_type != '__skip__':
-                generic_logs = ctx.db_manager.get_scheduled_task_logs(
+                generic_logs = db_manager.db_manager.get_scheduled_task_logs(
                     user_id=current_user['user_id'],
                     cookie_id=scoped_cookie_id,
                     task_type=generic_task_type,
@@ -274,20 +304,20 @@ def create_admin_ops_router(ctx) -> APIRouter:
                     offset=0,
                 )
                 logs.extend(
-                    ctx._normalize_task_log_row(log, log.get('task_type') or 'other_task')
+                    _normalize_task_log_row(log, log.get('task_type') or 'other_task')
                     for log in generic_logs
                 )
 
             if requested_type in {'all', 'login_renew', 'cookie_refresh', 'other_task'}:
-                logs.extend(ctx._load_risk_task_logs(current_user, requested_type, scoped_cookie_id, safe_limit))
+                logs.extend(reply_server._load_risk_task_logs(current_user, requested_type, scoped_cookie_id, safe_limit))
 
-            logs.sort(key=ctx._task_log_created_at_sort_value, reverse=True)
+            logs.sort(key=_task_log_created_at_sort_value, reverse=True)
             page = logs[safe_offset:safe_offset + safe_limit]
             return {"success": True, "data": page, "total": len(logs)}
         except HTTPException:
             raise
         except Exception as e:
-            ctx.log_with_user('error', f"查询统一任务日志失败: {str(e)}", current_user)
+            reply_server.log_with_user('error', f"查询统一任务日志失败: {str(e)}", current_user)
             raise HTTPException(status_code=500, detail=f"查询统一任务日志失败: {str(e)}")
 
     @router.get('/api/auto-comment/logs')
@@ -295,13 +325,13 @@ def create_admin_ops_router(ctx) -> APIRouter:
         cookie_id: str = None,
         limit: int = 100,
         offset: int = 0,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """查询自动评价执行日志。"""
         try:
             if cookie_id:
-                cookie_id = ctx._ensure_cookie_access(cookie_id, current_user)
-            logs = ctx.db_manager.get_scheduled_rate_logs(
+                cookie_id = reply_server._ensure_cookie_access(cookie_id, current_user)
+            logs = db_manager.db_manager.get_scheduled_rate_logs(
                 user_id=current_user['user_id'],
                 cookie_id=cookie_id,
                 limit=limit,
@@ -311,13 +341,13 @@ def create_admin_ops_router(ctx) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            ctx.log_with_user('error', f"查询自动评价日志失败: {str(e)}", current_user)
+            reply_server.log_with_user('error', f"查询自动评价日志失败: {str(e)}", current_user)
             raise HTTPException(status_code=500, detail=f"查询自动评价日志失败: {str(e)}")
 
     @router.post('/api/auto-comment/batch-rate')
     async def batch_rate_historical_orders(
-        request: ctx.AutoCommentBatchRateRequest,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        request: AutoCommentBatchRateRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         """从闲鱼待评价列表拉取历史订单并批量补评价。"""
         try:
@@ -333,7 +363,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                 raise HTTPException(status_code=400, detail='请选择账号')
 
             page_size = max(1, min(int(request.page_size or 100), 100))
-            batch_id = f"manual_history_rate_{ctx.uuid.uuid4()}"
+            batch_id = f"manual_history_rate_{uuid.uuid4()}"
             details = []
             stats = {
                 'batch_id': batch_id,
@@ -356,37 +386,37 @@ def create_admin_ops_router(ctx) -> APIRouter:
                     'message': '',
                 }
                 try:
-                    cookie_id = ctx._ensure_cookie_access(raw_cookie_id, current_user)
+                    cookie_id = reply_server._ensure_cookie_access(raw_cookie_id, current_user)
                     account_result['account_id'] = cookie_id
 
-                    if not ctx.db_manager.get_auto_comment(cookie_id):
+                    if not db_manager.db_manager.get_auto_comment(cookie_id):
                         account_result['message'] = '未开启自动好评'
                         account_result['skipped_count'] += 1
                         stats['total_skipped'] += 1
-                        ctx.db_manager.add_scheduled_rate_log(
+                        db_manager.db_manager.add_scheduled_rate_log(
                             batch_id, cookie_id, status='skipped', message='历史补评价跳过：未开启自动好评'
                         )
                         details.append(account_result)
                         continue
 
-                    template = ctx.db_manager.get_active_comment_template(cookie_id)
+                    template = db_manager.db_manager.get_active_comment_template(cookie_id)
                     feedback = str((template or {}).get('content') or '').strip()
                     if not feedback:
                         account_result['message'] = '未设置激活的好评模板'
                         account_result['skipped_count'] += 1
                         stats['total_skipped'] += 1
-                        ctx.db_manager.add_scheduled_rate_log(
+                        db_manager.db_manager.add_scheduled_rate_log(
                             batch_id, cookie_id, status='missing_template', message='历史补评价跳过：未设置激活的好评模板'
                         )
                         details.append(account_result)
                         continue
 
-                    cookie_string = ctx.db_manager.get_cookie(cookie_id)
+                    cookie_string = db_manager.db_manager.get_cookie(cookie_id)
                     if not cookie_string:
                         account_result['message'] = '账号 Cookie 为空或不存在'
                         account_result['failed_count'] += 1
                         stats['total_failed'] += 1
-                        ctx.db_manager.add_scheduled_rate_log(
+                        db_manager.db_manager.add_scheduled_rate_log(
                             batch_id, cookie_id, status='cookie_expired', message='历史补评价失败：账号 Cookie 为空或不存在'
                         )
                         details.append(account_result)
@@ -405,7 +435,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                         account_result['message'] = message
                         account_result['failed_count'] += 1
                         stats['total_failed'] += 1
-                        ctx.db_manager.add_scheduled_rate_log(
+                        db_manager.db_manager.add_scheduled_rate_log(
                             batch_id=batch_id,
                             cookie_id=cookie_id,
                             status=status,
@@ -425,7 +455,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                         account_result['success'] = True
                         account_result['message'] = '没有待评价订单'
                         stats['success_accounts'] += 1
-                        ctx.db_manager.add_scheduled_rate_log(
+                        db_manager.db_manager.add_scheduled_rate_log(
                             batch_id, cookie_id, status='skipped', message='历史补评价：没有待评价订单'
                         )
                         details.append(account_result)
@@ -433,12 +463,12 @@ def create_admin_ops_router(ctx) -> APIRouter:
 
                     current_cookie = str(list_result.get('cookies_str') or cookie_string)
                     for item in pending_items:
-                        meta = ctx._extract_merchant_rate_item_meta(item if isinstance(item, dict) else {})
-                        order_id = ctx._extract_merchant_rate_order_id(item if isinstance(item, dict) else {})
+                        meta = _extract_merchant_rate_item_meta(item if isinstance(item, dict) else {})
+                        order_id = _extract_merchant_rate_order_id(item if isinstance(item, dict) else {})
                         if not order_id:
                             account_result['failed_count'] += 1
                             stats['total_failed'] += 1
-                            ctx.db_manager.add_scheduled_rate_log(
+                            db_manager.db_manager.add_scheduled_rate_log(
                                 batch_id=batch_id,
                                 cookie_id=cookie_id,
                                 item_id=meta.get('item_id') or None,
@@ -462,7 +492,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                             )
                         )
                         message = str(rate_result.get('message') or '')
-                        ctx.db_manager.add_scheduled_rate_log(
+                        db_manager.db_manager.add_scheduled_rate_log(
                             batch_id=batch_id,
                             cookie_id=cookie_id,
                             order_id=order_id,
@@ -478,11 +508,11 @@ def create_admin_ops_router(ctx) -> APIRouter:
                         if rate_result.get('success'):
                             account_result['rated_count'] += 1
                             stats['total_rated'] += 1
-                            ctx.db_manager.mark_order_rated(order_id, True)
+                            db_manager.db_manager.mark_order_rated(order_id, True)
                         else:
                             account_result['failed_count'] += 1
                             stats['total_failed'] += 1
-                            ctx.db_manager.mark_order_rated(order_id, False, message)
+                            db_manager.db_manager.mark_order_rated(order_id, False, message)
 
                         await asyncio.sleep(1)
 
@@ -504,7 +534,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                     account_result['failed_count'] += 1
                     stats['total_failed'] += 1
                     try:
-                        ctx.db_manager.add_scheduled_rate_log(
+                        db_manager.db_manager.add_scheduled_rate_log(
                             batch_id, raw_cookie_id, status='failed', message=account_result['message']
                         )
                     except Exception:
@@ -515,7 +545,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                 f"历史补评价完成: {stats['success_accounts']}/{stats['total_accounts']} 个账号处理成功，"
                 f"共评价 {stats['total_rated']} 笔，失败 {stats['total_failed']} 笔"
             )
-            ctx.log_with_user('info', message, current_user)
+            reply_server.log_with_user('info', message, current_user)
             return {
                 'success': True,
                 'message': message,
@@ -527,15 +557,15 @@ def create_admin_ops_router(ctx) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            ctx.log_with_user('error', f"历史补评价失败: {str(e)}", current_user)
+            reply_server.log_with_user('error', f"历史补评价失败: {str(e)}", current_user)
             raise HTTPException(status_code=500, detail=f"历史补评价失败: {str(e)}")
 
     @router.get("/logs")
-    async def get_logs(lines: int = 200, level: str = None, source: str = None, admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    async def get_logs(lines: int = 200, level: str = None, source: str = None, admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """获取实时系统日志"""
         try:
             # 获取文件日志收集器
-            collector = ctx.get_file_log_collector()
+            collector = get_file_log_collector()
 
             # 获取日志
             logs = collector.get_logs(lines=lines, level_filter=level, source_filter=source)
@@ -557,18 +587,18 @@ def create_admin_ops_router(ctx) -> APIRouter:
         date_to: str = None,
         limit: int = 100,
         offset: int = 0,
-        admin_user: Dict[str, Any] = Depends(ctx.require_admin)
+        admin_user: Dict[str, Any] = Depends(reply_server.require_admin)
     ):
         """获取风控日志（管理员专用）"""
         try:
-            ctx.log_with_user(
+            reply_server.log_with_user(
                 'info',
                 f"查询风控日志: cookie_id={cookie_id}, processing_status={processing_status}, event_type={event_type}, trigger_scene={trigger_scene}, session_id={session_id}, result_code={result_code}, date_from={date_from}, date_to={date_to}, limit={limit}, offset={offset}",
                 admin_user,
             )
 
             # 获取风控日志
-            logs = ctx.db_manager.get_risk_control_logs(
+            logs = db_manager.db_manager.get_risk_control_logs(
                 cookie_id=cookie_id,
                 processing_status=processing_status,
                 event_type=event_type,
@@ -580,7 +610,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                 limit=limit,
                 offset=offset
             )
-            total_count = ctx.db_manager.get_risk_control_logs_count(
+            total_count = db_manager.db_manager.get_risk_control_logs_count(
                 cookie_id=cookie_id,
                 processing_status=processing_status,
                 event_type=event_type,
@@ -591,7 +621,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                 date_to=date_to,
             )
 
-            ctx.log_with_user('info', f"风控日志查询成功，共 {len(logs)} 条记录，总计 {total_count} 条", admin_user)
+            reply_server.log_with_user('info', f"风控日志查询成功，共 {len(logs)} 条记录，总计 {total_count} 条", admin_user)
 
             return {
                 "success": True,
@@ -602,7 +632,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
             }
 
         except Exception as e:
-            ctx.log_with_user('error', f"获取风控日志失败: {str(e)}", admin_user)
+            reply_server.log_with_user('error', f"获取风控日志失败: {str(e)}", admin_user)
             return {
                 "success": False,
                 "message": f"获取风控日志失败: {str(e)}",
@@ -611,10 +641,10 @@ def create_admin_ops_router(ctx) -> APIRouter:
             }
 
     @router.get("/logs/stats")
-    async def get_log_stats(admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    async def get_log_stats(admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """获取日志统计信息"""
         try:
-            collector = ctx.get_file_log_collector()
+            collector = get_file_log_collector()
             stats = collector.get_stats()
 
             return {"success": True, "stats": stats}
@@ -623,10 +653,10 @@ def create_admin_ops_router(ctx) -> APIRouter:
             return {"success": False, "message": f"获取日志统计失败: {str(e)}", "stats": {}}
 
     @router.post("/logs/clear")
-    async def clear_logs(admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    async def clear_logs(admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """清空日志"""
         try:
-            collector = ctx.get_file_log_collector()
+            collector = get_file_log_collector()
             collector.clear_logs()
 
             return {"success": True, "message": "日志已清空"}
@@ -638,12 +668,12 @@ def create_admin_ops_router(ctx) -> APIRouter:
     async def get_slider_verification_stats(
         cookie_id: str = None,
         range_key: str = 'all',
-        admin_user: Dict[str, Any] = Depends(ctx.require_admin)
+        admin_user: Dict[str, Any] = Depends(reply_server.require_admin)
     ):
         """获取当前系统用户下的滑块验证统计。"""
         try:
             user_id = admin_user['user_id']
-            user_cookie_ids = sorted(ctx.db_manager.get_all_cookies(user_id).keys())
+            user_cookie_ids = sorted(db_manager.db_manager.get_all_cookies(user_id).keys())
             normalized_range = str(range_key or '').strip().lower()
             if normalized_range not in {'today', '7d', 'all'}:
                 normalized_range = 'all'
@@ -658,7 +688,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                     return {
                         'success': True,
                         'data': {
-                            **ctx._empty_slider_session_stats(),
+                            **_empty_slider_session_stats(),
                             'scope_label': cookie_id,
                             'selected_cookie_id': cookie_id,
                             'selected_range': normalized_range,
@@ -672,13 +702,13 @@ def create_admin_ops_router(ctx) -> APIRouter:
                 target_cookie_ids = user_cookie_ids
                 scope_label = '全部账号'
 
-            stats = ctx.db_manager.get_slider_verification_session_stats(target_cookie_ids, range_key=normalized_range)
+            stats = db_manager.db_manager.get_slider_verification_session_stats(target_cookie_ids, range_key=normalized_range)
             stats.update({
                 'scope_label': scope_label,
                 'selected_cookie_id': cookie_id or '',
             })
 
-            ctx.log_with_user(
+            reply_server.log_with_user(
                 'info',
                 f"获取滑块验证统计成功: scope={scope_label}, range={range_label}, sessions={stats['total_sessions']}, success={stats['success_count']}, failure={stats['failure_count']}",
                 admin_user,
@@ -689,52 +719,51 @@ def create_admin_ops_router(ctx) -> APIRouter:
                 'data': stats,
             }
         except Exception as e:
-            ctx.log_with_user('error', f"获取滑块验证统计失败: {str(e)}", admin_user)
+            reply_server.log_with_user('error', f"获取滑块验证统计失败: {str(e)}", admin_user)
             return {
                 'success': False,
                 'message': f'获取滑块验证统计失败: {str(e)}',
-                'data': ctx._empty_slider_session_stats(),
+                'data': _empty_slider_session_stats(),
             }
 
     @router.delete("/admin/risk-control-logs/{log_id}")
     async def delete_risk_control_log(
         log_id: int,
-        admin_user: Dict[str, Any] = Depends(ctx.require_admin)
+        admin_user: Dict[str, Any] = Depends(reply_server.require_admin)
     ):
         """删除风控日志记录（管理员专用）"""
         try:
-            ctx.log_with_user('info', f"删除风控日志记录: {log_id}", admin_user)
+            reply_server.log_with_user('info', f"删除风控日志记录: {log_id}", admin_user)
 
-            success = ctx.db_manager.delete_risk_control_log(log_id)
+            success = db_manager.db_manager.delete_risk_control_log(log_id)
 
             if success:
-                ctx.log_with_user('info', f"风控日志删除成功: {log_id}", admin_user)
+                reply_server.log_with_user('info', f"风控日志删除成功: {log_id}", admin_user)
                 return {"success": True, "message": "删除成功"}
             else:
-                ctx.log_with_user('warning', f"风控日志删除失败: {log_id}", admin_user)
+                reply_server.log_with_user('warning', f"风控日志删除失败: {log_id}", admin_user)
                 return {"success": False, "message": "删除失败，记录可能不存在"}
 
         except Exception as e:
-            ctx.log_with_user('error', f"删除风控日志失败: {log_id} - {str(e)}", admin_user)
+            reply_server.log_with_user('error', f"删除风控日志失败: {log_id} - {str(e)}", admin_user)
             return {"success": False, "message": f"删除失败: {str(e)}"}
 
     @router.get('/admin/users')
-    def get_all_users(admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    def get_all_users(admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """获取所有用户信息（管理员专用）"""
-        from db_manager import db_manager
         try:
-            ctx.log_with_user('info', "查询所有用户信息", admin_user)
-            users = ctx.db_manager.get_all_users()
+            reply_server.log_with_user('info', "查询所有用户信息", admin_user)
+            users = db_manager.db_manager.get_all_users()
 
             # 为每个用户添加统计信息
             for user in users:
                 user_id = user['id']
                 # 统计用户的Cookie数量
-                user_cookies = ctx.db_manager.get_all_cookies(user_id)
+                user_cookies = db_manager.db_manager.get_all_cookies(user_id)
                 user['cookie_count'] = len(user_cookies)
 
                 # 统计用户的卡券数量
-                user_cards = ctx.db_manager.get_all_cards(user_id)
+                user_cards = db_manager.db_manager.get_all_cards(user_id)
                 user['card_count'] = len(user_cards) if user_cards else 0
 
                 # 隐藏密码字段
@@ -742,34 +771,33 @@ def create_admin_ops_router(ctx) -> APIRouter:
                     del user['password_hash']  
     # ??????????????????????????
 
-            ctx.log_with_user('info', f"返回用户信息，共 {len(users)} 个用户", admin_user)
+            reply_server.log_with_user('info', f"返回用户信息，共 {len(users)} 个用户", admin_user)
             return {"users": users}
         except Exception as e:
-            ctx.log_with_user('error', f"获取用户信息失败: {str(e)}", admin_user)
+            reply_server.log_with_user('error', f"获取用户信息失败: {str(e)}", admin_user)
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.delete('/admin/users/{user_id}')
-    def delete_user(user_id: int, admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    def delete_user(user_id: int, admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """删除用户（管理员专用）"""
-        from db_manager import db_manager
         try:
             # 不能删除管理员自己
             if user_id == admin_user['user_id']:
-                ctx.log_with_user('warning', "尝试删除管理员自己", admin_user)
+                reply_server.log_with_user('warning', "尝试删除管理员自己", admin_user)
                 raise HTTPException(status_code=400, detail="不能删除管理员自己")
 
             # 获取要删除的用户信息
-            user_to_delete = ctx.db_manager.get_user_by_id(user_id)
+            user_to_delete = db_manager.db_manager.get_user_by_id(user_id)
             if not user_to_delete:
                 raise HTTPException(status_code=404, detail="用户不存在")
 
-            ctx.log_with_user('info', f"准备删除用户: {user_to_delete['username']} (ID: {user_id})", admin_user)
+            reply_server.log_with_user('info', f"准备删除用户: {user_to_delete['username']} (ID: {user_id})", admin_user)
 
             # 删除用户及其相关数据
-            success = ctx.db_manager.delete_user_and_data(user_id)
+            success = db_manager.db_manager.delete_user_and_data(user_id)
 
             if success:
-                ctx.audit_event(
+                reply_server.audit_event(
                     category="admin",
                     action="admin_user_delete",
                     status="success",
@@ -782,41 +810,40 @@ def create_admin_ops_router(ctx) -> APIRouter:
                         "target_user_id": user_id,
                     },
                 )
-                ctx.log_with_user('info', f"用户删除成功: {user_to_delete['username']} (ID: {user_id})", admin_user)
+                reply_server.log_with_user('info', f"用户删除成功: {user_to_delete['username']} (ID: {user_id})", admin_user)
                 return {"message": f"用户 {user_to_delete['username']} 删除成功"}
             else:
-                ctx.log_with_user('error', f"用户删除失败: {user_to_delete['username']} (ID: {user_id})", admin_user)
+                reply_server.log_with_user('error', f"用户删除失败: {user_to_delete['username']} (ID: {user_id})", admin_user)
                 raise HTTPException(status_code=400, detail="删除失败")
         except HTTPException:
             raise
         except Exception as e:
-            ctx.log_with_user('error', f"删除用户异常: {str(e)}", admin_user)
+            reply_server.log_with_user('error', f"删除用户异常: {str(e)}", admin_user)
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.put('/admin/users/{user_id}/admin-status')
-    def update_user_admin_status(user_id: int, is_admin: bool, admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    def update_user_admin_status(user_id: int, is_admin: bool, admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """更新用户管理员状态（管理员专用）"""
-        from db_manager import db_manager
         try:
             # 获取目标用户信息
-            target_user = ctx.db_manager.get_user_by_id(user_id)
+            target_user = db_manager.db_manager.get_user_by_id(user_id)
             if not target_user:
                 raise HTTPException(status_code=404, detail="用户不存在")
 
             # 不能修改自己的管理员状态（防止误操作导致没有管理员）
             if user_id == admin_user['user_id']:
-                ctx.log_with_user('warning', "尝试修改自己的管理员状态", admin_user)
+                reply_server.log_with_user('warning', "尝试修改自己的管理员状态", admin_user)
                 raise HTTPException(status_code=400, detail="不能修改自己的管理员状态")
 
-            ctx.log_with_user('info', f"准备{'设置' if is_admin else '取消'}{target_user['username']}的管理员权限", admin_user)
+            reply_server.log_with_user('info', f"准备{'设置' if is_admin else '取消'}{target_user['username']}的管理员权限", admin_user)
 
             # 更新管理员状态
-            success = ctx.db_manager.update_user_admin_status(user_id, is_admin)
+            success = db_manager.db_manager.update_user_admin_status(user_id, is_admin)
 
             if success:
                 action = "设置为管理员" if is_admin else "取消管理员权限"
-                removed_tokens = ctx._remove_session_tokens_for_user(user_id)
-                ctx.audit_event(
+                removed_tokens = reply_server._remove_session_tokens_for_user(user_id)
+                reply_server.audit_event(
                     category="admin",
                     action="admin_user_status_update",
                     status="success",
@@ -830,7 +857,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                         "revoked_sessions": removed_tokens,
                     },
                 )
-                ctx.log_with_user('info', f"用户 {target_user['username']} 已{action}", admin_user)
+                reply_server.log_with_user('info', f"用户 {target_user['username']} 已{action}", admin_user)
                 return {
                     "success": True,
                     "message": f"用户 {target_user['username']} 已{action}",
@@ -839,12 +866,12 @@ def create_admin_ops_router(ctx) -> APIRouter:
                     "revoked_sessions": removed_tokens
                 }
             else:
-                ctx.log_with_user('error', f"更新用户管理员状态失败: {target_user['username']}", admin_user)
+                reply_server.log_with_user('error', f"更新用户管理员状态失败: {target_user['username']}", admin_user)
                 raise HTTPException(status_code=400, detail="更新失败")
         except HTTPException:
             raise
         except Exception as e:
-            ctx.log_with_user('error', f"更新用户管理员状态异常: {str(e)}", admin_user)
+            reply_server.log_with_user('error', f"更新用户管理员状态异常: {str(e)}", admin_user)
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get('/admin/risk-control-logs')
@@ -859,18 +886,18 @@ def create_admin_ops_router(ctx) -> APIRouter:
         date_to: str = None,
         limit: int = 100,
         offset: int = 0,
-        admin_user: Dict[str, Any] = Depends(ctx.require_admin)
+        admin_user: Dict[str, Any] = Depends(reply_server.require_admin)
     ):
         """获取风控日志（管理员专用）"""
         try:
-            ctx.log_with_user(
+            reply_server.log_with_user(
                 'info',
                 f"查询风控日志: cookie_id={cookie_id}, processing_status={processing_status}, event_type={event_type}, trigger_scene={trigger_scene}, session_id={session_id}, result_code={result_code}, date_from={date_from}, date_to={date_to}, limit={limit}, offset={offset}",
                 admin_user,
             )
 
             # 获取风控日志
-            logs = ctx.db_manager.get_risk_control_logs(
+            logs = db_manager.db_manager.get_risk_control_logs(
                 cookie_id=cookie_id,
                 processing_status=processing_status,
                 event_type=event_type,
@@ -882,7 +909,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                 limit=limit,
                 offset=offset
             )
-            total_count = ctx.db_manager.get_risk_control_logs_count(
+            total_count = db_manager.db_manager.get_risk_control_logs_count(
                 cookie_id=cookie_id,
                 processing_status=processing_status,
                 event_type=event_type,
@@ -893,7 +920,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                 date_to=date_to,
             )
 
-            ctx.log_with_user('info', f"风控日志查询成功，共 {len(logs)} 条记录，总计 {total_count} 条", admin_user)
+            reply_server.log_with_user('info', f"风控日志查询成功，共 {len(logs)} 条记录，总计 {total_count} 条", admin_user)
 
             return {
                 "success": True,
@@ -904,16 +931,16 @@ def create_admin_ops_router(ctx) -> APIRouter:
             }
 
         except Exception as e:
-            ctx.log_with_user('error', f"查询风控日志失败: {str(e)}", admin_user)
+            reply_server.log_with_user('error', f"查询风控日志失败: {str(e)}", admin_user)
             return {"success": False, "message": f"查询失败: {str(e)}", "data": [], "total": 0}
 
     @router.get('/admin/cookies')
-    def get_admin_cookies(admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    def get_admin_cookies(admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """获取所有Cookie信息（管理员专用）"""
         try:
-            ctx.log_with_user('info', "查询所有Cookie信息", admin_user)
+            reply_server.log_with_user('info', "查询所有Cookie信息", admin_user)
 
-            if ctx.cookie_manager.manager is None:
+            if cookie_manager.manager is None:
                 return {
                     "success": True,
                     "cookies": [],
@@ -921,26 +948,25 @@ def create_admin_ops_router(ctx) -> APIRouter:
                 }
 
             # 获取所有用户的cookies
-            from db_manager import db_manager
-            all_users = ctx.db_manager.get_all_users()
+            all_users = db_manager.db_manager.get_all_users()
             all_cookies = []
 
             for user in all_users:
                 user_id = user['id']
-                user_cookies = ctx.db_manager.get_all_cookies(user_id)
+                user_cookies = db_manager.db_manager.get_all_cookies(user_id)
                 for cookie_id, cookie_value in user_cookies.items():
                     # 获取cookie详细信息
-                    cookie_details = ctx.db_manager.get_cookie_details(cookie_id)
+                    cookie_details = db_manager.db_manager.get_cookie_details(cookie_id)
                     cookie_info = {
                         'cookie_id': cookie_id,
                         'user_id': user_id,
                         'username': user['username'],
                         'nickname': cookie_details.get('remark', '') if cookie_details else '',
-                        'enabled': ctx.cookie_manager.manager.get_cookie_status(cookie_id)
+                        'enabled': cookie_manager.manager.get_cookie_status(cookie_id)
                     }
                     all_cookies.append(cookie_info)
 
-            ctx.log_with_user('info', f"获取到 {len(all_cookies)} 个Cookie", admin_user)
+            reply_server.log_with_user('info', f"获取到 {len(all_cookies)} 个Cookie", admin_user)
             return {
                 "success": True,
                 "cookies": all_cookies,
@@ -948,7 +974,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
             }
 
         except Exception as e:
-            ctx.log_with_user('error', f"获取Cookie信息失败: {str(e)}", admin_user)
+            reply_server.log_with_user('error', f"获取Cookie信息失败: {str(e)}", admin_user)
             return {
                 "success": False,
                 "cookies": [],
@@ -964,11 +990,11 @@ def create_admin_ops_router(ctx) -> APIRouter:
         actor_user_id: int = None,
         resource_type: str = None,
         resource_id: str = None,
-        admin_user: Dict[str, Any] = Depends(ctx.require_admin),
+        admin_user: Dict[str, Any] = Depends(reply_server.require_admin),
     ):
         """Return structured audit logs for administrators."""
         try:
-            logs = ctx.db_manager.get_audit_logs(
+            logs = db_manager.db_manager.get_audit_logs(
                 limit=limit,
                 category=category,
                 action=action,
@@ -977,7 +1003,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                 resource_type=resource_type,
                 resource_id=resource_id,
             )
-            ctx.audit_event(
+            reply_server.audit_event(
                 category="admin",
                 action="audit_log_query",
                 status="success",
@@ -997,7 +1023,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
             )
             return {"success": True, "logs": logs, "total": len(logs)}
         except Exception as e:
-            ctx.audit_event(
+            reply_server.audit_event(
                 category="admin",
                 action="audit_log_query",
                 status="error",
@@ -1009,7 +1035,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail="审计日志查询失败")
 
     @router.get('/admin/logs')
-    def get_system_logs(admin_user: Dict[str, Any] = Depends(ctx.require_admin),
+    def get_system_logs(admin_user: Dict[str, Any] = Depends(reply_server.require_admin),
                        lines: int = 100,
                        level: str = None):
         """获取系统日志（管理员专用）"""
@@ -1018,7 +1044,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
         from datetime import datetime
 
         try:
-            ctx.log_with_user('info', f"查询系统日志，行数: {lines}, 级别: {level}", admin_user)
+            reply_server.log_with_user('info', f"查询系统日志，行数: {lines}, 级别: {level}", admin_user)
 
             # 查找日志文件
             log_files = glob.glob("logs/xianyu_*.log")
@@ -1054,10 +1080,10 @@ def create_admin_ops_router(ctx) -> APIRouter:
 
             except Exception as e:
                 logger.error(f"读取日志文件失败: {str(e)}")
-                ctx.log_with_user('error', f"读取日志文件失败: {str(e)}", admin_user)
+                reply_server.log_with_user('error', f"读取日志文件失败: {str(e)}", admin_user)
                 return {"logs": [], "message": f"读取日志文件失败: {str(e)}", "success": False}
 
-            ctx.log_with_user('info', f"返回日志记录 {len(logs)} 条", admin_user)
+            reply_server.log_with_user('info', f"返回日志记录 {len(logs)} 条", admin_user)
             logger.info(f"成功返回 {len(logs)} 条日志记录")
 
             return {
@@ -1069,18 +1095,18 @@ def create_admin_ops_router(ctx) -> APIRouter:
 
         except Exception as e:
             logger.error(f"获取系统日志失败: {str(e)}")
-            ctx.log_with_user('error', f"获取系统日志失败: {str(e)}", admin_user)
+            reply_server.log_with_user('error', f"获取系统日志失败: {str(e)}", admin_user)
             return {"logs": [], "message": f"获取系统日志失败: {str(e)}", "success": False}
 
     @router.get('/admin/log-files')
-    def list_log_files(admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    def list_log_files(admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """列出所有可用的系统日志文件"""
         import os
         import glob
         from datetime import datetime
 
         try:
-            ctx.log_with_user('info', "查询日志文件列表", admin_user)
+            reply_server.log_with_user('info', "查询日志文件列表", admin_user)
 
             log_dir = "logs"
             if not os.path.exists(log_dir):
@@ -1111,11 +1137,11 @@ def create_admin_ops_router(ctx) -> APIRouter:
 
         except Exception as e:
             logger.error(f"获取日志文件列表失败: {str(e)}")
-            ctx.log_with_user('error', f"获取日志文件列表失败: {str(e)}", admin_user)
+            reply_server.log_with_user('error', f"获取日志文件列表失败: {str(e)}", admin_user)
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get('/admin/logs/export')
-    def export_log_file(file: str, admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    def export_log_file(file: str, admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """导出指定的日志文件"""
         import os
         from fastapi.responses import StreamingResponse
@@ -1130,14 +1156,14 @@ def create_admin_ops_router(ctx) -> APIRouter:
 
             # 防止目录遍历
             if not target_path.startswith(log_dir):
-                ctx.log_with_user('warning', f"尝试访问非法日志文件: {file}", admin_user)
+                reply_server.log_with_user('warning', f"尝试访问非法日志文件: {file}", admin_user)
                 raise HTTPException(status_code=400, detail="非法的日志文件路径")
 
             if not os.path.exists(target_path):
-                ctx.log_with_user('warning', f"日志文件不存在: {file}", admin_user)
+                reply_server.log_with_user('warning', f"日志文件不存在: {file}", admin_user)
                 raise HTTPException(status_code=404, detail="日志文件不存在")
 
-            ctx.log_with_user('info', f"导出日志文件: {safe_name}", admin_user)
+            reply_server.log_with_user('info', f"导出日志文件: {safe_name}", admin_user)
             def iter_file(path: str):
                 file_handle = open(path, 'rb')
                 try:
@@ -1162,15 +1188,14 @@ def create_admin_ops_router(ctx) -> APIRouter:
             raise
         except Exception as e:
             logger.error(f"导出日志文件失败: {str(e)}")
-            ctx.log_with_user('error', f"导出日志文件失败: {str(e)}", admin_user)
+            reply_server.log_with_user('error', f"导出日志文件失败: {str(e)}", admin_user)
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get('/admin/stats')
-    def get_system_stats(admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    def get_system_stats(admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """获取系统统计信息（管理员专用）"""
-        from db_manager import db_manager
         try:
-            ctx.log_with_user('info', "查询系统统计信息", admin_user)
+            reply_server.log_with_user('info', "查询系统统计信息", admin_user)
 
             stats = {
                 "users": {
@@ -1192,50 +1217,49 @@ def create_admin_ops_router(ctx) -> APIRouter:
             }
 
             # 用户统计
-            all_users = ctx.db_manager.get_all_users()
+            all_users = db_manager.db_manager.get_all_users()
             stats["users"]["total"] = len(all_users)
 
             # Cookie统计
-            all_cookies = ctx.db_manager.get_all_cookies()
+            all_cookies = db_manager.db_manager.get_all_cookies()
             stats["cookies"]["total"] = len(all_cookies)
 
             # 卡券统计
-            all_cards = ctx.db_manager.get_all_cards()
+            all_cards = db_manager.db_manager.get_all_cards()
             if all_cards:
                 stats["cards"]["total"] = len(all_cards)
                 stats["cards"]["enabled"] = len([card for card in all_cards if card.get('enabled', True)])
 
-            ctx.log_with_user('info', "系统统计信息查询完成", admin_user)
+            reply_server.log_with_user('info', "系统统计信息查询完成", admin_user)
             return stats
 
         except Exception as e:
-            ctx.log_with_user('error', f"获取系统统计信息失败: {str(e)}", admin_user)
+            reply_server.log_with_user('error', f"获取系统统计信息失败: {str(e)}", admin_user)
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get('/admin/backup/download')
-    def download_database_backup(admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    def download_database_backup(admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """下载数据库备份文件（管理员专用）"""
         import os
         from fastapi.responses import FileResponse
         from datetime import datetime
 
         try:
-            ctx.log_with_user('info', "请求下载数据库备份", admin_user)
+            reply_server.log_with_user('info', "请求下载数据库备份", admin_user)
 
             # 使用db_manager的实际数据库路径
-            from db_manager import db_manager
-            db_file_path = ctx.db_manager.db_path
+            db_file_path = db_manager.db_manager.db_path
 
             # 检查数据库文件是否存在
             if not os.path.exists(db_file_path):
-                ctx.log_with_user('error', f"数据库文件不存在: {db_file_path}", admin_user)
+                reply_server.log_with_user('error', f"数据库文件不存在: {db_file_path}", admin_user)
                 raise HTTPException(status_code=404, detail="数据库文件不存在")
 
             # 生成带时间戳的文件名
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             download_filename = f"xianyu_backup_{timestamp}.db"
 
-            ctx.log_with_user('info', f"开始下载数据库备份: {download_filename}", admin_user)
+            reply_server.log_with_user('info', f"开始下载数据库备份: {download_filename}", admin_user)
 
             return FileResponse(
                 path=db_file_path,
@@ -1246,26 +1270,26 @@ def create_admin_ops_router(ctx) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            ctx.log_with_user('error', f"下载数据库备份失败: {str(e)}", admin_user)
+            reply_server.log_with_user('error', f"下载数据库备份失败: {str(e)}", admin_user)
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post('/admin/backup/upload')
-    async def upload_database_backup(admin_user: Dict[str, Any] = Depends(ctx.require_admin),
+    async def upload_database_backup(admin_user: Dict[str, Any] = Depends(reply_server.require_admin),
                                     backup_file: UploadFile = File(...)):
         """Validate and atomically restore a database backup."""
         import shutil
         from db_manager.base import validate_backup_database
 
         filename = backup_file.filename or ""
-        if ctx.Path(filename).suffix.lower() != ".db":
+        if Path(filename).suffix.lower() != ".db":
             raise HTTPException(status_code=400, detail="只支持.db格式的数据库文件")
 
-        current_db_path = ctx.Path(str(ctx.db_manager.db_path)).resolve()
-        if str(ctx.db_manager.db_path) == ":memory:":
+        current_db_path = Path(str(db_manager.db_manager.db_path)).resolve()
+        if str(db_manager.db_manager.db_path) == ":memory:":
             raise HTTPException(status_code=400, detail="内存数据库不支持文件恢复")
         current_db_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_file_path = current_db_path.parent / f".restore-{ctx.uuid.uuid4().hex}.db"
-        rollback_stage_path = current_db_path.parent / f".rollback-{ctx.uuid.uuid4().hex}.db"
+        temp_file_path = current_db_path.parent / f".restore-{uuid.uuid4().hex}.db"
+        rollback_stage_path = current_db_path.parent / f".rollback-{uuid.uuid4().hex}.db"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_current_path = current_db_path.parent / f"xianyu_data_backup_{timestamp}.db"
         max_size = 100 * 1024 * 1024
@@ -1284,28 +1308,28 @@ def create_admin_ops_router(ctx) -> APIRouter:
             except ValueError:
                 raise HTTPException(status_code=400, detail="无效或不完整的数据库文件")
 
-            maintenance_lock = ctx.app.state.maintenance_lock
+            maintenance_lock = reply_server.app.state.maintenance_lock
             if maintenance_lock.locked():
                 raise HTTPException(status_code=503, detail="数据库维护正在进行")
 
             async with maintenance_lock:
-                ctx.app.state.maintenance_mode = True
-                runtime_manager = ctx.cookie_manager.manager
+                reply_server.app.state.maintenance_mode = True
+                runtime_manager = cookie_manager.manager
                 paused = False
                 try:
                     if runtime_manager is not None and hasattr(runtime_manager, "pause_for_maintenance"):
                         await runtime_manager.pause_for_maintenance()
                         paused = True
 
-                    with ctx.db_manager.lock:
-                        ctx.db_manager.close()
+                    with db_manager.db_manager.lock:
+                        db_manager.db_manager.close()
                         if not current_db_path.exists():
                             raise RuntimeError("live database does not exist")
                         shutil.copy2(current_db_path, backup_current_path)
                         os.replace(temp_file_path, current_db_path)
-                        ctx.db_manager.reinitialize()
+                        db_manager.db_manager.reinitialize()
 
-                    test_users = ctx.db_manager.get_all_users()
+                    test_users = db_manager.db_manager.get_all_users()
                     if runtime_manager is not None and hasattr(runtime_manager, "reload_from_db"):
                         runtime_manager.reload_from_db()
 
@@ -1313,9 +1337,9 @@ def create_admin_ops_router(ctx) -> APIRouter:
                         await runtime_manager.resume_after_maintenance()
                         paused = False
 
-                    ctx.SESSION_TOKENS.clear()
-                    ctx.DOWNLOAD_TOKENS.clear()
-                    ctx.log_with_user('info', f"数据库恢复成功，包含 {len(test_users)} 个用户", admin_user)
+                    state.SESSION_TOKENS.clear()
+                    state.DOWNLOAD_TOKENS.clear()
+                    reply_server.log_with_user('info', f"数据库恢复成功，包含 {len(test_users)} 个用户", admin_user)
                     return {
                         "success": True,
                         "message": "数据库恢复成功，所有旧会话已失效",
@@ -1324,12 +1348,12 @@ def create_admin_ops_router(ctx) -> APIRouter:
                 except Exception as restore_error:
                     logger.error(f"数据库恢复失败，开始回滚: {type(restore_error).__name__}")
                     try:
-                        with ctx.db_manager.lock:
-                            ctx.db_manager.close()
+                        with db_manager.db_manager.lock:
+                            db_manager.db_manager.close()
                             if backup_current_path.exists():
                                 shutil.copy2(backup_current_path, rollback_stage_path)
                                 os.replace(rollback_stage_path, current_db_path)
-                            ctx.db_manager.reinitialize()
+                            db_manager.db_manager.reinitialize()
                         if runtime_manager is not None and hasattr(runtime_manager, "reload_from_db"):
                             runtime_manager.reload_from_db()
                     except Exception as rollback_error:
@@ -1342,7 +1366,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                             await runtime_manager.resume_after_maintenance()
                         except Exception as resume_error:
                             logger.critical(f"账号任务恢复失败: {type(resume_error).__name__}")
-                    ctx.app.state.maintenance_mode = False
+                    reply_server.app.state.maintenance_mode = False
         except HTTPException:
             raise
         except Exception as exc:
@@ -1356,14 +1380,14 @@ def create_admin_ops_router(ctx) -> APIRouter:
                     pass
 
     @router.get('/admin/backup/list')
-    def list_backup_files(admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    def list_backup_files(admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """列出服务器上的备份文件（管理员专用）"""
         import os
         import glob
         from datetime import datetime
 
         try:
-            ctx.log_with_user('info', "查询备份文件列表", admin_user)
+            reply_server.log_with_user('info', "查询备份文件列表", admin_user)
 
             # 查找备份文件（在data目录中）
             backup_files = glob.glob("data/xianyu_data_backup_*.db")
@@ -1380,12 +1404,12 @@ def create_admin_ops_router(ctx) -> APIRouter:
                         'modified_time': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
                     })
                 except Exception as e:
-                    ctx.log_with_user('warning', f"读取备份文件信息失败: {file_path} - {str(e)}", admin_user)
+                    reply_server.log_with_user('warning', f"读取备份文件信息失败: {file_path} - {str(e)}", admin_user)
 
             # 按修改时间倒序排列
             backup_list.sort(key=lambda x: x['modified_time'], reverse=True)
 
-            ctx.log_with_user('info', f"找到 {len(backup_list)} 个备份文件", admin_user)
+            reply_server.log_with_user('info', f"找到 {len(backup_list)} 个备份文件", admin_user)
 
             return {
                 "backups": backup_list,
@@ -1393,15 +1417,14 @@ def create_admin_ops_router(ctx) -> APIRouter:
             }
 
         except Exception as e:
-            ctx.log_with_user('error', f"查询备份文件列表失败: {str(e)}", admin_user)
+            reply_server.log_with_user('error', f"查询备份文件列表失败: {str(e)}", admin_user)
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get('/admin/data/{table_name}')
-    def get_table_data(table_name: str, admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    def get_table_data(table_name: str, admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """获取指定表的所有数据（管理员专用）"""
-        from db_manager import db_manager
         try:
-            ctx.log_with_user('info', f"查询表数据: {table_name}", admin_user)
+            reply_server.log_with_user('info', f"查询表数据: {table_name}", admin_user)
 
             # 验证表名安全性
             allowed_tables = [
@@ -1412,14 +1435,14 @@ def create_admin_ops_router(ctx) -> APIRouter:
             ]
 
             if table_name not in allowed_tables:
-                ctx.log_with_user('warning', f"尝试访问不允许的表: {table_name}", admin_user)
+                reply_server.log_with_user('warning', f"尝试访问不允许的表: {table_name}", admin_user)
                 raise HTTPException(status_code=400, detail="不允许访问该表")
 
             # 获取表数据
-            data, columns = ctx.db_manager.get_table_data(table_name)
-            data = ctx._redact_admin_table_data(table_name, data, columns)
+            data, columns = db_manager.db_manager.get_table_data(table_name)
+            data = _redact_admin_table_data(table_name, data, columns)
 
-            ctx.log_with_user('info', f"表 {table_name} 查询成功，共 {len(data)} 条记录", admin_user)
+            reply_server.log_with_user('info', f"表 {table_name} 查询成功，共 {len(data)} 条记录", admin_user)
 
             return {
                 "success": True,
@@ -1431,16 +1454,15 @@ def create_admin_ops_router(ctx) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            ctx.log_with_user('error', f"查询表数据失败: {table_name} - {str(e)}", admin_user)
+            reply_server.log_with_user('error', f"查询表数据失败: {table_name} - {str(e)}", admin_user)
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get('/admin/data/{table_name}/export')
-    def export_table_data(table_name: str, admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    def export_table_data(table_name: str, admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """导出指定表的数据为Excel文件（管理员专用）"""
-        from db_manager import db_manager
         import io
         try:
-            ctx.log_with_user('info', f"导出表数据: {table_name}", admin_user)
+            reply_server.log_with_user('info', f"导出表数据: {table_name}", admin_user)
 
             # 验证表名安全性
             allowed_tables = [
@@ -1452,12 +1474,12 @@ def create_admin_ops_router(ctx) -> APIRouter:
             ]
 
             if table_name not in allowed_tables:
-                ctx.log_with_user('warning', f"尝试导出不允许的表: {table_name}", admin_user)
+                reply_server.log_with_user('warning', f"尝试导出不允许的表: {table_name}", admin_user)
                 raise HTTPException(status_code=400, detail="不允许导出该表")
 
             # 获取表数据
-            data, columns = ctx.db_manager.get_table_data(table_name)
-            data = ctx._redact_admin_table_data(table_name, data, columns)
+            data, columns = db_manager.db_manager.get_table_data(table_name)
+            data = _redact_admin_table_data(table_name, data, columns)
 
             if not data:
                 raise HTTPException(status_code=400, detail="表中没有数据")
@@ -1485,7 +1507,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
             wb.save(output)
             output.seek(0)
 
-            ctx.log_with_user('info', f"表 {table_name} 导出成功，共 {len(data)} 条记录", admin_user)
+            reply_server.log_with_user('info', f"表 {table_name} 导出成功，共 {len(data)} 条记录", admin_user)
 
             from fastapi.responses import StreamingResponse
             return StreamingResponse(
@@ -1497,15 +1519,14 @@ def create_admin_ops_router(ctx) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            ctx.log_with_user('error', f"导出表数据失败: {table_name} - {str(e)}", admin_user)
+            reply_server.log_with_user('error', f"导出表数据失败: {table_name} - {str(e)}", admin_user)
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.delete('/admin/data/{table_name}/{record_id}')
-    def delete_table_record(table_name: str, record_id: str, admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    def delete_table_record(table_name: str, record_id: str, admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """删除指定表的指定记录（管理员专用）"""
-        from db_manager import db_manager
         try:
-            ctx.log_with_user('info', f"删除表记录: {table_name}.{record_id}", admin_user)
+            reply_server.log_with_user('info', f"删除表记录: {table_name}.{record_id}", admin_user)
 
             # 验证表名安全性
             allowed_tables = [
@@ -1516,36 +1537,35 @@ def create_admin_ops_router(ctx) -> APIRouter:
             ]
 
             if table_name not in allowed_tables:
-                ctx.log_with_user('warning', f"尝试删除不允许的表记录: {table_name}", admin_user)
+                reply_server.log_with_user('warning', f"尝试删除不允许的表记录: {table_name}", admin_user)
                 raise HTTPException(status_code=400, detail="不允许操作该表")
 
             # 特殊保护：不能删除管理员用户
             if table_name == 'users' and record_id == str(admin_user['user_id']):
-                ctx.log_with_user('warning', "尝试删除管理员自己", admin_user)
+                reply_server.log_with_user('warning', "尝试删除管理员自己", admin_user)
                 raise HTTPException(status_code=400, detail="不能删除管理员自己")
 
             # 删除记录
-            success = ctx.db_manager.delete_table_record(table_name, record_id)
+            success = db_manager.db_manager.delete_table_record(table_name, record_id)
 
             if success:
-                ctx.log_with_user('info', f"表记录删除成功: {table_name}.{record_id}", admin_user)
+                reply_server.log_with_user('info', f"表记录删除成功: {table_name}.{record_id}", admin_user)
                 return {"success": True, "message": "删除成功"}
             else:
-                ctx.log_with_user('warning', f"表记录删除失败: {table_name}.{record_id}", admin_user)
+                reply_server.log_with_user('warning', f"表记录删除失败: {table_name}.{record_id}", admin_user)
                 raise HTTPException(status_code=400, detail="删除失败，记录可能不存在")
 
         except HTTPException:
             raise
         except Exception as e:
-            ctx.log_with_user('error', f"删除表记录异常: {table_name}.{record_id} - {str(e)}", admin_user)
+            reply_server.log_with_user('error', f"删除表记录异常: {table_name}.{record_id} - {str(e)}", admin_user)
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.delete('/admin/data/{table_name}')
-    def clear_table_data(table_name: str, admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    def clear_table_data(table_name: str, admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """清空指定表的所有数据（管理员专用）"""
-        from db_manager import db_manager
         try:
-            ctx.log_with_user('info', f"清空表数据: {table_name}", admin_user)
+            reply_server.log_with_user('info', f"清空表数据: {table_name}", admin_user)
 
             # 验证表名安全性
             allowed_tables = [
@@ -1558,39 +1578,38 @@ def create_admin_ops_router(ctx) -> APIRouter:
 
             # 不允许清空用户表
             if table_name == 'users':
-                ctx.log_with_user('warning', "尝试清空用户表", admin_user)
+                reply_server.log_with_user('warning', "尝试清空用户表", admin_user)
                 raise HTTPException(status_code=400, detail="不允许清空用户表")
 
             if table_name not in allowed_tables:
-                ctx.log_with_user('warning', f"尝试清空不允许的表: {table_name}", admin_user)
+                reply_server.log_with_user('warning', f"尝试清空不允许的表: {table_name}", admin_user)
                 raise HTTPException(status_code=400, detail="不允许清空该表")
 
             # 清空表数据
-            success = ctx.db_manager.clear_table_data(table_name)
+            success = db_manager.db_manager.clear_table_data(table_name)
 
             if success:
-                ctx.log_with_user('info', f"表数据清空成功: {table_name}", admin_user)
+                reply_server.log_with_user('info', f"表数据清空成功: {table_name}", admin_user)
                 return {"success": True, "message": "清空成功"}
             else:
-                ctx.log_with_user('warning', f"表数据清空失败: {table_name}", admin_user)
+                reply_server.log_with_user('warning', f"表数据清空失败: {table_name}", admin_user)
                 raise HTTPException(status_code=400, detail="清空失败")
 
         except HTTPException:
             raise
         except Exception as e:
-            ctx.log_with_user('error', f"清空表数据异常: {table_name} - {str(e)}", admin_user)
+            reply_server.log_with_user('error', f"清空表数据异常: {table_name} - {str(e)}", admin_user)
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get("/backup/export")
-    def export_backup(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def export_backup(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """导出用户备份"""
         try:
-            from db_manager import db_manager
             user_id = current_user['user_id']
             username = current_user['username']
 
             # 导出当前用户的数据
-            backup_data = ctx.db_manager.export_backup(user_id)
+            backup_data = db_manager.db_manager.export_backup(user_id)
 
             # 生成文件名
             import datetime
@@ -1607,7 +1626,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"导出备份失败: {str(e)}")
 
     @router.post("/backup/import")
-    def import_backup(file: UploadFile = File(...), current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def import_backup(file: UploadFile = File(...), current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """导入用户备份"""
         try:
             # 验证文件类型
@@ -1619,16 +1638,15 @@ def create_admin_ops_router(ctx) -> APIRouter:
             backup_data = json.loads(content.decode('utf-8'))
 
             # 导入备份到当前用户
-            from db_manager import db_manager
             user_id = current_user['user_id']
-            success = ctx.db_manager.import_backup(backup_data, user_id)
+            success = db_manager.db_manager.import_backup(backup_data, user_id)
 
             if success:
                 # 备份导入成功后，刷新 CookieManager 的内存缓存
                 import cookie_manager
-                if ctx.cookie_manager.manager:
+                if cookie_manager.manager:
                     try:
-                        ctx.cookie_manager.manager.reload_from_db()
+                        cookie_manager.manager.reload_from_db()
                         logger.info("备份导入后已刷新 CookieManager 缓存")
                     except Exception as e:
                         logger.error(f"刷新 CookieManager 缓存失败: {e}")
@@ -1645,12 +1663,12 @@ def create_admin_ops_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"导入备份失败: {str(e)}")
 
     @router.post("/system/reload-cache")
-    def reload_cache(admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    def reload_cache(admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         """重新加载系统缓存（用于手动刷新数据）"""
         try:
             import cookie_manager
-            if ctx.cookie_manager.manager:
-                success = ctx.cookie_manager.manager.reload_from_db()
+            if cookie_manager.manager:
+                success = cookie_manager.manager.reload_from_db()
                 if success:
                     return {"message": "系统缓存已刷新", "success": True}
                 else:
@@ -1663,14 +1681,14 @@ def create_admin_ops_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"刷新缓存失败: {str(e)}")
 
     @router.get('/api/update/check')
-    async def check_for_updates(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def check_for_updates(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """
         检查是否有可用更新
     
         返回更新信息，包括新版本号、更新内容等
         """
         try:
-            updater = ctx.get_updater()
+            updater = auto_updater.get_updater()
             manifest = await updater.check_for_updates()
         
             if manifest is None:
@@ -1738,25 +1756,25 @@ def create_admin_ops_router(ctx) -> APIRouter:
             }
 
     @router.post('/api/update/apply')
-    async def apply_updates(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def apply_updates(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """
         应用更新
     
         下载并安装所有可用更新
         """
         try:
-            ctx._ensure_update_admin(current_user)
+            reply_server._ensure_update_admin(current_user)
         
-            updater = ctx.get_updater()
+            updater = auto_updater.get_updater()
         
-            ctx.log_with_user('info', "开始执行自动更新", current_user)
+            reply_server.log_with_user('info', "开始执行自动更新", current_user)
         
             result = await updater.perform_update()
         
             if result["success"]:
-                ctx.log_with_user('info', f"更新完成: {result['message']}", current_user)
+                reply_server.log_with_user('info', f"更新完成: {result['message']}", current_user)
             else:
-                ctx.log_with_user('error', f"更新失败: {result['message']}", current_user)
+                reply_server.log_with_user('error', f"更新失败: {result['message']}", current_user)
         
             return {
                 "success": result["success"],
@@ -1773,14 +1791,14 @@ def create_admin_ops_router(ctx) -> APIRouter:
             }
 
     @router.get('/api/update/progress')
-    async def get_update_progress(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def get_update_progress(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """
         获取更新进度
     
         返回当前更新状态和进度信息
         """
         try:
-            updater = ctx.get_updater()
+            updater = auto_updater.get_updater()
             progress = updater.progress
         
             return {
@@ -1805,16 +1823,16 @@ def create_admin_ops_router(ctx) -> APIRouter:
             }
 
     @router.get('/api/update/local-hashes')
-    async def get_local_file_hashes(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def get_local_file_hashes(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """
         获取本地文件哈希值
     
         用于服务端比对哪些文件需要更新
         """
         try:
-            ctx._ensure_update_admin(current_user)
+            reply_server._ensure_update_admin(current_user)
         
-            updater = ctx.get_updater()
+            updater = auto_updater.get_updater()
             hashes = updater.get_local_file_hashes()
         
             return {
@@ -1836,7 +1854,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
             }
 
     @router.post('/api/update/cleanup-backups')
-    async def cleanup_old_backups(days: int = 7, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def cleanup_old_backups(days: int = 7, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """
         清理旧的备份文件
     
@@ -1844,12 +1862,12 @@ def create_admin_ops_router(ctx) -> APIRouter:
             days: 保留天数，默认7天
         """
         try:
-            ctx._ensure_update_admin(current_user)
+            reply_server._ensure_update_admin(current_user)
         
-            updater = ctx.get_updater()
+            updater = auto_updater.get_updater()
             updater.cleanup_old_backups(keep_days=days)
         
-            ctx.log_with_user('info', f"清理了 {days} 天前的备份文件", current_user)
+            reply_server.log_with_user('info', f"清理了 {days} 天前的备份文件", current_user)
         
             return {
                 "success": True,
@@ -1866,16 +1884,16 @@ def create_admin_ops_router(ctx) -> APIRouter:
             }
 
     @router.get('/api/update/file-changes')
-    async def get_file_changes(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def get_file_changes(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """
         比较当前文件与上次更新后的哈希清单
     
         用于检测哪些文件在更新后被本地修改过
         """
         try:
-            ctx._ensure_update_admin(current_user)
+            reply_server._ensure_update_admin(current_user)
         
-            updater = ctx.get_updater()
+            updater = auto_updater.get_updater()
             result = updater.compare_file_hashes()
         
             return {
@@ -1893,19 +1911,19 @@ def create_admin_ops_router(ctx) -> APIRouter:
             }
 
     @router.post('/api/update/save-hashes')
-    async def save_current_hashes(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def save_current_hashes(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """
         手动保存当前文件的哈希清单
     
         用于记录当前状态，以便以后比较
         """
         try:
-            ctx._ensure_update_admin(current_user)
+            reply_server._ensure_update_admin(current_user)
         
-            updater = ctx.get_updater()
+            updater = auto_updater.get_updater()
             updater.save_file_hashes(updater.current_version)
         
-            ctx.log_with_user('info', "手动保存文件哈希清单", current_user)
+            reply_server.log_with_user('info', "手动保存文件哈希清单", current_user)
         
             return {
                 "success": True,
@@ -1922,14 +1940,14 @@ def create_admin_ops_router(ctx) -> APIRouter:
             }
 
     @router.get('/api/update/saved-hashes')
-    async def get_saved_hashes(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def get_saved_hashes(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """
         获取上次保存的文件哈希清单
         """
         try:
-            ctx._ensure_update_admin(current_user)
+            reply_server._ensure_update_admin(current_user)
         
-            updater = ctx.get_updater()
+            updater = auto_updater.get_updater()
             saved_hashes = updater.load_file_hashes()
         
             if saved_hashes is None:
@@ -1960,16 +1978,16 @@ def create_admin_ops_router(ctx) -> APIRouter:
             }
 
     @router.post('/api/update/restart')
-    async def restart_application(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def restart_application(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """
         重启应用（用于更新后重启）
     
         注意：此操作会重启整个应用
         """
         try:
-            ctx._ensure_update_admin(current_user)
+            reply_server._ensure_update_admin(current_user)
         
-            ctx.log_with_user('info', "用户请求重启应用", current_user)
+            reply_server.log_with_user('info', "用户请求重启应用", current_user)
         
             import subprocess
             import sys
@@ -2014,11 +2032,11 @@ def create_admin_ops_router(ctx) -> APIRouter:
             }
 
     @router.post("/accounts/{cid}/polish-items")
-    async def polish_account_items(cid: str, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def polish_account_items(cid: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """擦亮指定账号的所有在售商品"""
         try:
-            cid = ctx._ensure_cookie_access(cid, current_user)
-            cookie_info = ctx.db_manager.get_cookie_by_id(cid)
+            cid = reply_server._ensure_cookie_access(cid, current_user)
+            cookie_info = db_manager.db_manager.get_cookie_by_id(cid)
             if not cookie_info:
                 return {"success": False, "message": "未找到指定的账号信息"}
 
@@ -2043,32 +2061,32 @@ def create_admin_ops_router(ctx) -> APIRouter:
             return {"success": False, "message": f"擦亮异常: {str(e)}"}
 
     @router.post("/scheduled-tasks")
-    async def create_scheduled_task(request: dict, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def create_scheduled_task(request: dict, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """创建定时任务"""
         try:
             account_id = request.get('account_id', '').strip()
-            run_hour = ctx._parse_run_hour(request.get('run_hour', request.get('delay_minutes', 8)))
-            random_delay_max = ctx._parse_random_delay(request.get('random_delay_max', 10), 10)
-            enabled = ctx._parse_enabled_flag(request.get('enabled', True))
+            run_hour = _parse_run_hour(request.get('run_hour', request.get('delay_minutes', 8)))
+            random_delay_max = _parse_random_delay(request.get('random_delay_max', 10), 10)
+            enabled = _parse_enabled_flag(request.get('enabled', True))
 
             if not account_id:
                 return {"success": False, "message": "账号ID不能为空"}
 
-            cookie_details = ctx.db_manager.get_cookie_details(account_id)
+            cookie_details = db_manager.db_manager.get_cookie_details(account_id)
             if not cookie_details or cookie_details['user_id'] != current_user['user_id']:
                 return {"success": False, "message": "账号不存在或无权创建此任务"}
 
             name = f"每日擦亮-{account_id}"
-            next_run_at = ctx.db_manager.calculate_next_daily_run(run_hour, random_delay_max, include_today=True)
+            next_run_at = db_manager.db_manager.calculate_next_daily_run(run_hour, random_delay_max, include_today=True)
 
-            existing_task = ctx.db_manager.get_scheduled_task_by_account(
+            existing_task = db_manager.db_manager.get_scheduled_task_by_account(
                 account_id,
                 user_id=current_user['user_id'],
                 task_type='item_polish'
             )
 
             if existing_task:
-                updated = ctx.db_manager.update_scheduled_task(
+                updated = db_manager.db_manager.update_scheduled_task(
                     existing_task['id'],
                     name=name,
                     interval_hours=24,
@@ -2078,7 +2096,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                     next_run_at=next_run_at
                 )
                 if updated:
-                    task = ctx.db_manager.get_scheduled_task(existing_task['id'])
+                    task = db_manager.db_manager.get_scheduled_task(existing_task['id'])
                     return {
                         "success": True,
                         "message": "定时擦亮任务更新成功",
@@ -2087,7 +2105,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                     }
                 return {"success": False, "message": "更新定时任务失败"}
 
-            task_id = ctx.db_manager.create_scheduled_task(
+            task_id = db_manager.db_manager.create_scheduled_task(
                 name=name, task_type='item_polish', account_id=account_id,
                 user_id=current_user['user_id'],
                 interval_hours=24, delay_minutes=run_hour,
@@ -2097,7 +2115,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
             )
 
             if task_id:
-                task = ctx.db_manager.get_scheduled_task(task_id)
+                task = db_manager.db_manager.get_scheduled_task(task_id)
                 return {"success": True, "message": "定时擦亮任务创建成功", "task_id": task_id, "task": task}
             else:
                 return {"success": False, "message": "创建定时任务失败"}
@@ -2106,20 +2124,20 @@ def create_admin_ops_router(ctx) -> APIRouter:
             return {"success": False, "message": f"创建定时任务异常: {str(e)}"}
 
     @router.get("/scheduled-tasks")
-    async def list_scheduled_tasks(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def list_scheduled_tasks(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取定时任务列表"""
         try:
-            tasks = ctx.db_manager.get_scheduled_tasks(user_id=current_user['user_id'])
+            tasks = db_manager.db_manager.get_scheduled_tasks(user_id=current_user['user_id'])
             return {"success": True, "tasks": tasks}
         except Exception as e:
             logger.error(f"获取定时任务列表异常: {str(e)}")
             return {"success": False, "message": f"获取定时任务列表异常: {str(e)}"}
 
     @router.put("/scheduled-tasks/{task_id}")
-    async def update_scheduled_task(task_id: int, request: dict, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def update_scheduled_task(task_id: int, request: dict, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """更新定时任务"""
         try:
-            task = ctx.db_manager.get_scheduled_task(task_id)
+            task = db_manager.db_manager.get_scheduled_task(task_id)
             if not task:
                 return {"success": False, "message": "任务不存在"}
             if task['user_id'] != current_user['user_id']:
@@ -2136,16 +2154,16 @@ def create_admin_ops_router(ctx) -> APIRouter:
                 kwargs['interval_hours'] = int(request.get('interval_hours', task.get('interval_hours', 24)))
 
             if 'run_hour' in request or 'delay_minutes' in request:
-                kwargs['delay_minutes'] = ctx._parse_run_hour(request.get('run_hour', request.get('delay_minutes')))
+                kwargs['delay_minutes'] = _parse_run_hour(request.get('run_hour', request.get('delay_minutes')))
 
             if 'random_delay_max' in request:
-                kwargs['random_delay_max'] = ctx._parse_random_delay(
+                kwargs['random_delay_max'] = _parse_random_delay(
                     request.get('random_delay_max'),
                     task.get('random_delay_max', 10)
                 )
 
             if 'enabled' in request:
-                kwargs['enabled'] = ctx._parse_enabled_flag(request.get('enabled'))
+                kwargs['enabled'] = _parse_enabled_flag(request.get('enabled'))
 
             effective_enabled = kwargs.get('enabled', 1 if task['enabled'] else 0)
             effective_run_hour = kwargs.get('delay_minutes', task.get('delay_minutes', 8))
@@ -2158,7 +2176,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                     ('enabled' in kwargs and not task['enabled'])
                 )
                 if should_reschedule:
-                    kwargs['next_run_at'] = ctx.db_manager.calculate_next_daily_run(
+                    kwargs['next_run_at'] = db_manager.db_manager.calculate_next_daily_run(
                         effective_run_hour,
                         effective_random_delay,
                         include_today=True
@@ -2167,8 +2185,8 @@ def create_admin_ops_router(ctx) -> APIRouter:
             if not kwargs:
                 return {"success": False, "message": "没有可更新的字段"}
 
-            if ctx.db_manager.update_scheduled_task(task_id, **kwargs):
-                updated_task = ctx.db_manager.get_scheduled_task(task_id)
+            if db_manager.db_manager.update_scheduled_task(task_id, **kwargs):
+                updated_task = db_manager.db_manager.get_scheduled_task(task_id)
                 return {"success": True, "message": "定时任务更新成功", "task": updated_task}
             else:
                 return {"success": False, "message": "更新失败"}
@@ -2177,16 +2195,16 @@ def create_admin_ops_router(ctx) -> APIRouter:
             return {"success": False, "message": f"更新定时任务异常: {str(e)}"}
 
     @router.delete("/scheduled-tasks/{task_id}")
-    async def delete_scheduled_task(task_id: int, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def delete_scheduled_task(task_id: int, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """删除定时任务"""
         try:
-            task = ctx.db_manager.get_scheduled_task(task_id)
+            task = db_manager.db_manager.get_scheduled_task(task_id)
             if not task:
                 return {"success": False, "message": "任务不存在"}
             if task['user_id'] != current_user['user_id']:
                 return {"success": False, "message": "无权删除此任务"}
 
-            if ctx.db_manager.delete_scheduled_task(task_id):
+            if db_manager.db_manager.delete_scheduled_task(task_id):
                 return {"success": True, "message": "定时任务已删除"}
             else:
                 return {"success": False, "message": "删除失败"}
@@ -2195,10 +2213,10 @@ def create_admin_ops_router(ctx) -> APIRouter:
             return {"success": False, "message": f"删除定时任务异常: {str(e)}"}
 
     @router.put("/scheduled-tasks/{task_id}/toggle")
-    async def toggle_scheduled_task(task_id: int, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def toggle_scheduled_task(task_id: int, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """启用/禁用定时任务"""
         try:
-            task = ctx.db_manager.get_scheduled_task(task_id)
+            task = db_manager.db_manager.get_scheduled_task(task_id)
             if not task:
                 return {"success": False, "message": "任务不存在"}
             if task['user_id'] != current_user['user_id']:
@@ -2207,15 +2225,15 @@ def create_admin_ops_router(ctx) -> APIRouter:
             new_enabled = 0 if task['enabled'] else 1
             update_kwargs = {'enabled': new_enabled}
             if new_enabled:
-                update_kwargs['next_run_at'] = ctx.db_manager.calculate_next_daily_run(
+                update_kwargs['next_run_at'] = db_manager.db_manager.calculate_next_daily_run(
                     task.get('delay_minutes', 8),
                     task.get('random_delay_max', 10),
                     include_today=True
                 )
 
-            if ctx.db_manager.update_scheduled_task(task_id, **update_kwargs):
+            if db_manager.db_manager.update_scheduled_task(task_id, **update_kwargs):
                 status = "启用" if new_enabled else "禁用"
-                updated_task = ctx.db_manager.get_scheduled_task(task_id)
+                updated_task = db_manager.db_manager.get_scheduled_task(task_id)
                 return {
                     "success": True,
                     "message": f"定时任务已{status}",
@@ -2229,9 +2247,9 @@ def create_admin_ops_router(ctx) -> APIRouter:
             return {"success": False, "message": f"操作异常: {str(e)}"}
 
     @router.post("/api/analytics/error")
-    async def report_client_error(req: ctx.ClientErrorRequest):
+    async def report_client_error(req: ClientErrorRequest):
         """???? JS ????"""
-        ctx.track(
+        reply_server.track(
             user="browser",
             action="client_error",
             target=req.source.split("/")[-1] if req.source else "-",
@@ -2241,29 +2259,29 @@ def create_admin_ops_router(ctx) -> APIRouter:
         return {"success": True}
 
     @router.get("/api/files")
-    async def list_files(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def list_files(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         try:
             user_id = current_user['user_id']
-            files = ctx.db_manager.get_files(user_id=user_id)
-            ctx.track(user=current_user.get("username","?"), action=ctx.ActionEvent.FILE_LIST, detail="count={}".format(len(files)))
+            files = db_manager.db_manager.get_files(user_id=user_id)
+            reply_server.track(user=current_user.get("username","?"), action=ActionEvent.FILE_LIST, detail="count={}".format(len(files)))
             return {"success": True, "data": files}
         except Exception as e:
             logger.error("list_files failed: {}".format(e))
             return {"success": False, "message": str(e)}
 
     @router.get("/api/files/{file_id}/download")
-    async def download_file(file_id: int, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def download_file(file_id: int, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         try:
             user_id = current_user['user_id']
-            can_download, remaining, max_allowed = ctx.db_manager.check_download_quota(file_id, user_id)
+            can_download, remaining, max_allowed = db_manager.db_manager.check_download_quota(file_id, user_id)
             if not can_download:
-                ctx.track(user=current_user.get("username","?"), action=ctx.ActionEvent.FILE_DOWNLOAD, target=str(file_id), result="quota_exceeded", detail="max={}".format(max_allowed))
+                reply_server.track(user=current_user.get("username","?"), action=ActionEvent.FILE_DOWNLOAD, target=str(file_id), result="quota_exceeded", detail="max={}".format(max_allowed))
                 raise HTTPException(status_code=403, detail="下载次数已用完")
-            file_info = ctx.db_manager.get_file(file_id)
+            file_info = db_manager.db_manager.get_file(file_id)
             if not file_info:
                 raise HTTPException(status_code=404, detail="文件不存在")
-            ctx.db_manager.record_download(file_id, user_id)
-            ctx.track(user=str(user_id), action=ctx.ActionEvent.FILE_DOWNLOAD, target="{}:{}".format(file_id, file_info.get("filename","?")), detail="via=token")
+            db_manager.db_manager.record_download(file_id, user_id)
+            reply_server.track(user=str(user_id), action=ActionEvent.FILE_DOWNLOAD, target="{}:{}".format(file_id, file_info.get("filename","?")), detail="via=token")
             return Response(
                 content=file_info['file_data'],
                 media_type=file_info.get('mime_type', 'application/octet-stream'),
@@ -2280,11 +2298,11 @@ def create_admin_ops_router(ctx) -> APIRouter:
         file: UploadFile = File(...),
         description: str = Form(""),
         max_downloads: int = Form(5),
-        admin_user: Dict[str, Any] = Depends(ctx.require_admin)
+        admin_user: Dict[str, Any] = Depends(reply_server.require_admin)
     ):
         try:
             file_data = await file.read()
-            file_id = ctx.db_manager.add_file(
+            file_id = db_manager.db_manager.add_file(
                 filename=file.filename,
                 file_data=file_data,
                 description=description,
@@ -2293,7 +2311,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
                 created_by=admin_user['user_id']
             )
             logger.info("admin {} uploaded file: {} (id={})".format(admin_user['username'], file.filename, file_id))
-            ctx.track(user=admin_user.get("username","?"), action=ctx.ActionEvent.FILE_UPLOAD, target="{}:{}".format(file_id, file.filename), detail="size={}".format(len(file_data)))
+            reply_server.track(user=admin_user.get("username","?"), action=ActionEvent.FILE_UPLOAD, target="{}:{}".format(file_id, file.filename), detail="size={}".format(len(file_data)))
             return {"success": True, "message": "文件上传成功", "file_id": file_id}
         except Exception as e:
             logger.error("upload_file failed: {}".format(e))
@@ -2304,13 +2322,13 @@ def create_admin_ops_router(ctx) -> APIRouter:
         file_id: int,
         description: Optional[str] = Form(None),
         max_downloads: Optional[int] = Form(None),
-        admin_user: Dict[str, Any] = Depends(ctx.require_admin)
+        admin_user: Dict[str, Any] = Depends(reply_server.require_admin)
     ):
         try:
-            success = ctx.db_manager.update_file(file_id, description=description, max_downloads=max_downloads)
+            success = db_manager.db_manager.update_file(file_id, description=description, max_downloads=max_downloads)
             if not success:
                 raise HTTPException(status_code=404, detail="文件不存在或更新失败")
-            ctx.track(user=admin_user.get("username","?"), action=ctx.ActionEvent.FILE_EDIT, target=str(file_id), detail="desc={},max_dl={}".format(description, max_downloads))
+            reply_server.track(user=admin_user.get("username","?"), action=ActionEvent.FILE_EDIT, target=str(file_id), detail="desc={},max_dl={}".format(description, max_downloads))
             return {"success": True, "message": "文件更新成功"}
         except HTTPException:
             raise
@@ -2321,10 +2339,10 @@ def create_admin_ops_router(ctx) -> APIRouter:
     @router.delete("/api/files/{file_id}")
     async def delete_file_info(
         file_id: int,
-        admin_user: Dict[str, Any] = Depends(ctx.require_admin)
+        admin_user: Dict[str, Any] = Depends(reply_server.require_admin)
     ):
         try:
-            success = ctx.db_manager.delete_file(file_id)
+            success = db_manager.db_manager.delete_file(file_id)
             if not success:
                 raise HTTPException(status_code=404, detail="文件不存在")
             return {"success": True, "message": "文件已删除"}
@@ -2335,15 +2353,15 @@ def create_admin_ops_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get("/api/files/{file_id}/download-token")
-    async def get_download_token(file_id: int, current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    async def get_download_token(file_id: int, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         try:
             user_id = current_user['user_id']
-            can_download, remaining, max_allowed = ctx.db_manager.check_download_quota(file_id, user_id)
+            can_download, remaining, max_allowed = db_manager.db_manager.check_download_quota(file_id, user_id)
             if not can_download:
-                ctx.track(user=current_user.get("username","?"), action=ctx.ActionEvent.FILE_DOWNLOAD, target=str(file_id), result="quota_exceeded", detail="max={}".format(max_allowed))
+                reply_server.track(user=current_user.get("username","?"), action=ActionEvent.FILE_DOWNLOAD, target=str(file_id), result="quota_exceeded", detail="max={}".format(max_allowed))
                 raise HTTPException(status_code=403, detail="下载次数已用完")
             token_str = secrets.token_urlsafe(32)
-            ctx.DOWNLOAD_TOKENS[token_str] = {
+            state.DOWNLOAD_TOKENS[token_str] = {
                 "user_id": user_id,
                 "file_id": file_id,
                 "exp": time.time() + 120
@@ -2358,19 +2376,19 @@ def create_admin_ops_router(ctx) -> APIRouter:
     @router.get("/api/files/{file_id}/direct")
     async def direct_download(file_id: int, token: str = None):
         try:
-            if not token or token not in ctx.DOWNLOAD_TOKENS:
+            if not token or token not in state.DOWNLOAD_TOKENS:
                 raise HTTPException(status_code=401, detail="无效或已过期的下载链接")
-            token_data = ctx.DOWNLOAD_TOKENS[token]
+            token_data = state.DOWNLOAD_TOKENS[token]
             if token_data["file_id"] != file_id or time.time() > token_data["exp"]:
-                del ctx.DOWNLOAD_TOKENS[token]
+                del state.DOWNLOAD_TOKENS[token]
                 raise HTTPException(status_code=401, detail="下载链接已过期")
             user_id = token_data["user_id"]
-            del ctx.DOWNLOAD_TOKENS[token]  # 一次性
-            file_info = ctx.db_manager.get_file(file_id)
+            del state.DOWNLOAD_TOKENS[token]  # 一次性
+            file_info = db_manager.db_manager.get_file(file_id)
             if not file_info:
                 raise HTTPException(status_code=404, detail="文件不存在")
-            ctx.db_manager.record_download(file_id, user_id)
-            ctx.track(user=str(user_id), action=ctx.ActionEvent.FILE_DOWNLOAD, target="{}:{}".format(file_id, file_info.get("filename","?")), detail="via=token")
+            db_manager.db_manager.record_download(file_id, user_id)
+            reply_server.track(user=str(user_id), action=ActionEvent.FILE_DOWNLOAD, target="{}:{}".format(file_id, file_info.get("filename","?")), detail="via=token")
             return Response(
                 content=file_info['file_data'],
                 media_type=file_info.get('mime_type', 'application/octet-stream'),
@@ -2383,16 +2401,16 @@ def create_admin_ops_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post("/api/groups")
-    async def create_group(req: ctx.CreateGroupRequest, admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    async def create_group(req: CreateGroupRequest, admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         try:
-            group_id = ctx.db_manager.create_group(
+            group_id = db_manager.db_manager.create_group(
                 group_name=req.group_name,
                 description=req.description or "",
                 created_by=admin_user["user_id"]
             )
-            members = ctx.db_manager.batch_create_users(group_id, req.user_count, req.group_name)
+            members = db_manager.db_manager.batch_create_users(group_id, req.user_count, req.group_name)
             logger.info("admin {} created group '{}' with {} users".format(admin_user["username"], req.group_name, len(members)))
-            ctx.track(user=admin_user.get("username","?"), action=ctx.ActionEvent.GROUP_CREATE, target="{}:{}".format(group_id, req.group_name), detail="members={}".format(len(members)))
+            reply_server.track(user=admin_user.get("username","?"), action=ActionEvent.GROUP_CREATE, target="{}:{}".format(group_id, req.group_name), detail="members={}".format(len(members)))
             return {
                 "success": True,
                 "message": "用户组 '{}' 创建成功，含 {} 个用户".format(req.group_name, len(members)),
@@ -2404,27 +2422,27 @@ def create_admin_ops_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get("/api/groups")
-    async def list_groups(admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    async def list_groups(admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         try:
-            groups = ctx.db_manager.get_all_groups()
+            groups = db_manager.db_manager.get_all_groups()
             return {"success": True, "data": groups}
         except Exception as e:
             logger.error("list_groups failed: {}".format(e))
             return {"success": False, "message": str(e)}
 
     @router.get("/api/groups/{group_id}/members")
-    async def get_group_members(group_id: int, admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    async def get_group_members(group_id: int, admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         try:
-            members = ctx.db_manager.get_group_members(group_id)
+            members = db_manager.db_manager.get_group_members(group_id)
             return {"success": True, "data": members}
         except Exception as e:
             logger.error("get_group_members failed: {}".format(e))
             return {"success": False, "message": str(e)}
 
     @router.delete("/api/groups/{group_id}")
-    async def delete_group(group_id: int, admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    async def delete_group(group_id: int, admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         try:
-            success = ctx.db_manager.delete_group(group_id)
+            success = db_manager.db_manager.delete_group(group_id)
             if not success:
                 raise HTTPException(status_code=404, detail="用户组不存在")
             logger.info("admin {} deleted group {}".format(admin_user["username"], group_id))
@@ -2436,18 +2454,18 @@ def create_admin_ops_router(ctx) -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post("/api/groups/{group_id}/members")
-    async def add_group_members(group_id: int, req: ctx.AddMembersRequest, admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    async def add_group_members(group_id: int, req: AddMembersRequest, admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         try:
-            members = ctx.db_manager.batch_create_users(group_id, req.count, "grp{}".format(group_id))
+            members = db_manager.db_manager.batch_create_users(group_id, req.count, "grp{}".format(group_id))
             return {"success": True, "message": "已添加 {} 个用户".format(len(members)), "members": members}
         except Exception as e:
             logger.error("add_group_members failed: {}".format(e))
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.delete("/api/groups/{group_id}/members/{user_id}")
-    async def remove_group_member(group_id: int, user_id: int, admin_user: Dict[str, Any] = Depends(ctx.require_admin)):
+    async def remove_group_member(group_id: int, user_id: int, admin_user: Dict[str, Any] = Depends(reply_server.require_admin)):
         try:
-            success = ctx.db_manager.remove_group_member(user_id)
+            success = db_manager.db_manager.remove_group_member(user_id)
             if not success:
                 raise HTTPException(status_code=404, detail="用户不存在或不属于任何组")
             return {"success": True, "message": "成员已删除"}
@@ -2463,10 +2481,10 @@ def create_admin_ops_router(ctx) -> APIRouter:
         buyer_nick: str = None,
         page: int = 1,
         page_size: int = 20,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         try:
-            result = ctx.blacklist_service.list_personal(
+            result = blacklist_service.list_personal(
                 user_id=current_user['user_id'],
                 buyer_id=buyer_id,
                 buyer_nick=buyer_nick,
@@ -2475,20 +2493,20 @@ def create_admin_ops_router(ctx) -> APIRouter:
             )
             return {'success': True, **result}
         except Exception as e:
-            ctx.log_with_user('error', f"查询个人黑名单失败: {ctx.mask_sensitive_text(e)}", current_user)
+            reply_server.log_with_user('error', f"查询个人黑名单失败: {reply_server.mask_sensitive_text(e)}", current_user)
             raise HTTPException(status_code=500, detail='查询个人黑名单失败')
 
     @router.post('/api/blacklist/personal')
     def create_personal_blacklist(
-        request: ctx.PersonalBlacklistCreateRequest,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        request: PersonalBlacklistCreateRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         try:
             cookie_id = str(request.cookie_id or '').strip() or None
             if cookie_id:
-                cookie_id = ctx._ensure_cookie_access(cookie_id, current_user)
+                cookie_id = reply_server._ensure_cookie_access(cookie_id, current_user)
 
-            result = ctx.blacklist_service.create_personal(
+            result = blacklist_service.create_personal(
                 user_id=current_user['user_id'],
                 buyer_ids=request.buyer_ids,
                 cookie_id=cookie_id,
@@ -2502,7 +2520,7 @@ def create_admin_ops_router(ctx) -> APIRouter:
             message = f"成功添加 {created} 条黑名单"
             if skipped:
                 message += f"，跳过 {skipped} 条"
-            ctx.log_with_user('info', f"新增个人黑名单: created={created}, skipped={skipped}", current_user)
+            reply_server.log_with_user('info', f"新增个人黑名单: created={created}, skipped={skipped}", current_user)
             return {
                 'success': True,
                 'message': message,
@@ -2515,41 +2533,41 @@ def create_admin_ops_router(ctx) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            ctx.log_with_user('error', f"新增个人黑名单失败: {ctx.mask_sensitive_text(e)}", current_user)
+            reply_server.log_with_user('error', f"新增个人黑名单失败: {reply_server.mask_sensitive_text(e)}", current_user)
             raise HTTPException(status_code=500, detail='新增个人黑名单失败')
 
     @router.post('/api/blacklist/personal/batch-delete')
     def batch_delete_personal_blacklist(
-        request: ctx.PersonalBlacklistBatchDeleteRequest,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        request: PersonalBlacklistBatchDeleteRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         try:
-            deleted = ctx.blacklist_service.batch_delete_personal(request.ids, current_user['user_id'])
+            deleted = blacklist_service.batch_delete_personal(request.ids, current_user['user_id'])
             return {'success': True, 'message': f'成功删除 {deleted} 条黑名单', 'data': {'deleted': deleted}}
         except Exception as e:
-            ctx.log_with_user('error', f"批量删除个人黑名单失败: {ctx.mask_sensitive_text(e)}", current_user)
+            reply_server.log_with_user('error', f"批量删除个人黑名单失败: {reply_server.mask_sensitive_text(e)}", current_user)
             raise HTTPException(status_code=500, detail='批量删除个人黑名单失败')
 
     @router.delete('/api/blacklist/personal/{record_id}')
     def delete_personal_blacklist(
         record_id: int,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         try:
-            success = ctx.blacklist_service.delete_personal(record_id, current_user['user_id'])
+            success = blacklist_service.delete_personal(record_id, current_user['user_id'])
             if not success:
                 raise HTTPException(status_code=404, detail='黑名单记录不存在')
             return {'success': True, 'message': '删除成功'}
         except HTTPException:
             raise
         except Exception as e:
-            ctx.log_with_user('error', f"删除个人黑名单失败: {ctx.mask_sensitive_text(e)}", current_user)
+            reply_server.log_with_user('error', f"删除个人黑名单失败: {reply_server.mask_sensitive_text(e)}", current_user)
             raise HTTPException(status_code=500, detail='删除个人黑名单失败')
 
     @router.get('/api/blacklist/personal/export')
-    def export_personal_blacklist(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def export_personal_blacklist(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         try:
-            content = ctx.blacklist_service.export_personal_xlsx(current_user['user_id'])
+            content = blacklist_service.export_personal_xlsx(current_user['user_id'])
             filename = f"personal_blacklist_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             headers = {'Content-Disposition': f'attachment; filename="{filename}"'}
             return Response(
@@ -2558,20 +2576,20 @@ def create_admin_ops_router(ctx) -> APIRouter:
                 headers=headers,
             )
         except Exception as e:
-            ctx.log_with_user('error', f"导出个人黑名单失败: {ctx.mask_sensitive_text(e)}", current_user)
+            reply_server.log_with_user('error', f"导出个人黑名单失败: {reply_server.mask_sensitive_text(e)}", current_user)
             raise HTTPException(status_code=500, detail='导出个人黑名单失败')
 
     @router.post('/api/blacklist/personal/import')
     async def import_personal_blacklist(
         file: UploadFile = File(...),
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         try:
             filename = file.filename or ''
             if not filename.lower().endswith('.xlsx'):
                 raise HTTPException(status_code=400, detail='仅支持 .xlsx 文件')
             content = await file.read()
-            result = ctx.blacklist_service.import_personal_xlsx(current_user['user_id'], content)
+            result = blacklist_service.import_personal_xlsx(current_user['user_id'], content)
             return {
                 'success': True,
                 'message': f"导入完成：新增 {result.get('created', 0)} 条，跳过 {result.get('skipped', 0)} 条",
@@ -2582,28 +2600,28 @@ def create_admin_ops_router(ctx) -> APIRouter:
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
-            ctx.log_with_user('error', f"导入个人黑名单失败: {ctx.mask_sensitive_text(e)}", current_user)
+            reply_server.log_with_user('error', f"导入个人黑名单失败: {reply_server.mask_sensitive_text(e)}", current_user)
             raise HTTPException(status_code=500, detail='导入个人黑名单失败')
 
     @router.get('/api/blacklist/platform')
     def get_platform_blacklist(
         page: int = 1,
         page_size: int = 20,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         try:
-            result = ctx.blacklist_service.list_platform(current_user['user_id'], page=page, page_size=page_size)
+            result = blacklist_service.list_platform(current_user['user_id'], page=page, page_size=page_size)
             return {'success': True, **result}
         except Exception as e:
-            ctx.log_with_user('error', f"查询平台黑名单失败: {ctx.mask_sensitive_text(e)}", current_user)
+            reply_server.log_with_user('error', f"查询平台黑名单失败: {reply_server.mask_sensitive_text(e)}", current_user)
             raise HTTPException(status_code=500, detail='查询平台黑名单失败')
 
     @router.get("/api/announcement")
-    def get_dashboard_announcement(current_user: Dict[str, Any] = Depends(ctx.get_current_user)):
+    def get_dashboard_announcement(current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """获取仪表盘公告，优先读取 GitHub 公告文件，本地文件兜底。"""
         try:
             _ = current_user['user_id']
-            snapshot = ctx._get_dashboard_announcement_payload()
+            snapshot = reply_server._get_dashboard_announcement_payload()
             return {
                 'success': True,
                 'announcement': snapshot.get('current'),
@@ -2613,44 +2631,44 @@ def create_admin_ops_router(ctx) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"获取仪表盘公告失败: {ctx.mask_sensitive_text(e)}")
+            logger.error(f"获取仪表盘公告失败: {reply_server.mask_sensitive_text(e)}")
             return {
                 'success': False,
                 'announcement': None,
                 'current': None,
                 'history': [],
-                'message': ctx.safe_client_error("获取公告失败，请稍后重试"),
+                'message': reply_server.safe_client_error("获取公告失败，请稍后重试"),
             }
     @router.patch('/api/blacklist/personal/{record_id}/toggle')
     def toggle_personal_blacklist(
         record_id: int,
-        request: ctx.PersonalBlacklistToggleRequest,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        request: PersonalBlacklistToggleRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         try:
-            success = ctx.blacklist_service.toggle_personal(record_id, current_user['user_id'], request.is_enabled)
+            success = blacklist_service.toggle_personal(record_id, current_user['user_id'], request.is_enabled)
             if not success:
                 raise HTTPException(status_code=404, detail='黑名单记录不存在')
             return {'success': True, 'message': '状态已更新'}
         except HTTPException:
             raise
         except Exception as e:
-            ctx.log_with_user('error', f"更新个人黑名单状态失败: {ctx.mask_sensitive_text(e)}", current_user)
+            reply_server.log_with_user('error', f"更新个人黑名单状态失败: {reply_server.mask_sensitive_text(e)}", current_user)
             raise HTTPException(status_code=500, detail='更新个人黑名单状态失败')
     @router.patch('/api/blacklist/personal/{record_id}/toggle')
     def toggle_personal_blacklist(
         record_id: int,
-        request: ctx.PersonalBlacklistToggleRequest,
-        current_user: Dict[str, Any] = Depends(ctx.get_current_user),
+        request: PersonalBlacklistToggleRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
     ):
         try:
-            success = ctx.blacklist_service.toggle_personal(record_id, current_user['user_id'], request.is_enabled)
+            success = blacklist_service.toggle_personal(record_id, current_user['user_id'], request.is_enabled)
             if not success:
                 raise HTTPException(status_code=404, detail='黑名单记录不存在')
             return {'success': True, 'message': '状态已更新'}
         except HTTPException:
             raise
         except Exception as e:
-            ctx.log_with_user('error', f"更新个人黑名单状态失败: {ctx.mask_sensitive_text(e)}", current_user)
+            reply_server.log_with_user('error', f"更新个人黑名单状态失败: {reply_server.mask_sensitive_text(e)}", current_user)
             raise HTTPException(status_code=500, detail='更新个人黑名单状态失败')
     return router

@@ -8,6 +8,7 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 import reply_server
+import order_event_hub
 
 
 def _primary_user_id(db) -> int:
@@ -115,7 +116,7 @@ def test_order_recover_fetches_detail_and_auto_delivers(_db):
     fake_manager.get_xianyu_instance.return_value = fake_instance
 
     with mock.patch.object(reply_server.cookie_manager, "manager", fake_manager), \
-         mock.patch("reply_server.publish_order_update_event") as publish_mock:
+         mock.patch("order_event_hub.publish_order_update_event") as publish_mock:
         resp = client.post(
             "/api/orders/recover",
             headers=_auth_headers(user_id),

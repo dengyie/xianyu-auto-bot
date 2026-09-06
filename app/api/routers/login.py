@@ -1,7 +1,7 @@
 """Login / register / captcha / login-security routes (Strangler Fig P1).
 
 Mechanically extracted from reply_server.py at main@0aa4100; behavior-preserving.
-External (reply_server) symbols resolve via ctx at request time - see app/api/state.py.
+Shared models/helpers/state live in app/api/models.py, app/api/common.py and app/api/state.py; reply_server-resident symbols are accessed late-bound (reply_server.X) so runtime rebinds stay visible.
 """
 
 from typing import Any, Dict, List, Optional, Tuple, Callable, Awaitable
@@ -31,7 +31,14 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
 from pydantic import BaseModel
 
-from app.api.state import ctx  # noqa: F401  (module-level helpers; factory param shadows with same singleton)
+from app.api.common import (
+    CAPTCHA_EXPIRE_SECONDS,
+)
+from app.api import state
+import db_manager
+import reply_server  # noqa: F401  (late-bound seam: runtime rebinds stay visible)
+from utils.client_ip import get_client_ip
+
 
 
 # 防暴力破解/验证码状态容器留在 reply_server（tests 直接操作 reply_server.login_ip_tracker 等）
@@ -44,22 +51,22 @@ def cleanup_login_trackers():
     
     # 清理IP追踪记录
     expired_ips = []
-    for ip, data in ctx.login_ip_tracker.items():
+    for ip, data in state.login_ip_tracker.items():
         # 如果封禁已过期且超出窗口时间，则清理
         if data.get('blocked_until', 0) < current_time:
-            if current_time - data.get('last_attempt', 0) > ctx.BRUTE_FORCE_CONFIG['ip_window_seconds'] * 2:
+            if current_time - data.get('last_attempt', 0) > state.BRUTE_FORCE_CONFIG['ip_window_seconds'] * 2:
                 expired_ips.append(ip)
     for ip in expired_ips:
-        del ctx.login_ip_tracker[ip]
+        del state.login_ip_tracker[ip]
     
     # 清理用户名追踪记录
     expired_users = []
-    for username, data in ctx.login_user_tracker.items():
+    for username, data in state.login_user_tracker.items():
         if data.get('locked_until', 0) < current_time:
-            if current_time - data.get('last_attempt', 0) > ctx.BRUTE_FORCE_CONFIG['user_window_seconds'] * 2:
+            if current_time - data.get('last_attempt', 0) > state.BRUTE_FORCE_CONFIG['user_window_seconds'] * 2:
                 expired_users.append(username)
     for username in expired_users:
-        del ctx.login_user_tracker[username]
+        del state.login_user_tracker[username]
 
 
 def check_ip_blocked(client_ip: str) -> tuple[bool, str, int]:
@@ -68,13 +75,13 @@ def check_ip_blocked(client_ip: str) -> tuple[bool, str, int]:
     返回: (是否封禁, 原因, 剩余封禁秒数)
     """
     # 检查永久黑名单
-    if client_ip in ctx.ip_blacklist:
+    if client_ip in state.ip_blacklist:
         return True, "IP已被永久封禁", -1
     
     current_time = time.time()
     
-    if client_ip in ctx.login_ip_tracker:
-        data = ctx.login_ip_tracker[client_ip]
+    if client_ip in state.login_ip_tracker:
+        data = state.login_ip_tracker[client_ip]
         
         # 检查是否在封禁期内
         if data.get('blocked_until', 0) > current_time:
@@ -82,10 +89,10 @@ def check_ip_blocked(client_ip: str) -> tuple[bool, str, int]:
             return True, f"IP登录失败次数过多，请{remaining}秒后再试", remaining
         
         # 检查窗口内的失败次数
-        if current_time - data.get('first_attempt', 0) <= ctx.BRUTE_FORCE_CONFIG['ip_window_seconds']:
-            if data.get('attempts', 0) >= ctx.BRUTE_FORCE_CONFIG['ip_max_attempts']:
+        if current_time - data.get('first_attempt', 0) <= state.BRUTE_FORCE_CONFIG['ip_window_seconds']:
+            if data.get('attempts', 0) >= state.BRUTE_FORCE_CONFIG['ip_max_attempts']:
                 # 触发封禁
-                block_duration = ctx.BRUTE_FORCE_CONFIG['ip_block_seconds']
+                block_duration = state.BRUTE_FORCE_CONFIG['ip_block_seconds']
                 data['blocked_until'] = current_time + block_duration
                 logger.warning(f"🚫 IP {client_ip} 登录失败{data['attempts']}次，封禁{block_duration}秒")
                 return True, f"登录失败次数过多，请{block_duration}秒后再试", block_duration
@@ -100,8 +107,8 @@ def check_user_locked(username: str) -> tuple[bool, str, int]:
     """
     current_time = time.time()
     
-    if username in ctx.login_user_tracker:
-        data = ctx.login_user_tracker[username]
+    if username in state.login_user_tracker:
+        data = state.login_user_tracker[username]
         
         # 检查是否在锁定期内
         if data.get('locked_until', 0) > current_time:
@@ -109,10 +116,10 @@ def check_user_locked(username: str) -> tuple[bool, str, int]:
             return True, f"账户已被临时锁定，请{remaining}秒后再试", remaining
         
         # 检查窗口内的失败次数
-        if current_time - data.get('first_attempt', 0) <= ctx.BRUTE_FORCE_CONFIG['user_window_seconds']:
-            if data.get('attempts', 0) >= ctx.BRUTE_FORCE_CONFIG['user_max_attempts']:
+        if current_time - data.get('first_attempt', 0) <= state.BRUTE_FORCE_CONFIG['user_window_seconds']:
+            if data.get('attempts', 0) >= state.BRUTE_FORCE_CONFIG['user_max_attempts']:
                 # 触发锁定
-                lock_duration = ctx.BRUTE_FORCE_CONFIG['user_lock_seconds']
+                lock_duration = state.BRUTE_FORCE_CONFIG['user_lock_seconds']
                 data['locked_until'] = current_time + lock_duration
                 logger.warning(f"🔒 用户 {username} 登录失败{data['attempts']}次，锁定{lock_duration}秒")
                 return True, f"账户登录失败次数过多，已被临时锁定，请{lock_duration}秒后再试", lock_duration
@@ -125,18 +132,18 @@ def record_login_failure(client_ip: str, username: str):
     current_time = time.time()
     
     # 更新IP记录
-    if client_ip not in ctx.login_ip_tracker:
-        ctx.login_ip_tracker[client_ip] = {
+    if client_ip not in state.login_ip_tracker:
+        state.login_ip_tracker[client_ip] = {
             'attempts': 0,
             'first_attempt': current_time,
             'last_attempt': current_time,
             'blocked_until': 0
         }
     
-    ip_data = ctx.login_ip_tracker[client_ip]
+    ip_data = state.login_ip_tracker[client_ip]
     
     # 如果超出窗口时间，重置计数
-    if current_time - ip_data['first_attempt'] > ctx.BRUTE_FORCE_CONFIG['ip_window_seconds']:
+    if current_time - ip_data['first_attempt'] > state.BRUTE_FORCE_CONFIG['ip_window_seconds']:
         ip_data['attempts'] = 0
         ip_data['first_attempt'] = current_time
     
@@ -144,24 +151,24 @@ def record_login_failure(client_ip: str, username: str):
     ip_data['last_attempt'] = current_time
     
     # 检查是否需要加入永久黑名单
-    if ip_data['attempts'] >= ctx.BRUTE_FORCE_CONFIG['auto_blacklist_threshold']:
-        ctx.ip_blacklist.add(client_ip)
+    if ip_data['attempts'] >= state.BRUTE_FORCE_CONFIG['auto_blacklist_threshold']:
+        state.ip_blacklist.add(client_ip)
         logger.error(f"⛔ IP {client_ip} 登录失败{ip_data['attempts']}次，已加入永久黑名单！")
     
     # 更新用户名记录
     if username:
-        if username not in ctx.login_user_tracker:
-            ctx.login_user_tracker[username] = {
+        if username not in state.login_user_tracker:
+            state.login_user_tracker[username] = {
                 'attempts': 0,
                 'first_attempt': current_time,
                 'last_attempt': current_time,
                 'locked_until': 0
             }
         
-        user_data = ctx.login_user_tracker[username]
+        user_data = state.login_user_tracker[username]
         
         # 如果超出窗口时间，重置计数
-        if current_time - user_data['first_attempt'] > ctx.BRUTE_FORCE_CONFIG['user_window_seconds']:
+        if current_time - user_data['first_attempt'] > state.BRUTE_FORCE_CONFIG['user_window_seconds']:
             user_data['attempts'] = 0
             user_data['first_attempt'] = current_time
         
@@ -171,21 +178,21 @@ def record_login_failure(client_ip: str, username: str):
 
 def record_login_success(client_ip: str, username: str):
     """记录登录成功，重置计数"""
-    if client_ip in ctx.login_ip_tracker:
-        ctx.login_ip_tracker[client_ip]['attempts'] = 0
-    if username and username in ctx.login_user_tracker:
-        ctx.login_user_tracker[username]['attempts'] = 0
+    if client_ip in state.login_ip_tracker:
+        state.login_ip_tracker[client_ip]['attempts'] = 0
+    if username and username in state.login_user_tracker:
+        state.login_user_tracker[username]['attempts'] = 0
 
 
 def check_username_rate_limit(username: str):
     if not username:
         return False, 0
     current_time = time.time()
-    window = ctx.BRUTE_FORCE_CONFIG.get('username_rate_window', 60)
-    max_attempts = ctx.BRUTE_FORCE_CONFIG.get('username_rate_per_minute', 5)
-    if username not in ctx.username_rate_tracker:
-        ctx.username_rate_tracker[username] = []
-    timestamps = ctx.username_rate_tracker[username]
+    window = state.BRUTE_FORCE_CONFIG.get('username_rate_window', 60)
+    max_attempts = state.BRUTE_FORCE_CONFIG.get('username_rate_per_minute', 5)
+    if username not in state.username_rate_tracker:
+        state.username_rate_tracker[username] = []
+    timestamps = state.username_rate_tracker[username]
     timestamps[:] = [t for t in timestamps if current_time - t < window]
     if len(timestamps) >= max_attempts:
         remaining = int(window - (current_time - timestamps[0]))
@@ -196,33 +203,33 @@ def check_username_rate_limit(username: str):
 def record_username_rate(username: str):
     if not username:
         return
-    if username not in ctx.username_rate_tracker:
-        ctx.username_rate_tracker[username] = []
-    ctx.username_rate_tracker[username].append(time.time())
+    if username not in state.username_rate_tracker:
+        state.username_rate_tracker[username] = []
+    state.username_rate_tracker[username].append(time.time())
 
 
 def get_response_delay(client_ip: str) -> float:
     """计算响应延迟时间（失败次数越多，延迟越长）"""
-    if client_ip not in ctx.login_ip_tracker:
+    if client_ip not in state.login_ip_tracker:
         return 0
     
-    attempts = ctx.login_ip_tracker[client_ip].get('attempts', 0)
+    attempts = state.login_ip_tracker[client_ip].get('attempts', 0)
     if attempts <= 1:
         return 0
     
-    delay = ctx.BRUTE_FORCE_CONFIG['response_delay_base'] + \
-            (attempts - 1) * ctx.BRUTE_FORCE_CONFIG['response_delay_multiplier']
-    return min(delay, ctx.BRUTE_FORCE_CONFIG['max_response_delay'])
+    delay = state.BRUTE_FORCE_CONFIG['response_delay_base'] + \
+            (attempts - 1) * state.BRUTE_FORCE_CONFIG['response_delay_multiplier']
+    return min(delay, state.BRUTE_FORCE_CONFIG['max_response_delay'])
 
 
 def is_captcha_required(client_ip: str, user_agent: str = "") -> bool:
     """检查是否需要验证码(Codex豁免)"""
-    if ctx.is_codex_browser(user_agent):
+    if reply_server.is_codex_browser(user_agent):
         return False
-    if client_ip not in ctx.login_ip_tracker:
+    if client_ip not in state.login_ip_tracker:
         return False
-    attempts = ctx.login_ip_tracker[client_ip].get('attempts', 0)
-    return attempts >= ctx.BRUTE_FORCE_CONFIG.get('captcha_require_failures', 2)
+    attempts = state.login_ip_tracker[client_ip].get('attempts', 0)
+    return attempts >= state.BRUTE_FORCE_CONFIG.get('captcha_require_failures', 2)
 
 
 def generate_captcha_image(code: str) -> bytes:
@@ -321,10 +328,10 @@ def generate_captcha_code(length: int = 4) -> str:
 def cleanup_expired_captchas():
     """清理过期的验证码"""
     current_time = time.time()
-    expired = [cid for cid, data in ctx.captcha_storage.items() 
-               if current_time - data['created_at'] > ctx.CAPTCHA_EXPIRE_SECONDS]
+    expired = [cid for cid, data in state.captcha_storage.items() 
+               if current_time - data['created_at'] > CAPTCHA_EXPIRE_SECONDS]
     for cid in expired:
-        del ctx.captcha_storage[cid]
+        del state.captcha_storage[cid]
 
 
 def verify_login_captcha(captcha_id: str, captcha_code: str, client_ip: str) -> tuple[bool, str]:
@@ -335,14 +342,14 @@ def verify_login_captcha(captcha_id: str, captcha_code: str, client_ip: str) -> 
     if not captcha_id or not captcha_code:
         return False, "请输入验证码"
     
-    if captcha_id not in ctx.captcha_storage:
+    if captcha_id not in state.captcha_storage:
         return False, "验证码已过期，请刷新"
     
-    captcha_data = ctx.captcha_storage[captcha_id]
+    captcha_data = state.captcha_storage[captcha_id]
     
     # 检查是否过期
-    if time.time() - captcha_data['created_at'] > ctx.CAPTCHA_EXPIRE_SECONDS:
-        del ctx.captcha_storage[captcha_id]
+    if time.time() - captcha_data['created_at'] > CAPTCHA_EXPIRE_SECONDS:
+        del state.captcha_storage[captcha_id]
         return False, "验证码已过期，请刷新"
     
     # 检查IP是否匹配（防止验证码被其他IP使用）
@@ -354,15 +361,15 @@ def verify_login_captcha(captcha_id: str, captcha_code: str, client_ip: str) -> 
         return False, "验证码错误"
     
     # 验证成功后删除验证码（一次性使用）
-    del ctx.captcha_storage[captcha_id]
+    del state.captcha_storage[captcha_id]
     return True, ""
 
 
 def get_ip_failure_count(client_ip: str) -> int:
     """获取IP的登录失败次数"""
-    if client_ip not in ctx.login_ip_tracker:
+    if client_ip not in state.login_ip_tracker:
         return 0
-    return ctx.login_ip_tracker[client_ip].get('attempts', 0)
+    return state.login_ip_tracker[client_ip].get('attempts', 0)
 
 
 # ========================= request/response models =========================
@@ -435,14 +442,14 @@ class VerifyCaptchaResponse(BaseModel):
 
 
 
-def create_login_router(ctx, session_service, security, verify_dependency, admin_username) -> APIRouter:
+def create_login_router(session_service, security, verify_dependency, admin_username) -> APIRouter:
     """Factory keeps the established create_auth_router dependency style."""
     router = APIRouter()
     @router.get('/captcha/generate')
     async def generate_captcha(request: Request):
         """生成验证码图片"""
         # 获取客户端IP
-        client_ip = ctx.get_client_ip(request)
+        client_ip = get_client_ip(request)
     
         # 清理过期验证码
         cleanup_expired_captchas()
@@ -452,7 +459,7 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
         captcha_id = secrets.token_urlsafe(16)
     
         # 存储验证码
-        ctx.captcha_storage[captcha_id] = {
+        state.captcha_storage[captcha_id] = {
             'code': code,
             'created_at': time.time(),
             'ip': client_ip
@@ -481,25 +488,25 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
         return {
             'required': required,
             'failure_count': failure_count,
-            'threshold': ctx.BRUTE_FORCE_CONFIG.get('captcha_require_failures', 2)
+            'threshold': state.BRUTE_FORCE_CONFIG.get('captcha_require_failures', 2)
         }
 
     @router.get("/captcha/check-required")
     async def check_captcha_required(request: Request):
-        client_ip = ctx.get_client_ip(request)
+        client_ip = get_client_ip(request)
         user_agent = request.headers.get("User-Agent", "")
         required = is_captcha_required(client_ip, user_agent)
         failure_count = get_ip_failure_count(client_ip)
         return {
             "required": required,
-            "codex_browser": ctx.is_codex_browser(user_agent),
+            "codex_browser": reply_server.is_codex_browser(user_agent),
             "failure_count": failure_count,
-            "threshold": ctx.BRUTE_FORCE_CONFIG.get("captcha_require_failures", 2)
+            "threshold": state.BRUTE_FORCE_CONFIG.get("captcha_require_failures", 2)
         }
 
     @router.get('/login.html', response_class=HTMLResponse)
     async def login_page():
-        login_path = os.path.join(ctx.static_dir, 'login.html')
+        login_path = os.path.join(state.STATIC_DIR, 'login.html')
         if os.path.exists(login_path):
             with open(login_path, 'r', encoding='utf-8') as f:
                 return HTMLResponse(f.read())
@@ -509,8 +516,7 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
     @router.get('/register.html', response_class=HTMLResponse)
     async def register_page():
         # 检查注册是否开启
-        from db_manager import db_manager
-        registration_enabled = ctx.db_manager.get_system_setting('registration_enabled')
+        registration_enabled = db_manager.db_manager.get_system_setting('registration_enabled')
         if registration_enabled != 'true':
             return HTMLResponse('''
             <!DOCTYPE html>
@@ -535,7 +541,7 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
             </html>
             ''', status_code=403)
 
-        register_path = os.path.join(ctx.static_dir, 'register.html')
+        register_path = os.path.join(state.STATIC_DIR, 'register.html')
         if os.path.exists(register_path):
             with open(register_path, 'r', encoding='utf-8') as f:
                 return HTMLResponse(f.read())
@@ -544,10 +550,9 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
 
     @router.post('/login')
     async def login(login_request: LoginRequest, request: Request):
-        from db_manager import db_manager
     
         # 获取客户端IP（考虑代理）
-        client_ip = ctx.get_client_ip(request)
+        client_ip = get_client_ip(request)
     
         # 定期清理过期记录
         cleanup_login_trackers()
@@ -590,12 +595,12 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
             record_username_rate(login_identifier)
     
         # 检查是否需要验证码
-        captcha_enabled_str = ctx.db_manager.get_system_setting('login_captcha_enabled')
+        captcha_enabled_str = db_manager.db_manager.get_system_setting('login_captcha_enabled')
         captcha_enabled = captcha_enabled_str == 'true' if captcha_enabled_str is not None else True
 
         if captcha_enabled:
             user_agent = request.headers.get("User-Agent", "")
-            if ctx.is_codex_browser(user_agent):
+            if reply_server.is_codex_browser(user_agent):
                 logger.info("Codex browser, skip captcha")
             else:
                 captcha_valid, captcha_error = verify_login_captcha(
@@ -604,7 +609,7 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
                     client_ip
                 )
                 if not captcha_valid:
-                    ctx.audit_event(
+                    reply_server.audit_event(
                         category="auth",
                         action="login",
                         status="failed",
@@ -634,8 +639,8 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
             logger.info(f"【{login_request.username}】尝试用户名登录 (IP: {client_ip})")
 
             # 统一使用用户表验证（包括admin用户）
-            if ctx.db_manager.verify_user_password(login_request.username, login_request.password):
-                user = ctx.db_manager.get_user_by_username(login_request.username)
+            if db_manager.db_manager.verify_user_password(login_request.username, login_request.password):
+                user = db_manager.db_manager.get_user_by_username(login_request.username)
                 if user:
                     # 登录成功，重置计数
                     record_login_success(client_ip, login_request.username)
@@ -643,8 +648,8 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
                     # 获取is_admin状态
                     user_is_admin = user.get('is_admin', False)
 
-                    token = ctx.session_service.issue(user)
-                    ctx.audit_event(
+                    token = state.session_service.issue(user)
+                    reply_server.audit_event(
                         category="auth",
                         action="login",
                         status="success",
@@ -683,7 +688,7 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
             logger.warning(f"【{login_request.username}】登录失败：用户名或密码错误 (IP: {client_ip})")
             # 检查下次是否需要验证码
             next_captcha_required = is_captcha_required(client_ip)
-            ctx.audit_event(
+            reply_server.audit_event(
                 category="auth",
                 action="login",
                 status="failed",
@@ -706,15 +711,15 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
             # 邮箱/密码登录
             logger.info(f"【{login_request.email}】尝试邮箱密码登录 (IP: {client_ip})")
 
-            user = ctx.db_manager.get_user_by_email(login_request.email)
-            if user and ctx.db_manager.verify_user_password(user['username'], login_request.password):
+            user = db_manager.db_manager.get_user_by_email(login_request.email)
+            if user and db_manager.db_manager.verify_user_password(user['username'], login_request.password):
                 # 登录成功，重置计数
                 record_login_success(client_ip, login_request.email)
 
                 # 获取is_admin状态
                 user_is_admin = user.get('is_admin', False)
 
-                token = ctx.session_service.issue(user)
+                token = state.session_service.issue(user)
 
                 if user_is_admin:
                     logger.info(f"【{user['username']}#{user['id']}】邮箱登录成功（管理员）(IP: {client_ip})")
@@ -751,7 +756,7 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
             logger.info(f"【{login_request.email}】尝试邮箱验证码登录 (IP: {client_ip})")
 
             # 验证邮箱验证码
-            if not ctx.db_manager.verify_email_code(login_request.email, login_request.verification_code, 'login'):
+            if not db_manager.db_manager.verify_email_code(login_request.email, login_request.verification_code, 'login'):
                 # 验证码错误也记录失败
                 record_login_failure(client_ip, login_request.email)
                 delay = get_response_delay(client_ip)
@@ -767,7 +772,7 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
                 )
 
             # 获取用户信息
-            user = ctx.db_manager.get_user_by_email(login_request.email)
+            user = db_manager.db_manager.get_user_by_email(login_request.email)
             if not user:
                 logger.warning(f"【{login_request.email}】验证码登录失败：用户不存在 (IP: {client_ip})")
                 return LoginResponse(
@@ -781,7 +786,7 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
             # 获取is_admin状态
             user_is_admin = user.get('is_admin', False)
 
-            token = ctx.session_service.issue(user)
+            token = state.session_service.issue(user)
 
             if user_is_admin:
                 logger.info(f"【{user['username']}#{user['id']}】验证码登录成功（管理员）(IP: {client_ip})")
@@ -804,13 +809,13 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
             )
 
     @router.get('/admin/security/login-stats')
-    async def get_login_security_stats(admin_user: Dict[str, Any] = Depends(ctx.verify_admin_token)):
+    async def get_login_security_stats(admin_user: Dict[str, Any] = Depends(reply_server.verify_admin_token)):
         """获取登录安全统计信息（仅管理员）"""
         current_time = time.time()
     
         # 统计IP封禁信息
         blocked_ips = []
-        for ip, data in ctx.login_ip_tracker.items():
+        for ip, data in state.login_ip_tracker.items():
             if data.get('blocked_until', 0) > current_time:
                 blocked_ips.append({
                     'ip': ip,
@@ -821,7 +826,7 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
     
         # 统计用户锁定信息
         locked_users = []
-        for username, data in ctx.login_user_tracker.items():
+        for username, data in state.login_user_tracker.items():
             if data.get('locked_until', 0) > current_time:
                 locked_users.append({
                     'username': username,
@@ -832,7 +837,7 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
     
         # 最近失败的IP
         recent_failed_ips = []
-        for ip, data in ctx.login_ip_tracker.items():
+        for ip, data in state.login_ip_tracker.items():
             if data.get('attempts', 0) > 0:
                 recent_failed_ips.append({
                     'ip': ip,
@@ -848,28 +853,28 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
                 'blocked_ip_count': len(blocked_ips),
                 'locked_users': locked_users,
                 'locked_user_count': len(locked_users),
-                'blacklisted_ips': list(ctx.ip_blacklist),
-                'blacklist_count': len(ctx.ip_blacklist),
+                'blacklisted_ips': list(state.ip_blacklist),
+                'blacklist_count': len(state.ip_blacklist),
                 'recent_failed_ips': recent_failed_ips[:20],  # 最近20个
-                'config': ctx.BRUTE_FORCE_CONFIG
+                'config': state.BRUTE_FORCE_CONFIG
             }
         }
 
     @router.post('/admin/security/unblock-ip/{ip}')
-    async def unblock_ip(ip: str, admin_user: Dict[str, Any] = Depends(ctx.verify_admin_token)):
+    async def unblock_ip(ip: str, admin_user: Dict[str, Any] = Depends(reply_server.verify_admin_token)):
         """解除IP封禁（仅管理员）"""
         unblocked = False
     
         # 从临时封禁中移除
-        if ip in ctx.login_ip_tracker:
-            ctx.login_ip_tracker[ip]['blocked_until'] = 0
-            ctx.login_ip_tracker[ip]['attempts'] = 0
+        if ip in state.login_ip_tracker:
+            state.login_ip_tracker[ip]['blocked_until'] = 0
+            state.login_ip_tracker[ip]['attempts'] = 0
             unblocked = True
             logger.info(f"🔓 管理员 {admin_user['username']} 解除了IP {ip} 的临时封禁")
     
         # 从永久黑名单中移除
-        if ip in ctx.ip_blacklist:
-            ctx.ip_blacklist.discard(ip)
+        if ip in state.ip_blacklist:
+            state.ip_blacklist.discard(ip)
             unblocked = True
             logger.info(f"🔓 管理员 {admin_user['username']} 将IP {ip} 从永久黑名单中移除")
     
@@ -879,54 +884,53 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
             return {'success': False, 'message': f'IP {ip} 未在封禁列表中'}
 
     @router.post('/admin/security/unlock-user/{username}')
-    async def unlock_user(username: str, admin_user: Dict[str, Any] = Depends(ctx.verify_admin_token)):
+    async def unlock_user(username: str, admin_user: Dict[str, Any] = Depends(reply_server.verify_admin_token)):
         """解除用户锁定（仅管理员）"""
-        if username in ctx.login_user_tracker:
-            ctx.login_user_tracker[username]['locked_until'] = 0
-            ctx.login_user_tracker[username]['attempts'] = 0
+        if username in state.login_user_tracker:
+            state.login_user_tracker[username]['locked_until'] = 0
+            state.login_user_tracker[username]['attempts'] = 0
             logger.info(f"🔓 管理员 {admin_user['username']} 解除了用户 {username} 的锁定")
             return {'success': True, 'message': f'用户 {username} 已解除锁定'}
         else:
             return {'success': False, 'message': f'用户 {username} 未在锁定列表中'}
 
     @router.post('/admin/security/blacklist-ip/{ip}')
-    async def add_ip_to_blacklist(ip: str, admin_user: Dict[str, Any] = Depends(ctx.verify_admin_token)):
+    async def add_ip_to_blacklist(ip: str, admin_user: Dict[str, Any] = Depends(reply_server.verify_admin_token)):
         """将IP加入永久黑名单（仅管理员）"""
-        ctx.ip_blacklist.add(ip)
+        state.ip_blacklist.add(ip)
         logger.warning(f"⛔ 管理员 {admin_user['username']} 将IP {ip} 加入永久黑名单")
         return {'success': True, 'message': f'IP {ip} 已加入永久黑名单'}
 
     @router.post('/admin/security/update-config')
     async def update_brute_force_config(
         config: Dict[str, Any],
-        admin_user: Dict[str, Any] = Depends(ctx.verify_admin_token)
+        admin_user: Dict[str, Any] = Depends(reply_server.verify_admin_token)
     ):
         """更新防暴力破解配置（仅管理员）"""
-        valid_keys = set(ctx.BRUTE_FORCE_CONFIG.keys())
+        valid_keys = set(state.BRUTE_FORCE_CONFIG.keys())
         updated = []
     
         for key, value in config.items():
             if key in valid_keys and isinstance(value, (int, float)):
-                ctx.BRUTE_FORCE_CONFIG[key] = value
+                state.BRUTE_FORCE_CONFIG[key] = value
                 updated.append(key)
     
         if updated:
             logger.info(f"⚙️ 管理员 {admin_user['username']} 更新了防暴力破解配置: {updated}")
-            return {'success': True, 'message': f'已更新配置: {updated}', 'config': ctx.BRUTE_FORCE_CONFIG}
+            return {'success': True, 'message': f'已更新配置: {updated}', 'config': state.BRUTE_FORCE_CONFIG}
         else:
             return {'success': False, 'message': '没有有效的配置项被更新'}
 
     @router.post('/change-admin-password')
-    async def change_admin_password(request: ChangePasswordRequest, admin_user: Dict[str, Any] = Depends(ctx.verify_admin_token)):
-        from db_manager import db_manager
+    async def change_admin_password(request: ChangePasswordRequest, admin_user: Dict[str, Any] = Depends(reply_server.verify_admin_token)):
 
         try:
             # 验证当前密码（使用用户表验证）
-            if not ctx.db_manager.verify_user_password('admin', request.current_password):
+            if not db_manager.db_manager.verify_user_password('admin', request.current_password):
                 return {"success": False, "message": "当前密码错误"}
 
             # 更新密码（使用用户表更新）
-            success = ctx.db_manager.update_user_password('admin', request.new_password)
+            success = db_manager.db_manager.update_user_password('admin', request.new_password)
 
             if success:
                 logger.info(f"【admin#{admin_user['user_id']}】管理员密码修改成功")
@@ -940,11 +944,10 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
 
     @router.post('/generate-captcha')
     async def generate_captcha(request: CaptchaRequest):
-        from db_manager import db_manager
 
         try:
             # 生成图形验证码
-            captcha_text, captcha_image = ctx.db_manager.generate_captcha()
+            captcha_text, captcha_image = db_manager.db_manager.generate_captcha()
 
             if not captcha_image:
                 return CaptchaResponse(
@@ -955,7 +958,7 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
                 )
 
             # 保存验证码到数据库
-            if ctx.db_manager.save_captcha(request.session_id, captcha_text):
+            if db_manager.db_manager.save_captcha(request.session_id, captcha_text):
                 return CaptchaResponse(
                     success=True,
                     captcha_image=captcha_image,
@@ -981,10 +984,9 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
 
     @router.post('/verify-captcha')
     async def verify_captcha(request: VerifyCaptchaRequest):
-        from db_manager import db_manager
 
         try:
-            if ctx.db_manager.verify_captcha(request.session_id, request.captcha_code):
+            if db_manager.db_manager.verify_captcha(request.session_id, request.captcha_code):
                 return VerifyCaptchaResponse(
                     success=True,
                     message="图形验证码验证成功"
@@ -1004,13 +1006,12 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
 
     @router.post('/send-verification-code')
     async def send_verification_code(request: SendCodeRequest):
-        from db_manager import db_manager
 
         try:
             # 检查是否已验证图形验证码
             # 通过检查数据库中是否存在已验证的图形验证码记录
-            with ctx.db_manager.lock:
-                cursor = ctx.db_manager.conn.cursor()
+            with db_manager.db_manager.lock:
+                cursor = db_manager.db_manager.conn.cursor()
                 current_time = time.time()
 
                 # 查找最近5分钟内该session_id的验证记录
@@ -1024,7 +1025,7 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
             # 根据验证码类型进行不同的检查
             if request.type == 'register':
                 # 注册验证码：检查邮箱是否已注册
-                existing_user = ctx.db_manager.get_user_by_email(request.email)
+                existing_user = db_manager.db_manager.get_user_by_email(request.email)
                 if existing_user:
                     return SendCodeResponse(
                         success=False,
@@ -1032,7 +1033,7 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
                     )
             elif request.type == 'login':
                 # 登录验证码：检查邮箱是否存在
-                existing_user = ctx.db_manager.get_user_by_email(request.email)
+                existing_user = db_manager.db_manager.get_user_by_email(request.email)
                 if not existing_user:
                     return SendCodeResponse(
                         success=False,
@@ -1040,17 +1041,17 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
                     )
 
             # 生成验证码
-            code = ctx.db_manager.generate_verification_code()
+            code = db_manager.db_manager.generate_verification_code()
 
             # 保存验证码到数据库
-            if not ctx.db_manager.save_verification_code(request.email, code, request.type):
+            if not db_manager.db_manager.save_verification_code(request.email, code, request.type):
                 return SendCodeResponse(
                     success=False,
                     message="验证码保存失败，请稍后重试"
                 )
 
             # 发送验证码邮件
-            if await ctx.db_manager.send_verification_email(request.email, code):
+            if await db_manager.db_manager.send_verification_email(request.email, code):
                 return SendCodeResponse(
                     success=True,
                     message="验证码已发送到您的邮箱，请查收"
@@ -1070,10 +1071,9 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
 
     @router.post('/register')
     async def register(request: RegisterRequest):
-        from db_manager import db_manager
 
         # 检查注册是否开启
-        registration_enabled = ctx.db_manager.get_system_setting('registration_enabled')
+        registration_enabled = db_manager.db_manager.get_system_setting('registration_enabled')
         if registration_enabled != 'true':
             logger.warning(f"【{request.username}】注册失败: 注册功能已关闭")
             return RegisterResponse(
@@ -1085,7 +1085,7 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
             logger.info(f"【{request.username}】尝试注册，邮箱: {request.email}")
 
             # 验证邮箱验证码
-            if not ctx.db_manager.verify_email_code(request.email, request.verification_code):
+            if not db_manager.db_manager.verify_email_code(request.email, request.verification_code):
                 logger.warning(f"【{request.username}】注册失败: 验证码错误或已过期")
                 return RegisterResponse(
                     success=False,
@@ -1093,7 +1093,7 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
                 )
 
             # 检查用户名是否已存在
-            existing_user = ctx.db_manager.get_user_by_username(request.username)
+            existing_user = db_manager.db_manager.get_user_by_username(request.username)
             if existing_user:
                 logger.warning(f"【{request.username}】注册失败: 用户名已存在")
                 return RegisterResponse(
@@ -1102,7 +1102,7 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
                 )
 
             # 检查邮箱是否已注册
-            existing_email = ctx.db_manager.get_user_by_email(request.email)
+            existing_email = db_manager.db_manager.get_user_by_email(request.email)
             if existing_email:
                 logger.warning(f"【{request.username}】注册失败: 邮箱已被注册")
                 return RegisterResponse(
@@ -1111,7 +1111,7 @@ def create_login_router(ctx, session_service, security, verify_dependency, admin
                 )
 
             # 创建用户
-            if ctx.db_manager.create_user(request.username, request.email, request.password):
+            if db_manager.db_manager.create_user(request.username, request.email, request.password):
                 logger.info(f"【{request.username}】注册成功")
                 return RegisterResponse(
                     success=True,

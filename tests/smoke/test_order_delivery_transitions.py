@@ -1,6 +1,7 @@
 """Order delivery and refresh transition regressions."""
 
 import reply_server
+import order_event_hub
 
 
 _UNSET = object()
@@ -191,7 +192,7 @@ def test_manual_deliver_success_records_logs_and_progress(client, user_auth, moc
     )
     mocker.patch.object(reply_server.db_manager, "get_item_info", return_value={"item_title": "Demo item"})
     mocker.patch.object(reply_server.cookie_manager, "manager", _FakeCookieManager(runtime=_FakeRuntime()))
-    mocker.patch.object(reply_server, "publish_order_update_event")
+    mocker.patch.object(order_event_hub, "publish_order_update_event")
 
     resp = client.post("/api/orders/deliver-success/deliver", headers=user_auth)
 
@@ -239,7 +240,7 @@ def test_manual_deliver_marks_data_reservation_sent_after_success(client, user_a
         },
     )
     mocker.patch.object(reply_server.cookie_manager, "manager", _FakeCookieManager(runtime=runtime))
-    mocker.patch.object(reply_server, "publish_order_update_event")
+    mocker.patch.object(order_event_hub, "publish_order_update_event")
 
     resp = client.post("/api/orders/deliver-data-success/deliver", headers=user_auth)
 
@@ -288,7 +289,7 @@ def test_manual_deliver_releases_data_reservation_when_mark_sent_fails(client, u
         mark_sent_result=False,
     )
     mocker.patch.object(reply_server.cookie_manager, "manager", _FakeCookieManager(runtime=runtime))
-    mocker.patch.object(reply_server, "publish_order_update_event")
+    mocker.patch.object(order_event_hub, "publish_order_update_event")
 
     resp = client.post("/api/orders/deliver-data-mark-fail/deliver", headers=user_auth)
 
@@ -340,7 +341,7 @@ def test_manual_deliver_keeps_data_reservation_unit_pending_finalize_when_finali
         finalize_result={"success": False, "error": "finalize hook failed"},
     )
     mocker.patch.object(reply_server.cookie_manager, "manager", _FakeCookieManager(runtime=runtime))
-    mocker.patch.object(reply_server, "publish_order_update_event")
+    mocker.patch.object(order_event_hub, "publish_order_update_event")
 
     resp = client.post("/api/orders/deliver-data-finalize-fail/deliver", headers=user_auth)
 
@@ -408,7 +409,7 @@ def test_manual_deliver_retry_replays_pending_finalize_unit_without_resending(cl
         "cookie_id": "data_delivery_replay_cookie",
     }
     mocker.patch.object(reply_server.cookie_manager, "manager", _FakeCookieManager(runtime=runtime))
-    mocker.patch.object(reply_server, "publish_order_update_event")
+    mocker.patch.object(order_event_hub, "publish_order_update_event")
 
     resp = client.post("/api/orders/deliver-data-replay/deliver", headers=user_auth)
 
@@ -472,7 +473,7 @@ def test_manual_deliver_retry_returns_failure_when_pending_finalize_replay_fails
         "cookie_id": "data_delivery_replay_fail_cookie",
     }
     mocker.patch.object(reply_server.cookie_manager, "manager", _FakeCookieManager(runtime=runtime))
-    mocker.patch.object(reply_server, "publish_order_update_event")
+    mocker.patch.object(order_event_hub, "publish_order_update_event")
 
     resp = client.post("/api/orders/deliver-data-replay-fail/deliver", headers=user_auth)
 
@@ -536,7 +537,7 @@ def test_manual_deliver_retry_completes_pending_finalize_without_preparing_new_u
         "cookie_id": "data_delivery_replay_only_cookie",
     }
     mocker.patch.object(reply_server.cookie_manager, "manager", _FakeCookieManager(runtime=runtime))
-    mocker.patch.object(reply_server, "publish_order_update_event")
+    mocker.patch.object(order_event_hub, "publish_order_update_event")
 
     resp = client.post("/api/orders/deliver-data-replay-only/deliver", headers=user_auth)
 
