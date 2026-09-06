@@ -4,47 +4,15 @@ Mechanically extracted from reply_server.py; behavior-preserving.
 Shared models/helpers/state live in app/api/models.py, app/api/common.py and app/api/state.py; reply_server-resident symbols are accessed late-bound (reply_server.X) so runtime rebinds stay visible.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Callable, Awaitable
-from collections import defaultdict
-from datetime import datetime, timedelta
-import asyncio
-import base64
-import hashlib
-import io
-import json
-import os
-import random
-import re
-import secrets
-import time
-import urllib.parse
-from urllib.parse import unquote
-from urllib import request as urllib_request, error as urllib_error
-
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
-
-from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header,
-                     HTTPException, Request, Response, UploadFile, status)
-from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
-                               StreamingResponse)
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from typing import Any, Dict, Optional
+from datetime import timedelta
+from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
-from pydantic import BaseModel
-
-from app.api.models import (
-    LoginInfoSettingUpdate,
-    RegistrationSettingUpdate,
-    SystemSettingIn,
-)
-from app.api.common import (
-    NIGHT_MODE_SYSTEM_SETTING_KEYS,
-    ORDER_SALES_TIME_SQL,
-    _validate_system_setting_value,
-)
+from app.api.models import LoginInfoSettingUpdate, RegistrationSettingUpdate, SystemSettingIn
+from app.api.common import NIGHT_MODE_SYSTEM_SETTING_KEYS, ORDER_SALES_TIME_SQL, _validate_system_setting_value
 import db_manager
-import reply_server  # noqa: F401  (late-bound seam: runtime rebinds stay visible)
+import reply_server
 from utils.time_utils import get_local_now, local_date_to_utc_end_exclusive, local_date_to_utc_start
-
 
 def create_settings_router() -> APIRouter:
     router = APIRouter()

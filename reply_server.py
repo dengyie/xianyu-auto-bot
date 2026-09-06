@@ -1,65 +1,37 @@
-from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form, Request, Header, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, Request, Header
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import List, Tuple, Optional, Dict, Any, Callable, Awaitable
 from pathlib import Path
-import urllib.parse
-from urllib.parse import unquote
 from urllib import request as urllib_request, error as urllib_error
+import base64
 import hashlib
+import io
 import secrets
 import time
 import json
 import os
-import re
-import uuid
-import base64
 import inspect
-from datetime import datetime, timedelta
-import uvicorn
-import pandas as pd
-import io
+from datetime import datetime
 import asyncio
 import concurrent.futures
-import queue
 from collections import defaultdict
 from contextlib import asynccontextmanager, suppress
-
 import cookie_manager
 from db_manager import db_manager
 from config import RISK_CONTROL
-from file_log_collector import setup_file_logging, get_file_log_collector
+from file_log_collector import setup_file_logging
 from ai_reply_engine import ai_reply_engine
 from utils.qr_login import qr_login_manager
 from utils.qr_login_lite import qrcode_login_lite
 from utils.xianyu_utils import trans_cookies
-from utils.image_utils import image_manager
 from utils.audit_logger import record_audit_event, status_from_http_status_code
-from utils.blacklist_service import blacklist_service
 from utils.auto_rate_task import auto_rate_task_loop
-from utils.client_ip import get_client_ip
-from utils.time_utils import (
-    LOCAL_TIMEZONE,
-    get_local_now,
-    local_date_to_utc_end_exclusive,
-    local_date_to_utc_start,
-    parse_db_timestamp,
-    utc_timestamp_to_local_date_string,
-    utc_timestamp_to_local_datetime,
-)
-from utils.notification_dispatcher import (
-    build_face_verify_notification,
-    SUPPORTED_NOTIFICATION_TEMPLATE_TYPES,
-    dispatch_account_notifications_sync,
-    render_notification_template,
-    resolve_verification_type_label,
-)
-from chat_event_hub import chat_event_hub, publish_chat_message
-from order_event_hub import order_event_hub, publish_order_update_event
+from utils.time_utils import LOCAL_TIMEZONE, get_local_now, local_date_to_utc_end_exclusive, local_date_to_utc_start, utc_timestamp_to_local_date_string, utc_timestamp_to_local_datetime
+from utils.notification_dispatcher import build_face_verify_notification, dispatch_account_notifications_sync, render_notification_template, resolve_verification_type_label
 from app.api.routers.auth import create_auth_router
-from app.application.auth.sessions import SessionService
 from app.api.routers.cookies import create_cookies_router
 from app.api.routers.login import create_login_router
 from app.api.routers.settings import create_settings_router
@@ -69,157 +41,17 @@ from app.api.routers.accountlogin import create_account_login_router
 from app.api.routers.trading import create_trading_router
 from app.api.routers.adminops import create_admin_ops_router
 from app.api.routers.orderschat import create_orders_chat_router
-from app.api.common import (
-    SENSITIVE_ADMIN_DATA_FIELDS,
-    is_sales_eligible_order_status,
-    format_sse_event,
-    mask_cookie_value,
-    mask_secret_value,
-    mask_sensitive_text,
-    normalize_order_status_value,
-    parse_order_amount_value,
-    safe_client_error,
-    ORDER_STATUS_ALIASES,
-    SALES_ELIGIBLE_ORDER_STATUSES,
-    SENSITIVE_FIELD_PATTERNS,
-)
-from app.application.orders.delivery import (
-    ForbiddenOrder,
-    ManualDeliveryContextLoader,
-    MissingOrderAccount,
-    OrderNotFound,
-)
-from app.domain.accounts.ownership import (
-    AccountForbidden,
-    AccountOwnershipPolicy,
-    MissingAccountId,
-)
-
+from app.api.common import is_sales_eligible_order_status, format_sse_event, mask_cookie_value, mask_secret_value, mask_sensitive_text, normalize_order_status_value, parse_order_amount_value, _SCREENSHOT_STALE_GAP_SECONDS, _evaluate_screenshot_freshness, safe_client_error
+from app.domain.accounts.ownership import AccountForbidden, AccountOwnershipPolicy, MissingAccountId
 from loguru import logger
-
 # ── P1 收尾：共享层已下沉 app/api/{models,common,state}.py，此处 import 回以维持
 #    本文件自身代码与既有测试 seam（reply_server.<name> 补丁面）兼容。
 #    仍留在本文件的符号 = 认证依赖 + 业务 helper（与 db_manager/cookie_manager 强
 #    耦合、经双 seam 依赖测试补丁）；路由侧以 `import reply_server` 属性访问晚绑定
 #    —— 这是有意设计而非未完成迁移，见 vault 开发文档路线图 P4 行。
-from app.api.models import (
-    AIConfigPreset,
-    AIReplySettings,
-    ActionEvent,
-    AddMembersRequest,
-    AutoCommentBatchRateRequest,
-    AutoCommentUpdate,
-    AutoConfirmUpdate,
-    BatchDeleteRequest,
-    ChatSendRequest,
-    ClientErrorRequest,
-    CommentTemplateCreate,
-    CommentTemplateUpdate,
-    CookieAccountInfo,
-    CookieIn,
-    CookieStatusIn,
-    CopyKeywordsRequest,
-    CreateGroupRequest,
-    DefaultReplyIn,
-    ItemDetailUpdate,
-    ItemSearchMultipleRequest,
-    ItemSearchRequest,
-    ItemToDelete,
-    KeywordIn,
-    KeywordWithItemIdIn,
-    LoginInfoSettingUpdate,
-    ManualCookieImportRequest,
-    MessageNotificationIn,
-    NotificationChannelIn,
-    NotificationChannelUpdate,
-    NotificationTemplateIn,
-    OrderHistorySyncRequest,
-    OrderRecoverRequest,
-    PauseDurationUpdate,
-    PersonalBlacklistBatchDeleteRequest,
-    PersonalBlacklistCreateRequest,
-    PersonalBlacklistToggleRequest,
-    ProductBatchPublishRequest,
-    ProductMaterialRequest,
-    ProductMaterialUpdateRequest,
-    ProductSinglePublishRequest,
-    ProxyConfig,
-    QRLoginSubmitCookiesRequest,
-    QRLoginSubmitUrlRequest,
-    RegistrationSettingUpdate,
-    RemarkUpdate,
-    RequestModel,
-    ResponseData,
-    ResponseModel,
-    SaveItemKeywordsRequest,
-    SendMessageRequest,
-    SendMessageResponse,
-    SystemSettingIn,
-    TestNotificationIn,
-)
-
-from app.api.common import (
-    CAPTCHA_EXPIRE_SECONDS,
-    NIGHT_MODE_SYSTEM_SETTING_KEYS,
-    ORDER_SALES_TIME_SQL,
-    PASSWORD_LOGIN_TERMINAL_STATUSES,
-    PRODUCT_PUBLISH_DELIVERY_CHOICES,
-    PRODUCT_PUBLISH_MAX_BASE64_CHARS,
-    PRODUCT_PUBLISH_MAX_IMAGES,
-    PRODUCT_PUBLISH_MAX_IMAGE_BYTES,
-    TASK_LOG_TYPE_LABELS,
-    _SCREENSHOT_STALE_GAP_SECONDS,
-    _build_face_verification_screenshot_info,
-    _dedupe_int_list,
-    _dedupe_str_list,
-    _empty_slider_session_stats,
-    _estimate_base64_bytes,
-    _evaluate_screenshot_freshness,
-    _extract_merchant_rate_item_meta,
-    _extract_merchant_rate_order_id,
-    _find_first_nested_value,
-    _is_password_login_verification_timeout_message,
-    _is_sensitive_admin_data_field,
-    _is_timed_out_verification_risk_log,
-    _model_to_dict,
-    _normalize_history_optional_text,
-    _normalize_product_publish_data,
-    _normalize_task_log_limit,
-    _normalize_task_log_offset,
-    _normalize_task_log_row,
-    _parse_enabled_flag,
-    _parse_form_bool,
-    _parse_optional_non_negative_float,
-    _parse_random_delay,
-    _parse_run_hour,
-    _redact_admin_table_data,
-    _sanitize_material_images,
-    _task_log_created_at_sort_value,
-    _validate_publish_images,
-    _validate_system_setting_value,
-)
-
-from app.api.state import (  # noqa: F401  (shared singletons re-exported for legacy seams)
-    SESSION_TOKENS,
-    DOWNLOAD_TOKENS,
-    TOKEN_EXPIRE_TIME,
-    session_service,
-    qr_check_locks,
-    qr_check_processed,
-    login_ip_tracker,
-    login_user_tracker,
-    ip_blacklist,
-    username_rate_tracker,
-    captcha_storage,
-    order_history_sync_jobs,
-    order_history_sync_tasks,
-    password_login_sessions,
-    manual_cookie_import_sessions,
-    qr_lite_sessions,
-    BRUTE_FORCE_CONFIG,
-    STATIC_DIR as static_dir,
-)
-
+from app.api.models import BatchDeleteRequest
+from app.api.common import PASSWORD_LOGIN_TERMINAL_STATUSES, PRODUCT_PUBLISH_DELIVERY_CHOICES, _is_password_login_verification_timeout_message, _normalize_history_optional_text, _normalize_task_log_row, _parse_optional_non_negative_float, _validate_publish_images
+from app.api.state import SESSION_TOKENS, DOWNLOAD_TOKENS, TOKEN_EXPIRE_TIME, session_service, qr_check_locks, qr_check_processed, login_ip_tracker, login_user_tracker, ip_blacklist, order_history_sync_jobs, order_history_sync_tasks, password_login_sessions, manual_cookie_import_sessions, qr_lite_sessions, BRUTE_FORCE_CONFIG, STATIC_DIR as static_dir
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 
@@ -237,7 +69,6 @@ def ensure_runtime_directories(root: Path) -> None:
 ensure_runtime_directories(PROJECT_ROOT)
 
 # ==================== ?????? ====================
-import logging as _logging
 _analytics_fmt = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level} | {extra[user]} | {extra[action]} | {message}"
 # Remove loguru-style format, use standard logging for analytics
 import logging as _analytics_logging
@@ -247,7 +78,6 @@ _analytics_logger.propagate = False
 _afh = _analytics_logging.FileHandler(PROJECT_ROOT / "logs" / "analytics.log", encoding="utf-8")
 _afh.setFormatter(_analytics_logging.Formatter("%(asctime)s | %(levelname)s | %(user)s | %(action)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
 _analytics_logger.addHandler(_afh)
-
 
 
 def track(user="system", action="", target="-", result="success", detail=""):
@@ -326,7 +156,6 @@ security = HTTPBearer(auto_error=False)
 # 永久黑名单IP列表
 
 
-
 # 验证码存储: {captcha_id: {'code': str, 'created_at': float, 'ip': str}}
 
   # 验证码5分钟过期
@@ -339,9 +168,6 @@ def is_codex_browser(user_agent: str) -> bool:
     return 'Codex' in user_agent
 
 # 防暴力破解参数
-
-
-
 
 
 ORDER_HISTORY_SYNC_JOB_RETENTION_SECONDS = 3600
@@ -921,15 +747,6 @@ def match_reply(cookie_id: str, message: str) -> Optional[str]:
     return None
 
 
-
-
-
-
-
-
-
-
-
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     ensure_runtime_directories(PROJECT_ROOT)
@@ -1047,7 +864,6 @@ async def log_requests(request, call_next):
 
 # 提供前端静态文件
 import os
-
 if not os.path.exists(static_dir):
     os.makedirs(static_dir, exist_ok=True)
 
@@ -1184,11 +1000,6 @@ API_SECRET_ENV = "SEND_MESSAGE_API_KEY"
 XIANYU_REPLY_API_KEY_ENV = "XIANYU_REPLY_API_KEY"
 
 
-
-
-
-
-
 def verify_api_key(api_key: str) -> bool:
     """验证API秘钥"""
     try:
@@ -1225,64 +1036,10 @@ def require_xianyu_reply_api_key(
 # ------------------------- 账号 / 关键字管理接口 -------------------------
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class SystemSettingCreateIn(BaseModel):
     key: str
     value: str
     description: Optional[str] = None
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 class ChatHydrationDebug(BaseModel):
@@ -1750,25 +1507,10 @@ def _ensure_cookie_access(cid: str, current_user: Dict[str, Any]) -> str:
         raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
 
-
-
-
-
-
-
-
-
-
 def _get_task_log_cookie_scope(current_user: Dict[str, Any], cookie_id: str = None) -> List[str]:
     if cookie_id:
         return [_ensure_cookie_access(cookie_id, current_user)]
     return list(_get_user_cookies_map(current_user).keys())
-
-
-
-
-
-
 
 
 def _map_risk_log_to_task_type(log: Dict[str, Any]) -> str:
@@ -2341,12 +2083,7 @@ async def _run_live_instance_on_manager_loop(
         raise HTTPException(status_code=504, detail="账号处理超时，请稍后重试")
 
 
-
-
-
 # ========================= 代理配置相关接口 =========================
-
-
 
 
 # ========================= 账号密码登录相关接口 =========================
@@ -2361,9 +2098,6 @@ def _build_risk_event_meta(base: Optional[Dict[str, Any]] = None, **extra_fields
         payload.update({key: value for key, value in base.items() if value is not None})
     payload.update({key: value for key, value in extra_fields.items() if value is not None})
     return payload or None
-
-
-
 
 
 def _derive_password_login_verification_failure_result_code(error_message: str) -> str:
@@ -2618,9 +2352,6 @@ def _get_latest_password_login_session_for_account(
     )
 
 
-
-
-
 def _get_latest_verification_risk_log_for_account(account_id: str) -> Optional[Dict[str, Any]]:
     verification_event_types = {'qr_verify', 'face_verify', 'sms_verify', 'unknown'}
     logs = db_manager.get_risk_control_logs(cookie_id=str(account_id), limit=20)
@@ -2657,13 +2388,6 @@ def _get_latest_risk_log_epoch_for_account(account_id: str) -> Optional[float]:
 # 风控事件晚于截图多少秒即判定截图过期（留 60 秒容差，避免同一验证内的时序抖动误判）
 
 
-
-
-
-
-
-
-
 def _set_manual_cookie_import_session_status(session_id: str, status: str, **fields):
     session = manual_cookie_import_sessions.get(session_id)
     if not session:
@@ -2676,8 +2400,6 @@ def _set_manual_cookie_import_session_status(session_id: str, status: str, **fie
         session['completed_at'] = time.time()
     else:
         session['completed_at'] = None
-
-
 
 
 async def _execute_password_login(session_id: str, account_id: str, account: str, password: str, show_browser: bool, user_id: int, current_user: Dict[str, Any]):
@@ -2729,8 +2451,6 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
         
         # 导入 XianyuSliderStealth (slidex)
         XianyuSliderStealth, _, _SlidexConfig, _ = _load_slider_runtime()
-        import base64
-        import io
 
         # 创建 XianyuSliderStealth 实例
         existing_cookie_info = db_manager.get_cookie_details(account_id) or {}
@@ -3925,46 +3645,13 @@ async def _fallback_save_qr_cookie(account_id: str, cookies: str, user_id: int, 
 # ------------------------- 通知模板接口 -------------------------
 
 
-
-
-
-
-
-
 # ------------------------- 系统设置接口 -------------------------
 
 
 # ------------------------- 注册设置接口 -------------------------
 
 
-
-
-
-
-
-
 # 公开接口：获取登录验证码是否启用（供登录页面使用）
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # ==================== 自动好评相关API ====================
@@ -3988,16 +3675,6 @@ async def _fallback_save_qr_cookie(account_id: str, cookies: str, user_id: int, 
 
 
 # ==================== 商品搜索 API ====================
-
-
-
-
-
-
-
-
-
-
 
 
 def _persist_cookie_value_for_account(
@@ -4085,42 +3762,8 @@ async def _sync_items_after_publish(
         await xianyu_instance.close_session()
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
   # 单图解码后上限 8MB
   # Base64 文本上限约 12MB
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _summarize_publish_result_for_client(publish_result: Any) -> Dict[str, Any]:
@@ -4385,32 +4028,14 @@ async def _run_product_batch_publish(batch_id: str, jobs: List[Dict[str, Any]], 
     logger.info(f"{get_user_log_prefix(current_user)} 商品批量发布任务结束: batch_id={batch_id}")
 
 
-
-
-
 class BatchDeleteRequest(BaseModel):
     items: List[dict]  # [{"cookie_id": "xxx", "item_id": "yyy"}, ...]
-
-
-
-
-
-
 
 
 # ==================== AI回复管理API ====================
 
 
 # ==================== 日志管理API ====================
-
-
-
-
-
-
-
-
-
 
 
 # ==================== 商品管理API ====================
@@ -4425,23 +4050,10 @@ class BatchDeleteRequest(BaseModel):
 # ------------------------- 指定商品回复接口 -------------------------
 
 
-
-
-
-
-
 # ------------------------- 数据库备份和恢复接口 -------------------------
 
 
 # ------------------------- 数据管理接口 -------------------------
-
-
-
-
-
-
-
-
 
 
 # 商品多规格管理API
@@ -4451,14 +4063,6 @@ class BatchDeleteRequest(BaseModel):
 
 
 # ==================== 订单管理接口 ====================
-
-
-
-
-
-
-
-
 
 
 def _normalize_history_amount_text(value: Any) -> Optional[str]:
@@ -4756,9 +4360,7 @@ async def _run_order_history_sync_job(job_id: str) -> None:
 
 # ==================== 自动更新接口 ====================
 
-from auto_updater import get_updater, UpdateStatus, init_updater
 from pydantic import BaseModel as PydanticBaseModel
-
 class UpdateCheckResponse(PydanticBaseModel):
     """更新检查响应"""
     has_update: bool
@@ -4803,14 +4405,6 @@ def _ensure_update_admin(current_user: Dict[str, Any]) -> None:
 
 
 # ==================== 定时任务管理API ====================
-
-
-
-
-
-
-
-
 
 
 # ==================== 定时任务调度器 ====================
@@ -4869,16 +4463,10 @@ async def scheduled_task_checker():
 # ==================== ?????? ====================
 
 
-
-
 # ==================== 下载 Token 机制 ====================
 
 
 # ==================== 用户组管理 API ====================
-
-
-
-
 
 
 # 移除自动启动，由Start.py或手动启动

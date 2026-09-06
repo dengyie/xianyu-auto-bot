@@ -4,62 +4,22 @@ Mechanically extracted from reply_server.py; behavior-preserving.
 Shared models/helpers/state live in app/api/models.py, app/api/common.py and app/api/state.py; reply_server-resident symbols are accessed late-bound (reply_server.X) so runtime rebinds stay visible.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Callable, Awaitable
-from collections import defaultdict
-from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
 import asyncio
-import base64
-import hashlib
-import io
+from datetime import datetime
 import json
 import os
-import random
-import re
 import secrets
 import time
 import urllib.parse
-from urllib.parse import unquote
-from urllib import request as urllib_request, error as urllib_error
-
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
-
-from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header,
-                     HTTPException, Request, Response, UploadFile, status)
-from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
-                               StreamingResponse)
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi.responses import JSONResponse
 from loguru import logger
-from pydantic import BaseModel
-
-from app.api.models import (
-    AIConfigPreset,
-    AIReplySettings,
-    ActionEvent,
-    AddMembersRequest,
-    AutoCommentBatchRateRequest,
-    ClientErrorRequest,
-    CreateGroupRequest,
-    PersonalBlacklistBatchDeleteRequest,
-    PersonalBlacklistCreateRequest,
-    PersonalBlacklistToggleRequest,
-)
-from app.api.common import (
-    TASK_LOG_TYPE_LABELS,
-    _empty_slider_session_stats,
-    _extract_merchant_rate_item_meta,
-    _extract_merchant_rate_order_id,
-    _normalize_task_log_limit,
-    _normalize_task_log_offset,
-    _normalize_task_log_row,
-    _parse_enabled_flag,
-    _parse_random_delay,
-    _parse_run_hour,
-    _redact_admin_table_data,
-    _task_log_created_at_sort_value,
-)
+from app.api.models import AIConfigPreset, AIReplySettings, ActionEvent, AddMembersRequest, AutoCommentBatchRateRequest, ClientErrorRequest, CreateGroupRequest, PersonalBlacklistBatchDeleteRequest, PersonalBlacklistCreateRequest, PersonalBlacklistToggleRequest
+from app.api.common import TASK_LOG_TYPE_LABELS, _empty_slider_session_stats, _extract_merchant_rate_item_meta, _extract_merchant_rate_order_id, _normalize_task_log_limit, _normalize_task_log_offset, _normalize_task_log_row, _parse_enabled_flag, _parse_random_delay, _parse_run_hour, _redact_admin_table_data, _task_log_created_at_sort_value
 from app.api import state
 import db_manager
-import reply_server  # noqa: F401  (late-bound seam: runtime rebinds stay visible)
+import reply_server
 from ai_reply_engine import ai_reply_engine
 import auto_updater
 from file_log_collector import get_file_log_collector
@@ -67,8 +27,6 @@ from utils.blacklist_service import blacklist_service
 from pathlib import Path
 import cookie_manager
 import uuid
-
-
 def create_admin_ops_router() -> APIRouter:
     router = APIRouter()
     @router.get("/ai-reply-settings/{cookie_id}")
@@ -231,6 +189,9 @@ def create_admin_ops_router() -> APIRouter:
             }
 
             # 生成测试回复（跳过去抖等待）
+            # 不变量：chat_id 必须保持 test_ 前缀的合成值（禁止改为真实会话或
+            # 接收入参）——AI 引擎按 chat_id 分域加锁与防抖，合成前缀保证测试
+            # 流量与实时消息管线的会话锁域零交叉
             reply = ai_reply_engine.generate_reply(
                 message=test_message,
                 item_info=test_item_info,
@@ -1041,7 +1002,6 @@ def create_admin_ops_router() -> APIRouter:
         """获取系统日志（管理员专用）"""
         import os
         import glob
-        from datetime import datetime
 
         try:
             reply_server.log_with_user('info', f"查询系统日志，行数: {lines}, 级别: {level}", admin_user)
@@ -1103,7 +1063,6 @@ def create_admin_ops_router() -> APIRouter:
         """列出所有可用的系统日志文件"""
         import os
         import glob
-        from datetime import datetime
 
         try:
             reply_server.log_with_user('info', "查询日志文件列表", admin_user)
@@ -1486,7 +1445,6 @@ def create_admin_ops_router() -> APIRouter:
 
             # 创建Excel文件
             import openpyxl
-            from openpyxl.utils import get_column_letter
         
             wb = openpyxl.Workbook()
             ws = wb.active

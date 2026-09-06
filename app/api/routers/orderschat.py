@@ -4,57 +4,25 @@ Mechanically extracted from reply_server.py; behavior-preserving.
 Shared models/helpers/state live in app/api/models.py, app/api/common.py and app/api/state.py; reply_server-resident symbols are accessed late-bound (reply_server.X) so runtime rebinds stay visible.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Callable, Awaitable
-from collections import defaultdict
-from datetime import datetime, timedelta
+from typing import Any, Dict
 import asyncio
-import base64
-import hashlib
-import io
-import json
 import os
-import random
 import re
 import secrets
 import time
-import urllib.parse
-from urllib.parse import unquote
-from urllib import request as urllib_request, error as urllib_error
-
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
-
-from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header,
-                     HTTPException, Request, Response, UploadFile, status)
-from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
-                               StreamingResponse)
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import HTMLResponse, StreamingResponse
 from loguru import logger
-from pydantic import BaseModel
-
-from app.api.models import (
-    ChatSendRequest,
-    CopyKeywordsRequest,
-    OrderHistorySyncRequest,
-    OrderRecoverRequest,
-    RequestModel,
-    ResponseModel,
-    SaveItemKeywordsRequest,
-    SendMessageRequest,
-    SendMessageResponse,
-)
-from app.api.common import (
-    _normalize_history_optional_text,
-)
+from app.api.models import ChatSendRequest, CopyKeywordsRequest, OrderHistorySyncRequest, OrderRecoverRequest, RequestModel, ResponseModel, SaveItemKeywordsRequest, SendMessageRequest, SendMessageResponse
+from app.api.common import _normalize_history_optional_text
 from app.api import state
 import db_manager
-import reply_server  # noqa: F401  (late-bound seam: runtime rebinds stay visible)
+import reply_server
 from app.application.orders.delivery import ForbiddenOrder, ManualDeliveryContextLoader, MissingOrderAccount, OrderNotFound
-from chat_event_hub import chat_event_hub, publish_chat_message
+from chat_event_hub import chat_event_hub
 import order_event_hub
 from utils.time_utils import get_local_now
-import cookie_manager
 import queue
-
 
 def create_orders_chat_router() -> APIRouter:
     router = APIRouter()

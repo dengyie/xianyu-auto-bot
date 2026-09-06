@@ -4,58 +4,17 @@ Mechanically extracted from reply_server.py; behavior-preserving.
 Shared models/helpers/state live in app/api/models.py, app/api/common.py and app/api/state.py; reply_server-resident symbols are accessed late-bound (reply_server.X) so runtime rebinds stay visible.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Callable, Awaitable
-from collections import defaultdict
-from datetime import datetime, timedelta
-import asyncio
-import base64
-import hashlib
-import io
-import json
-import os
-import random
+from typing import Any, Dict, List, Optional
 import re
-import secrets
-import time
-import urllib.parse
-from urllib.parse import unquote
-from urllib import request as urllib_request, error as urllib_error
-
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
-
-from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header,
-                     HTTPException, Request, Response, UploadFile, status)
-from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
-                               StreamingResponse)
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from loguru import logger
-from pydantic import BaseModel
-
-from app.api.models import (
-    BatchDeleteRequest,
-    ItemDetailUpdate,
-    ItemSearchMultipleRequest,
-    ItemSearchRequest,
-    ProductBatchPublishRequest,
-    ProductMaterialRequest,
-    ProductMaterialUpdateRequest,
-    ProductSinglePublishRequest,
-)
-from app.api.common import (
-    _dedupe_int_list,
-    _dedupe_str_list,
-    _model_to_dict,
-    _normalize_product_publish_data,
-    _parse_form_bool,
-    _sanitize_material_images,
-    _validate_publish_images,
-)
+from app.api.models import BatchDeleteRequest, ItemDetailUpdate, ItemSearchMultipleRequest, ItemSearchRequest, ProductBatchPublishRequest, ProductMaterialRequest, ProductMaterialUpdateRequest, ProductSinglePublishRequest
+from app.api.common import _dedupe_int_list, _dedupe_str_list, _model_to_dict, _normalize_product_publish_data, _parse_form_bool, _sanitize_material_images, _validate_publish_images
 import db_manager
-import reply_server  # noqa: F401  (late-bound seam: runtime rebinds stay visible)
+import reply_server
 from utils.image_utils import image_manager
 import cookie_manager
 import uuid
-
 
 def create_trading_router() -> APIRouter:
     router = APIRouter()

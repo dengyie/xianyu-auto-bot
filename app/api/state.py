@@ -13,17 +13,18 @@ from typing import Any, Dict
 from app.application.auth.sessions import SessionService
 
 
-SESSION_TOKENS = {}
+SESSION_TOKENS = {}  # 存储会话token: {token: {'user_id': int, 'username': str, 'timestamp': float}}
 
-DOWNLOAD_TOKENS = {}
+DOWNLOAD_TOKENS = {}  # 下载一次性token: {token_str: {user_id, file_id, exp}}
 
-TOKEN_EXPIRE_TIME = 24 * 60 * 60
+TOKEN_EXPIRE_TIME = 24 * 60 * 60  # token过期时间：24小时
 
 session_service = SessionService(SESSION_TOKENS, TOKEN_EXPIRE_TIME)
 
+# 扫码登录检查锁 - 防止并发处理同一个session
 qr_check_locks = defaultdict(lambda: asyncio.Lock())
 
-qr_check_processed = {}
+qr_check_processed = {}  # 记录已处理的session: {session_id: {'processed': bool, 'timestamp': float}}
 
 login_ip_tracker = {}
 
@@ -39,10 +40,11 @@ order_history_sync_jobs: Dict[str, Dict[str, Any]] = {}
 
 order_history_sync_tasks: Dict[str, asyncio.Task] = {}
 
-password_login_sessions = {}
+password_login_sessions = {}  # {session_id: {'account_id','account','show_browser','status','verification_url','qr_code_url','slider_instance','task','timestamp'}}
 
-manual_cookie_import_sessions = {}
+manual_cookie_import_sessions = {}  # {session_id: {'account_id','status','verification_url','screenshot_path','slider_instance','task','timestamp'}}
 
+# 轻量扫码登录会话表: state ∈ pending|waiting|success|error|expired
 qr_lite_sessions: Dict[str, Dict[str, Any]] = {}
 
 BRUTE_FORCE_CONFIG = {

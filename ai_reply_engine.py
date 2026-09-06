@@ -391,9 +391,20 @@ class AIReplyEngine:
     def _get_chat_lock(self, chat_id: str) -> threading.Lock:
         """获取指定chat_id的锁，如果不存在则创建"""
         with self._chat_locks_lock:
+            self._prune_locks(self._chat_locks, chat_id)
             if chat_id not in self._chat_locks:
                 self._chat_locks[chat_id] = threading.Lock()
             return self._chat_locks[chat_id]
+
+    @staticmethod
+    def _prune_locks(locks: dict, keep_key: str, max_locks: int = 256) -> None:
+        """锁字典有界化：超过 max_locks 时淘汰未持锁条目（chat_id 集合长期累积）。"""
+        if len(locks) < max_locks:
+            return
+        for k in [k for k, v in locks.items() if k != keep_key and not v.locked()]:
+            del locks[k]
+            if len(locks) < max_locks:
+                break
     
     def generate_reply(self, message: str, item_info: dict, chat_id: str,
                       cookie_id: str, user_id: str, item_id: str,
@@ -527,6 +538,7 @@ class AIReplyEngine:
 
     def _get_achat_lock(self, chat_id: str) -> asyncio.Lock:
         """获取指定chat_id的异步锁（单事件循环内无竞态），不存在则创建"""
+        self._prune_locks(self._achat_locks, chat_id)
         lock = self._achat_locks.get(chat_id)
         if lock is None:
             lock = self._achat_locks[chat_id] = asyncio.Lock()
