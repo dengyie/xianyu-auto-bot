@@ -8,6 +8,7 @@ AI回复引擎模块 - 统一意图识别与回复生成
 - 支持多种API类型：OpenAI / OpenAI Responses / Gemini / Anthropic / Azure OpenAI / Ollama / DashScope
 """
 
+import asyncio
 import json
 import time
 import requests
@@ -19,13 +20,17 @@ from db_manager import db_manager
 
 class AIReplyEngine:
     """AI回复引擎 - 统一意图识别与回复生成"""
-    
+
     def __init__(self):
         self._init_default_prompts()
-        # 用于控制同一chat_id消息的串行处理
+        # 用于控制同一chat_id消息的串行处理（同步路径）
         self._chat_locks = {}
         self._chat_locks_lock = threading.Lock()
-    
+        # 异步路径（generate_reply_async）专用的每会话锁；与同步路径的
+        # threading.Lock 字典分开：asyncio.Lock 不能跨事件循环复用，且两条
+        # 路径不会在生产中同时服务同一会话（异步=实时消息管线，同步=管理端测试）
+        self._achat_locks = {}
+
     def _init_default_prompts(self):
         """初始化默认提示词（用于构建统一提示词）"""
         self.default_prompts = {
@@ -420,90 +425,27 @@ class AIReplyEngine:
                 # 检查是否有更新的消息
                 query_seconds = 6 if skip_wait else 25
                 recent_messages = self._get_recent_user_messages(chat_id, cookie_id, seconds=query_seconds)
-                
+
                 if recent_messages and len(recent_messages) > 0:
                     latest_message = recent_messages[-1]
                     if message_created_at != latest_message['created_at']:
                         logger.info(f"【{cookie_id}】检测到更新消息，跳过当前消息")
                         return None
-                
+
                 # 1. 获取AI设置
                 settings = db_manager.get_ai_reply_settings(cookie_id)
-                custom_prompts = json.loads(settings['custom_prompts']) if settings['custom_prompts'] else {}
 
                 # 2. 获取对话历史
                 context = self.get_conversation_context(chat_id, cookie_id)
 
-                # 3. 获取对话轮数和议价设置（供AI参考）
+                # 3. 获取对话轮数（供AI参考）
                 conversation_rounds = self.get_conversation_rounds(chat_id, cookie_id)
-                max_bargain_rounds = settings.get('max_bargain_rounds', 3)
-                max_discount_percent = settings.get('max_discount_percent', 10)
-                max_discount_amount = settings.get('max_discount_amount', 100)
 
-                # 4. 构建统一的系统提示词（整合意图判断和回复生成）
-                system_prompt = self._build_unified_system_prompt(custom_prompts, settings)
+                # 4-8. 构建消息列表（共享 helper）
+                messages = self._build_chat_messages(message, item_info, context, settings, conversation_rounds)
 
-                # 5. 构建商品信息
-                item_desc = f"商品标题: {item_info.get('title', '未知')}\n"
-                item_desc += f"商品价格: {item_info.get('price', '未知')}元\n"
-                item_desc += f"商品描述: {item_info.get('desc', '无')}"
-
-                # 6. 构建对话历史字符串
-                context_str = ""
-                if context:
-                    context_str = "\n".join([
-                        f"{'客户' if msg['role'] == 'user' else '客服'}: {msg['content']}" 
-                        for msg in context[-10:]
-                    ])
-
-                # 7. 构建用户消息（包含所有上下文）
-                user_prompt = f"""## 商品信息
-{item_desc}
-
-## 对话历史
-{context_str if context_str else '(新对话，暂无历史)'}
-
-## 对话状态
-- 当前对话轮数：第{conversation_rounds + 1}轮
-- 议价限制：最多{max_bargain_rounds}轮议价后需坚持底价
-- 最大可优惠：{max_discount_percent}%或{max_discount_amount}元
-
-## 当前用户消息
-{message}
-
-请根据以上信息，直接回复用户："""
-
-                # 8. 构建消息列表
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ]
-
-                # 9. 根据API类型调用对应的AI接口
-                reply = None
-                api_type = self._resolve_api_type(settings)
-                logger.info(f"使用 {api_type} API生成回复")
-
-                if api_type == 'dashscope':
-                    # DashScope有两种模式：
-                    # 1) /apps/{app_id} 应用模式 -> 走百炼应用API
-                    # 2) compatible-mode/v1 兼容模式 -> 走OpenAI Chat Completions
-                    if self._is_dashscope_app_api(settings):
-                        reply = self._call_dashscope_api(settings, messages, max_tokens=150, temperature=0.7)
-                    else:
-                        logger.info("DashScope检测为兼容模式（非/apps/），改走OpenAI兼容Chat API")
-                        reply = self._call_openai_chat_api(settings, messages, max_tokens=150, temperature=0.7)
-                elif api_type == 'gemini':
-                    reply = self._call_gemini_api(settings, messages, max_tokens=150, temperature=0.7)
-                elif api_type == 'openai_responses':
-                    reply = self._call_openai_responses_api(settings, messages, max_tokens=150, temperature=0.7)
-                elif api_type == 'anthropic':
-                    reply = self._call_anthropic_api(settings, messages, max_tokens=150, temperature=0.7)
-                elif api_type == 'azure_openai':
-                    reply = self._call_azure_openai_api(settings, messages, max_tokens=150, temperature=0.7)
-                else:
-                    # openai / ollama / 空值 均走 chat/completions
-                    reply = self._call_openai_chat_api(settings, messages, max_tokens=150, temperature=0.7)
+                # 9. 根据API类型调用对应的AI接口（共享 helper：同步/异步路径共用）
+                reply = self._invoke_provider(settings, messages)
 
                 # 10. 校验回复非空：空回复会污染对话历史且被误发，必须拦截
                 if not reply or not reply.strip():
@@ -529,15 +471,132 @@ class AIReplyEngine:
                                    cookie_id: str, user_id: str, item_id: str,
                                    skip_wait: bool = False) -> Optional[str]:
         """
-        异步包装器：在独立线程池中执行同步的 `generate_reply`，并返回结果。
-        这样可以在异步代码中直接 await，而不阻塞事件循环。
+        原生异步路径：防抖用 asyncio.sleep、会话串行用 asyncio.Lock，
+        DB 读取与 provider HTTP 调用（requests）包 asyncio.to_thread ——
+        事件循环全程不被阻塞，线程也不被 10 秒防抖占死（同步 generate_reply
+        保留给管理端测试路由，跑在 FastAPI threadpool 上，语义不变）。
         """
-        try:
-            import asyncio as _asyncio
-            return await _asyncio.to_thread(self.generate_reply, message, item_info, chat_id, cookie_id, user_id, item_id, skip_wait)
-        except Exception as e:
-            logger.error(f"异步生成回复失败: {e}")
+        if not self.is_ai_enabled(cookie_id):
             return None
+        try:
+            message_created_at = await asyncio.to_thread(
+                self.save_conversation, chat_id, cookie_id, user_id, item_id, "user", message, intent=None
+            )
+
+            if not skip_wait:
+                logger.info(f"【{cookie_id}】消息已保存，等待10秒收集后续消息: {message[:20]}...")
+                await asyncio.sleep(10)
+            else:
+                logger.info(f"【{cookie_id}】消息已保存（外部防抖已启用）: {message[:20]}...")
+
+            async with self._get_achat_lock(chat_id):
+                query_seconds = 6 if skip_wait else 25
+                recent_messages = await asyncio.to_thread(
+                    self._get_recent_user_messages, chat_id, cookie_id, seconds=query_seconds
+                )
+                if recent_messages and len(recent_messages) > 0:
+                    latest_message = recent_messages[-1]
+                    if message_created_at != latest_message['created_at']:
+                        logger.info(f"【{cookie_id}】检测到更新消息，跳过当前消息")
+                        return None
+
+                settings = await asyncio.to_thread(db_manager.get_ai_reply_settings, cookie_id)
+                context = await asyncio.to_thread(self.get_conversation_context, chat_id, cookie_id)
+                conversation_rounds = await asyncio.to_thread(self.get_conversation_rounds, chat_id, cookie_id)
+
+                messages = self._build_chat_messages(message, item_info, context, settings, conversation_rounds)
+                reply = await asyncio.to_thread(self._invoke_provider, settings, messages)
+
+                if not reply or not reply.strip():
+                    logger.warning(f"AI返回空回复 (账号: {cookie_id})，跳过保存与发送")
+                    return None
+
+                reply = reply.strip()
+                await asyncio.to_thread(
+                    self.save_conversation, chat_id, cookie_id, user_id, item_id, "assistant", reply, intent=None
+                )
+                logger.info(f"AI回复生成成功 (账号: {cookie_id}): {reply[:100]}")
+                return reply
+        except Exception as e:
+            logger.error(f"AI回复生成失败 {cookie_id}: {e}")
+            if hasattr(e, 'response') and hasattr(e.response, 'url'):
+                logger.error(f"请求URL: {e.response.url}")
+            if hasattr(e, 'request') and hasattr(e.request, 'url'):
+                logger.error(f"请求URL: {e.request.url}")
+            return None
+
+    def _get_achat_lock(self, chat_id: str) -> asyncio.Lock:
+        """获取指定chat_id的异步锁（单事件循环内无竞态），不存在则创建"""
+        lock = self._achat_locks.get(chat_id)
+        if lock is None:
+            lock = self._achat_locks[chat_id] = asyncio.Lock()
+        return lock
+
+    def _build_chat_messages(self, message: str, item_info: dict, context: list,
+                             settings: dict, conversation_rounds: int) -> List[Dict[str, str]]:
+        """构建统一提示词与消息列表（同步/异步路径共用，纯函数无 I/O）"""
+        custom_prompts = json.loads(settings['custom_prompts']) if settings['custom_prompts'] else {}
+        system_prompt = self._build_unified_system_prompt(custom_prompts, settings)
+
+        item_desc = f"商品标题: {item_info.get('title', '未知')}\n"
+        item_desc += f"商品价格: {item_info.get('price', '未知')}元\n"
+        item_desc += f"商品描述: {item_info.get('desc', '无')}"
+
+        context_str = ""
+        if context:
+            context_str = "\n".join([
+                f"{'客户' if msg['role'] == 'user' else '客服'}: {msg['content']}"
+                for msg in context[-10:]
+            ])
+
+        max_bargain_rounds = settings.get('max_bargain_rounds', 3)
+        max_discount_percent = settings.get('max_discount_percent', 10)
+        max_discount_amount = settings.get('max_discount_amount', 100)
+
+        user_prompt = f"""## 商品信息
+{item_desc}
+
+## 对话历史
+{context_str if context_str else '(新对话，暂无历史)'}
+
+## 对话状态
+- 当前对话轮数：第{conversation_rounds + 1}轮
+- 议价限制：最多{max_bargain_rounds}轮议价后需坚持底价
+- 最大可优惠：{max_discount_percent}%或{max_discount_amount}元
+
+## 当前用户消息
+{message}
+
+请根据以上信息，直接回复用户："""
+
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+    def _invoke_provider(self, settings: dict, messages: List[Dict[str, str]]) -> Optional[str]:
+        """按 API 类型分发 provider 调用（同步阻塞 I/O；异步路径经 to_thread 包装）"""
+        api_type = self._resolve_api_type(settings)
+        logger.info(f"使用 {api_type} API生成回复")
+
+        if api_type == 'dashscope':
+            # DashScope有两种模式：
+            # 1) /apps/{app_id} 应用模式 -> 走百炼应用API
+            # 2) compatible-mode/v1 兼容模式 -> 走OpenAI Chat Completions
+            if self._is_dashscope_app_api(settings):
+                return self._call_dashscope_api(settings, messages, max_tokens=150, temperature=0.7)
+            logger.info("DashScope检测为兼容模式（非/apps/），改走OpenAI兼容Chat API")
+            return self._call_openai_chat_api(settings, messages, max_tokens=150, temperature=0.7)
+        if api_type == 'gemini':
+            return self._call_gemini_api(settings, messages, max_tokens=150, temperature=0.7)
+        if api_type == 'openai_responses':
+            return self._call_openai_responses_api(settings, messages, max_tokens=150, temperature=0.7)
+        if api_type == 'anthropic':
+            return self._call_anthropic_api(settings, messages, max_tokens=150, temperature=0.7)
+        if api_type == 'azure_openai':
+            return self._call_azure_openai_api(settings, messages, max_tokens=150, temperature=0.7)
+        # openai / ollama / 空值 均走 chat/completions
+        return self._call_openai_chat_api(settings, messages, max_tokens=150, temperature=0.7)
     
     def get_conversation_context(self, chat_id: str, cookie_id: str, limit: int = 20) -> List[Dict]:
         """获取对话上下文"""
