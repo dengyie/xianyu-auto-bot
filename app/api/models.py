@@ -246,6 +246,7 @@ class ProductMaterialRequest(BaseModel):
     brand: Optional[str] = None
     condition: Optional[str] = "全新"
     remark: Optional[str] = None
+    sku_config: Optional[Dict[str, Any]] = None
 
 
 class ProductMaterialUpdateRequest(BaseModel):
@@ -261,6 +262,7 @@ class ProductMaterialUpdateRequest(BaseModel):
     brand: Optional[str] = None
     condition: Optional[str] = None
     remark: Optional[str] = None
+    sku_config: Optional[Dict[str, Any]] = None
 
 
 class ProductSinglePublishRequest(BaseModel):
@@ -277,6 +279,7 @@ class ProductSinglePublishRequest(BaseModel):
     brand: Optional[str] = None
     condition: Optional[str] = "全新"
     material_id: Optional[int] = None
+    sku_config: Optional[Dict[str, Any]] = None
 
 
 class ProxyConfig(BaseModel):
@@ -352,3 +355,21 @@ class SystemSettingIn(BaseModel):
 class TestNotificationIn(BaseModel):
     template_type: str
     template: str
+
+
+class MessageFilterRuleRequest(BaseModel):
+    name: str
+    patterns: Any
+    cookie_id: Optional[str] = None
+    item_id: Optional[str] = None
+    match_type: str = 'contains'
+    message_source: str = 'user'
+    is_enabled: bool = True
+    action_skip_auto_reply: bool = True
+    action_skip_ai_reply: bool = False
+    action_pause_minutes: int = 0
+    action_notify: bool = False
+
+
+class MessageFilterToggleRequest(BaseModel):
+    is_enabled: bool

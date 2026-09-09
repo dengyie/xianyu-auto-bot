@@ -7,6 +7,7 @@ from .users import DBUsersMixin
 from .ops import DBOpsMixin
 from .blacklist import DBBlacklistMixin
 from .product_publish import DBProductPublishMixin
+from .message_filters import DBMessageFiltersMixin
 
 class DBManager(
     DBBase,
@@ -18,6 +19,7 @@ class DBManager(
     DBOpsMixin,
     DBBlacklistMixin,
     DBProductPublishMixin,
+    DBMessageFiltersMixin,
 ):
     pass
 

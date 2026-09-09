@@ -365,6 +365,8 @@ def _parse_optional_non_negative_float(value: Any, field_label: str) -> Optional
 
 
 def _normalize_product_publish_data(data: Dict[str, Any], *, partial: bool = False) -> Dict[str, Any]:
+    from utils.product_sku import ProductSkuValidationError, normalize_sku_config
+
     normalized: Dict[str, Any] = {}
 
     for field in ('title', 'description', 'category', 'brand', 'condition', 'remark'):
@@ -395,8 +397,12 @@ def _normalize_product_publish_data(data: Dict[str, Any], *, partial: bool = Fal
 
     current_price = normalized.get('price') if 'price' in normalized else data.get('price')
     original_price = normalized.get('original_price') if 'original_price' in normalized else data.get('original_price')
+    if 'sku_config' not in data and not partial:
+        pass  # sku_config 校验在下方统一进行，此时尚未归一化
     if original_price is not None and current_price is None:
-        raise HTTPException(status_code=400, detail="填写原价时必须同时填写现价")
+        sku_enabled = bool((data.get('sku_config') or {}).get('enabled')) if 'sku_config' in data else False
+        if not sku_enabled:
+            raise HTTPException(status_code=400, detail="填写原价时必须同时填写现价")
 
     if 'delivery_method' in data or not partial:
         delivery_method = str(data.get('delivery_method') or '包邮').strip() or '包邮'
@@ -414,6 +420,12 @@ def _normalize_product_publish_data(data: Dict[str, Any], *, partial: bool = Fal
         if not isinstance(images, list):
             raise HTTPException(status_code=400, detail="商品图片必须是数组")
         normalized['images'] = images
+
+    if 'sku_config' in data or not partial:
+        try:
+            normalized['sku_config'] = normalize_sku_config(data.get('sku_config'))
+        except ProductSkuValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return normalized
 

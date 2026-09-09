@@ -15,13 +15,14 @@ import urllib.parse
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import JSONResponse
 from loguru import logger
-from app.api.models import AIConfigPreset, AIReplySettings, ActionEvent, AddMembersRequest, AutoCommentBatchRateRequest, ClientErrorRequest, CreateGroupRequest, PersonalBlacklistBatchDeleteRequest, PersonalBlacklistCreateRequest, PersonalBlacklistToggleRequest
+from app.api.models import AIConfigPreset, AIReplySettings, ActionEvent, AddMembersRequest, AutoCommentBatchRateRequest, ClientErrorRequest, CreateGroupRequest, PersonalBlacklistBatchDeleteRequest, PersonalBlacklistCreateRequest, PersonalBlacklistToggleRequest, MessageFilterRuleRequest, MessageFilterToggleRequest
 from app.api.common import TASK_LOG_TYPE_LABELS, _empty_slider_session_stats, _extract_merchant_rate_item_meta, _extract_merchant_rate_order_id, _normalize_task_log_limit, _normalize_task_log_offset, _normalize_task_log_row, _parse_enabled_flag, _parse_random_delay, _parse_run_hour, _redact_admin_table_data, _task_log_created_at_sort_value
 from app.api import state
 import db_manager
 import reply_server
 from ai_reply_engine import ai_reply_engine
 import auto_updater
+from utils.message_filter_service import message_filter_service
 from file_log_collector import get_file_log_collector
 from utils.blacklist_service import blacklist_service
 from pathlib import Path
@@ -2629,4 +2630,107 @@ def create_admin_ops_router() -> APIRouter:
         except Exception as e:
             reply_server.log_with_user('error', f"更新个人黑名单状态失败: {reply_server.mask_sensitive_text(e)}", current_user)
             raise HTTPException(status_code=500, detail='更新个人黑名单状态失败')
+
+    # ------------------------- 消息过滤规则接口（移植上游 #110） -------------------------
+
+    def _normalize_message_filter_payload(request: MessageFilterRuleRequest, current_user):
+        payload = request.model_dump()
+        cookie_id = str(payload.get('cookie_id') or '').strip()
+        if cookie_id:
+            payload['cookie_id'] = reply_server._ensure_cookie_access(cookie_id, current_user)
+        else:
+            payload['cookie_id'] = None
+        payload['item_id'] = str(payload.get('item_id') or '').strip() or None
+        return payload
+
+    @router.get('/api/message-filters')
+    def get_message_filters(
+        keyword: str = None,
+        page: int = 1,
+        page_size: int = 20,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
+    ):
+        try:
+            result = message_filter_service.list_rules(
+                user_id=current_user['user_id'],
+                keyword=keyword,
+                page=page,
+                page_size=page_size,
+            )
+            return {'success': True, **result}
+        except Exception as e:
+            reply_server.log_with_user('error', f"查询消息过滤规则失败: {reply_server.mask_sensitive_text(e)}", current_user)
+            raise HTTPException(status_code=500, detail='查询消息过滤规则失败')
+
+    @router.post('/api/message-filters')
+    def create_message_filter(
+        request: MessageFilterRuleRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
+    ):
+        try:
+            payload = _normalize_message_filter_payload(request, current_user)
+            record = message_filter_service.create_rule(current_user['user_id'], payload)
+            reply_server.log_with_user('info', f"新增消息过滤规则: {record.get('name') or ''}", current_user)
+            return {'success': True, 'message': '消息过滤规则已保存', 'data': record}
+        except HTTPException:
+            raise
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            reply_server.log_with_user('error', f"新增消息过滤规则失败: {reply_server.mask_sensitive_text(e)}", current_user)
+            raise HTTPException(status_code=500, detail='新增消息过滤规则失败')
+
+    @router.put('/api/message-filters/{rule_id}')
+    def update_message_filter(
+        rule_id: int,
+        request: MessageFilterRuleRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
+    ):
+        try:
+            payload = _normalize_message_filter_payload(request, current_user)
+            record = message_filter_service.update_rule(rule_id, current_user['user_id'], payload)
+            if not record:
+                raise HTTPException(status_code=404, detail='消息过滤规则不存在')
+            return {'success': True, 'message': '消息过滤规则已更新', 'data': record}
+        except HTTPException:
+            raise
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            reply_server.log_with_user('error', f"更新消息过滤规则失败: {reply_server.mask_sensitive_text(e)}", current_user)
+            raise HTTPException(status_code=500, detail='更新消息过滤规则失败')
+
+    @router.patch('/api/message-filters/{rule_id}/toggle')
+    def toggle_message_filter(
+        rule_id: int,
+        request: MessageFilterToggleRequest,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
+    ):
+        try:
+            success = message_filter_service.toggle_rule(rule_id, current_user['user_id'], request.is_enabled)
+            if not success:
+                raise HTTPException(status_code=404, detail='消息过滤规则不存在')
+            return {'success': True, 'message': '状态已更新'}
+        except HTTPException:
+            raise
+        except Exception as e:
+            reply_server.log_with_user('error', f"更新消息过滤规则状态失败: {reply_server.mask_sensitive_text(e)}", current_user)
+            raise HTTPException(status_code=500, detail='更新消息过滤规则状态失败')
+
+    @router.delete('/api/message-filters/{rule_id}')
+    def delete_message_filter(
+        rule_id: int,
+        current_user: Dict[str, Any] = Depends(reply_server.get_current_user),
+    ):
+        try:
+            success = message_filter_service.delete_rule(rule_id, current_user['user_id'])
+            if not success:
+                raise HTTPException(status_code=404, detail='消息过滤规则不存在')
+            return {'success': True, 'message': '删除成功'}
+        except HTTPException:
+            raise
+        except Exception as e:
+            reply_server.log_with_user('error', f"删除消息过滤规则失败: {reply_server.mask_sensitive_text(e)}", current_user)
+            raise HTTPException(status_code=500, detail='删除消息过滤规则失败')
+
     return router

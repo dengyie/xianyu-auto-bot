@@ -988,6 +988,31 @@ class DBBase:
             ''')
             self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_xy_platform_blacklist_user_buyer ON xy_platform_blacklist(user_id, buyer_id)")
 
+            # 创建消息过滤规则表（移植上游 #110）
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS xy_message_filter_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                cookie_id TEXT,
+                item_id TEXT,
+                name TEXT NOT NULL,
+                match_type TEXT DEFAULT 'contains',
+                patterns TEXT NOT NULL,
+                message_source TEXT DEFAULT 'user',
+                is_enabled INTEGER DEFAULT 1,
+                action_skip_auto_reply INTEGER DEFAULT 1,
+                action_skip_ai_reply INTEGER DEFAULT 0,
+                action_pause_minutes INTEGER DEFAULT 0,
+                action_notify INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (cookie_id) REFERENCES cookies(id) ON DELETE CASCADE
+            )
+            ''')
+            self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_xy_message_filter_rules_user_enabled ON xy_message_filter_rules(user_id, is_enabled)")
+            self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_xy_message_filter_rules_scope ON xy_message_filter_rules(user_id, cookie_id, item_id, is_enabled)")
+
             # 插入默认通知模板
             cursor.execute('''
             INSERT OR IGNORE INTO notification_templates (type, template) VALUES

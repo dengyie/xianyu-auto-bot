@@ -1016,6 +1016,7 @@ def create_trading_router() -> APIRouter:
             "category": request.category,
             "brand": request.brand,
             "condition": request.condition,
+            "sku_config": request.sku_config,
         }, partial=False)
         material_id = request.material_id
         if material_id is not None:
@@ -1036,6 +1037,7 @@ def create_trading_router() -> APIRouter:
             post_price=data.get('postage'),
             can_self_pickup=bool(data.get('can_self_pickup')),
             material_id=material_id,
+            sku_config=data.get('sku_config'),
         )
 
     @router.post("/product-publish/batch")
@@ -1062,8 +1064,16 @@ def create_trading_router() -> APIRouter:
 
         batch_id = f"product_publish_{uuid.uuid4()}"
         jobs: List[Dict[str, Any]] = []
+        from utils.product_sku import ProductSkuValidationError, normalize_sku_config
         for material in materials:
             _validate_publish_images(material.get('images') or [])
+            try:
+                material['sku_config'] = normalize_sku_config(material.get('sku_config'))
+            except ProductSkuValidationError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"商品素材 #{material.get('id')} 的多规格配置无效: {exc}",
+                ) from exc
             for account_id in account_ids:
                 log_id = db_manager.db_manager.add_publish_log(
                     current_user['user_id'],

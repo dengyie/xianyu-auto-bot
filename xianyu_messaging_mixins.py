@@ -1487,8 +1487,8 @@ class MessagePipelineMixin:
                 return
 
             # 检查该chat_id是否处于暂停状态
-            if _host.pause_manager.is_chat_paused(chat_id):
-                remaining_time = _host.pause_manager.get_remaining_pause_time(chat_id)
+            if _host.pause_manager.is_chat_paused(chat_id, self.cookie_id):
+                remaining_time = _host.pause_manager.get_remaining_pause_time(chat_id, self.cookie_id)
                 remaining_minutes = remaining_time // 60
                 remaining_seconds = remaining_time % 60
                 logger.info(f"[{msg_time}] 【{self.cookie_id}】【系统】chat_id {chat_id} 自动回复已暂停，剩余时间: {remaining_minutes}分{remaining_seconds}秒")
@@ -1503,6 +1503,22 @@ class MessagePipelineMixin:
             )
             if blacklist_hit:
                 return
+
+            # 消息过滤规则（移植上游 #110）：决策期只读匹配，不在此处执行动作
+            message_filter_result = await self._apply_message_filters(
+                send_user_name=send_user_name,
+                send_user_id=send_user_id,
+                send_message=send_message,
+                item_id=item_id,
+                chat_id=chat_id,
+                msg_time=msg_time,
+                message_source='user',
+                execute_actions=False,
+            )
+            if message_filter_result.get('skip_auto_reply'):
+                logger.info(f"[{msg_time}] 【{self.cookie_id}】命中消息过滤规则，跳过自动回复")
+                return
+            skip_ai_reply = bool(message_filter_result.get('skip_ai_reply'))
 
             reply = None
             reply_source = None
@@ -1533,10 +1549,45 @@ class MessagePipelineMixin:
                     elif reply:
                         reply_source = '默认'
                     else:
-                        # 3. 最后尝试AI回复
-                        reply = await self.get_ai_reply(send_user_name, send_user_id, send_message, item_id, chat_id)
-                        if reply:
-                            reply_source = 'AI'
+                        # 3. 最后尝试AI回复（skip_ai_reply 命中时直接跳过，上游 #110）
+                        if skip_ai_reply:
+                            logger.info(f"[{msg_time}] 【{self.cookie_id}】命中消息过滤规则，跳过AI回复")
+                        else:
+                            reply = await self.get_ai_reply(send_user_name, send_user_id, send_message, item_id, chat_id)
+                            if reply:
+                                # AI 回复发送前过滤（上游 #110）：命中即执行规则动作并取消发送
+                                ai_filter_result = await self._apply_message_filters(
+                                    send_user_name=send_user_name,
+                                    send_user_id=send_user_id,
+                                    send_message=str(reply),
+                                    item_id=item_id,
+                                    chat_id=chat_id,
+                                    msg_time=msg_time,
+                                    message_source='ai',
+                                    execute_actions=True,
+                                )
+                                if ai_filter_result.get('matched'):
+                                    matched_names = '、'.join([
+                                        str(rule.get('name') or rule.get('id') or '').strip()
+                                        for rule in (ai_filter_result.get('rules') or [])
+                                        if str(rule.get('name') or rule.get('id') or '').strip()
+                                    ]) or '消息过滤规则'
+                                    should_block_ai = bool(
+                                        ai_filter_result.get('skip_auto_reply')
+                                        or ai_filter_result.get('skip_ai_reply')
+                                    )
+                                    if should_block_ai:
+                                        logger.warning(
+                                            f"[{msg_time}] 【{self.cookie_id}】AI回复发送前命中{matched_names}，"
+                                            f"已执行规则动作并取消发送: {str(reply)[:100]}"
+                                        )
+                                        reply = None
+                                        reply_source = None
+                                    else:
+                                        logger.info(
+                                            f"[{msg_time}] 【{self.cookie_id}】AI回复发送前命中{matched_names}，"
+                                            "已执行规则动作，AI回复继续发送"
+                                        )
 
             # 注意：这里只有商品ID，没有标题和详情，根据新的规则不保存到数据库
             # 商品信息会在其他有完整信息的地方保存（如发货规则匹配时）
@@ -3646,6 +3697,72 @@ class SendMixin:
         except Exception as e:
             logger.error(f"获取关键词回复失败: {self._safe_str(e)}")
             return None
+    async def _apply_message_filters(
+        self,
+        send_user_name: str,
+        send_user_id: str,
+        send_message: str,
+        item_id: str,
+        chat_id: str,
+        msg_time: str,
+        message_source: str = 'user',
+        execute_actions: bool = True,
+    ) -> dict:
+        """匹配消息过滤规则，并按需执行暂停/通知动作（移植上游 #110）。"""
+        empty_result = {
+            'matched': False,
+            'rules': [],
+            'skip_auto_reply': False,
+            'skip_ai_reply': False,
+            'pause_minutes': 0,
+            'notify_enabled': False,
+        }
+        try:
+            from utils.message_filter_service import message_filter_service
+            result = message_filter_service.match_by_cookie(
+                cookie_id=self.cookie_id,
+                message=send_message,
+                item_id=item_id,
+                message_source=message_source,
+            )
+        except Exception as e:
+            logger.error(f"[{msg_time}] 【{self.cookie_id}】消息过滤规则匹配失败: {self._safe_str(e)}")
+            return empty_result
+
+        if not result.get('matched'):
+            return result
+
+        matched_rules = result.get('rules') or []
+        rule_names = [str(rule.get('name') or rule.get('id') or '').strip() for rule in matched_rules]
+        rule_label = '、'.join([name for name in rule_names if name]) or '未命名规则'
+        logger.info(
+            f"[{msg_time}] 【{self.cookie_id}】命中消息过滤规则: {rule_label}，"
+            f"skip_auto={bool(result.get('skip_auto_reply'))}, "
+            f"skip_ai={bool(result.get('skip_ai_reply'))}, "
+            f"pause={int(result.get('pause_minutes') or 0)}分钟, "
+            f"notify={bool(result.get('notify_enabled'))}"
+        )
+
+        if not execute_actions:
+            return result
+
+        pause_minutes = int(result.get('pause_minutes') or 0)
+        if pause_minutes > 0:
+            _host.pause_manager.pause_chat_for(
+                chat_id,
+                self.cookie_id,
+                pause_minutes,
+                reason=f"命中消息过滤规则「{rule_label}」"
+            )
+
+        if result.get('notify_enabled'):
+            try:
+                notify_message = f"[消息过滤] 命中规则「{rule_label}」：{send_message}"
+                await self.send_notification(send_user_name, send_user_id, notify_message, item_id, chat_id)
+            except Exception as notify_error:
+                logger.error(f"[{msg_time}] 【{self.cookie_id}】消息过滤通知发送失败: {self._safe_str(notify_error)}")
+
+        return result
     async def get_ai_reply(self, send_user_name: str, send_user_id: str, send_message: str, item_id: str, chat_id: str):
         """获取AI回复"""
         try:

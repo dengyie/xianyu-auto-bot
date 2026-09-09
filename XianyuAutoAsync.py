@@ -171,7 +171,8 @@ class InitAuthError(Exception):
 class AutoReplyPauseManager:
     """自动回复暂停管理器"""
     def __init__(self):
-        # 存储每个chat_id的暂停信息 {chat_id: pause_until_timestamp}
+        # 存储暂停信息 {(cookie_id, chat_id): pause_until_timestamp}
+        # 按账号+会话复合键隔离：不同账号出现相同 chat_id 字符串时暂停互不污染（上游 #109）
         self.paused_chats = {}
 
     def pause_chat(self, chat_id: str, cookie_id: str):
@@ -189,36 +190,54 @@ class AutoReplyPauseManager:
             logger.info(f"【{cookie_id}】检测到手动发出消息，但暂停时间设置为0，不暂停自动回复")
             return
 
-        pause_duration_seconds = pause_minutes * 60
-        pause_until = time.time() + pause_duration_seconds
-        self.paused_chats[chat_id] = pause_until
+        self.pause_chat_for(chat_id, cookie_id, pause_minutes, reason="检测到手动发出消息")
 
-        # 计算暂停结束时间
+    def pause_chat_for(self, chat_id: str, cookie_id: str, pause_minutes: int, reason: str = "消息过滤规则"):
+        """按指定分钟数暂停自动回复；已有更长暂停时保持原暂停（上游 #109/#110）。"""
+        try:
+            pause_minutes = int(pause_minutes or 0)
+        except (TypeError, ValueError):
+            pause_minutes = 0
+
+        if pause_minutes <= 0:
+            logger.info(f"【{cookie_id}】{reason}，但暂停时间为0，不暂停自动回复")
+            return
+
+        pause_until = time.time() + pause_minutes * 60
+        pause_key = (str(cookie_id), str(chat_id))
+        existing_until = self.paused_chats.get(pause_key, 0)
+        if existing_until and existing_until > pause_until:
+            logger.info(f"【{cookie_id}】{reason}，chat_id {chat_id} 已有更长暂停时间，保持原暂停")
+            return
+
+        self.paused_chats[pause_key] = pause_until
         end_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(pause_until))
-        logger.info(f"【{cookie_id}】检测到手动发出消息，chat_id {chat_id} 自动回复暂停{pause_minutes}分钟，恢复时间: {end_time}")
+        logger.info(f"【{cookie_id}】{reason}，chat_id {chat_id} 自动回复暂停{pause_minutes}分钟，恢复时间: {end_time}")
 
-    def is_chat_paused(self, chat_id: str) -> bool:
-        """检查指定chat_id是否处于暂停状态"""
-        if chat_id not in self.paused_chats:
+    def is_chat_paused(self, chat_id: str, cookie_id: str) -> bool:
+        """检查指定账号的指定chat_id是否处于暂停状态"""
+        pause_key = (str(cookie_id), str(chat_id))
+        if pause_key not in self.paused_chats:
             return False
 
         current_time = time.time()
-        pause_until = self.paused_chats[chat_id]
+        pause_until = self.paused_chats[pause_key]
 
         if current_time >= pause_until:
             # 暂停时间已过，移除记录
-            del self.paused_chats[chat_id]
+            del self.paused_chats[pause_key]
             return False
 
         return True
 
-    def get_remaining_pause_time(self, chat_id: str) -> int:
-        """获取指定chat_id剩余暂停时间（秒）"""
-        if chat_id not in self.paused_chats:
+    def get_remaining_pause_time(self, chat_id: str, cookie_id: str) -> int:
+        """获取指定账号的指定chat_id剩余暂停时间（秒）"""
+        pause_key = (str(cookie_id), str(chat_id))
+        if pause_key not in self.paused_chats:
             return 0
 
         current_time = time.time()
-        pause_until = self.paused_chats[chat_id]
+        pause_until = self.paused_chats[pause_key]
         remaining = max(0, int(pause_until - current_time))
 
         return remaining
@@ -226,11 +245,11 @@ class AutoReplyPauseManager:
     def cleanup_expired_pauses(self):
         """清理已过期的暂停记录"""
         current_time = time.time()
-        expired_chats = [chat_id for chat_id, pause_until in self.paused_chats.items()
+        expired_keys = [pause_key for pause_key, pause_until in self.paused_chats.items()
                         if current_time >= pause_until]
 
-        for chat_id in expired_chats:
-            del self.paused_chats[chat_id]
+        for pause_key in expired_keys:
+            del self.paused_chats[pause_key]
 
 
 # 全局暂停管理器实例

@@ -3814,6 +3814,7 @@ def _summarize_publish_sync(sync_result: Dict[str, Any]) -> Tuple[str, str, int,
 async def _publish_product_to_account(
     *,
     current_user: Dict[str, Any],
+    sku_config: Optional[Dict[str, Any]] = None,
     account_id: str,
     title: str,
     description: str,
@@ -3847,8 +3848,13 @@ async def _publish_product_to_account(
     current_price_value = _parse_optional_non_negative_float(current_price, "现价")
     original_price_value = _parse_optional_non_negative_float(original_price, "原价")
     post_price_value = _parse_optional_non_negative_float(post_price, "邮费")
+    from utils.product_sku import ProductSkuValidationError, normalize_sku_config
+    try:
+        normalized_sku_config = normalize_sku_config(sku_config)
+    except ProductSkuValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if original_price_value is not None and current_price_value is None:
+    if original_price_value is not None and current_price_value is None and not normalized_sku_config:
         raise HTTPException(status_code=400, detail="填写原价时必须同时填写现价")
     if delivery_choice not in PRODUCT_PUBLISH_DELIVERY_CHOICES:
         raise HTTPException(status_code=400, detail="不支持的运费方式")
@@ -3873,7 +3879,8 @@ async def _publish_product_to_account(
     try:
         logger.info(
             f"{user_prefix} 开始发布商品: cookie_id={cleaned_account_id}, "
-            f"title={cleaned_title}, images={len(image_payloads)}, delivery_choice={delivery_choice}"
+            f"title={cleaned_title}, images={len(image_payloads)}, delivery_choice={delivery_choice}, "
+            f"multi_sku={bool(normalized_sku_config)}"
         )
 
         proxy_config = db_manager.get_cookie_proxy_config(cleaned_account_id)
@@ -3887,6 +3894,7 @@ async def _publish_product_to_account(
                 delivery_choice=delivery_choice,
                 post_price=post_price_value,
                 can_self_pickup=bool(can_self_pickup),
+                sku_config=normalized_sku_config,
             )
             latest_cookies_str = publisher.cookies_str
             published_item_id = publisher.extract_published_item_id(publish_result)
@@ -4012,6 +4020,7 @@ async def _run_product_batch_publish(batch_id: str, jobs: List[Dict[str, Any]], 
                 material_id=material.get('id'),
                 batch_id=batch_id,
                 log_id=log_id,
+                sku_config=material.get('sku_config'),
             )
         except HTTPException as exc:
             logger.warning(

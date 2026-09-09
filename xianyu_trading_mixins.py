@@ -8,6 +8,8 @@ import asyncio
 import json
 import re
 import time
+
+from utils.item_pagination import normalize_item_list_page_size
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
@@ -2064,10 +2066,14 @@ class ItemMixin:
 
         Args:
             page_number (int): 页码，从1开始
-            page_size (int): 每页数量，默认20
+            page_size (int): 每页数量，默认20（超过接口上限会被归一化）
             retry_count (int): 重试次数，内部使用
             sync_item_details (bool): 是否同步已存在商品的最新详情
         """
+        requested_page_size = page_size
+        page_size = normalize_item_list_page_size(page_size)
+        if str(requested_page_size) != str(page_size):
+            logger.warning(f"商品列表每页数量已限制为 {page_size}: requested={requested_page_size}")
         if retry_count >= 4:  # 最多重试3次
             logger.error("获取商品信息失败，重试次数过多")
             return {"error": "获取商品信息失败，重试次数过多"}
@@ -2241,6 +2247,7 @@ class ItemMixin:
         page_number = 1
         total_saved = 0
 
+        page_size = normalize_item_list_page_size(page_size)
         logger.info(f"开始获取所有商品信息，每页{page_size}条")
 
         while True:

@@ -53,6 +53,8 @@ class PasswordLoginMixin:
             dict: Cookie字典，失败返回None
         """
         try:
+            if not getattr(self, 'auto_slider_enabled', True):
+                show_browser = True
             self.last_login_error = ""
             previous_slider_refresh_mode = getattr(self, '_slider_refresh_mode', False)
             self._slider_refresh_mode = force_clean_context
@@ -2329,6 +2331,17 @@ class PasswordLoginMixin:
                 return None
                 
         except Exception as e:
+            # 正常情况下必须走 goofish 主域回访、域优先筛选和 token 稳定化。
+            # 只有用户在人工验证成功后关闭了页面、正常收口无法继续时，才使用
+            # 成功瞬间保存的 goofish 域快照作为兜底。（上游 #111）
+            manual_cookies = getattr(self, '_manual_success_cookies', None)
+            if manual_cookies:
+                self._manual_success_cookies = None
+                logger.warning(
+                    f"【{self.pure_user_id}】页面已不可访问，使用人工验证成功时的"
+                    f"goofish Cookie 快照兜底，共{len(manual_cookies)}个"
+                )
+                return manual_cookies
             logger.error(f"【{self.pure_user_id}】获取滑块验证成功后的cookie失败: {str(e)}")
             return None
 
