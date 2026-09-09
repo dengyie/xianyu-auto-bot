@@ -186,8 +186,13 @@ xianyu-auto-bot/
 | `SERVER_HOST` / `PUBLIC_IP` | 自动探测 | 面板可达主机 |
 | `CAPTCHA_PUBLIC_BASE_URL` | 空 | 反代完整前缀时优先使用 |
 | `CAPTCHA_CONTROL_API_KEY` | 空 | 管理接口必需；会话 token 可打开单会话面板 |
-| `XY_SLIDER_HUMAN_FALLBACK` | `true` | 设为 `0/false` 可关闭人工兜底 |
+| `XY_SLIDER_HUMAN_FALLBACK` | `true` | 设为 `0/false` 可关闭人工兜底（orchestrator 层，token 刷新链路） |
 | `SLIDEX_REMOTE_TIMEOUT` | `180` | 人工等待超时（秒） |
+| `XY_ENABLE_AUTO_SLIDER` | `true` | 设为 `0/false/no/off` 时滑块改人工接管（XianyuSliderStealth 类内；手动导入/密码恢复等直连链路生效，强制有头） |
+| `XY_MANUAL_SLIDER_TIMEOUT` | `180` | 人工滑块等待超时（秒，下限 30） |
+| `XY_SLIDER_RISK_WINDOW` | `1800` | token 刷新滑块风控门控回看窗口（秒，下限 300） |
+| `XY_SLIDER_RISK_FAILURE_THRESHOLD` | `6` | 窗口内连续失败达到该值且无成功记录时延迟验证（下限 3） |
+| `XY_OUTBOUND_IP_PROBE_URL` | `https://api.ipify.org?format=json` | 出口 IP 一致性探测地址；置空可禁用 |
 
 部署仍走 **Actions → GHCR → VPS `./docker-deploy.sh update`**，不要在 VPS 上 `compose build`。不要默认公网暴露 Chrome/noVNC。
 

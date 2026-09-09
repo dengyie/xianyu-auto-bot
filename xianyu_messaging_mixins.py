@@ -2752,11 +2752,34 @@ class MessagePipelineMixin:
                     except Exception as e:
                         logger.debug(f"更新买家昵称失败: {self._safe_str(e)}")
 
+            # 接收期消息过滤（上游 #110 原始设计）：动作（暂停/通知）在消息进入
+            # 自动回复链之前执行；与管线内决策期钩子（execute_actions=False）
+            # 和 AI 发送前钩子分工——此处覆盖 user/system 源的全部回复路径。
+            message_filter_result = await self._apply_message_filters(
+                send_user_name=send_user_name,
+                send_user_id=send_user_id,
+                send_message=send_message,
+                item_id=item_id,
+                chat_id=chat_id,
+                msg_time=msg_time,
+                message_source='system' if is_system_message else 'user',
+                execute_actions=True,
+            )
+
             if not allow_auto_reply:
                 logger.info(
                     f"【{self.cookie_id}】[{msg_id}] ⏹️ 当前消息不进入自动回复链: "
                     f"route={message_route}, status_signal={order_status_signal or 'none'}"
                 )
+                return
+
+            if message_filter_result.get('skip_auto_reply'):
+                rule_names = '、'.join([
+                    str(rule.get('name') or rule.get('id') or '').strip()
+                    for rule in (message_filter_result.get('rules') or [])
+                    if str(rule.get('name') or rule.get('id') or '').strip()
+                ]) or '消息过滤规则'
+                logger.info(f"【{self.cookie_id}】[{msg_id}] ⏹️ 命中{rule_names}，跳过自动回复")
                 return
 
             # 身份判断：本账号主动去别人商品下咨询/购买时，自己是买家身份，
@@ -3763,6 +3786,7 @@ class SendMixin:
                 logger.error(f"[{msg_time}] 【{self.cookie_id}】消息过滤通知发送失败: {self._safe_str(notify_error)}")
 
         return result
+
     async def get_ai_reply(self, send_user_name: str, send_user_id: str, send_message: str, item_id: str, chat_id: str):
         """获取AI回复"""
         try:

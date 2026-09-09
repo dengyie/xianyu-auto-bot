@@ -225,8 +225,8 @@ class MessageFilterService:
         item_id: Optional[str] = None,
         message_source: str = 'user',
     ) -> Dict[str, Any]:
-        cookie_details = self.db.get_cookie_details(cookie_id) if cookie_id else None
-        user_id = cookie_details.get('user_id') if cookie_details else None
+        # 热路径（每条消息调用）：只取属主 user_id，不解密 Cookie/密码等敏感字段
+        user_id = self.db.get_cookie_owner_user_id(cookie_id) if cookie_id else None
         if not user_id:
             return {
                 'matched': False,

@@ -118,6 +118,19 @@ class DBAccountsMixin:
             except Exception as e:
                 logger.error(f"根据ID获取Cookie失败: {e}")
                 return None
+
+    def get_cookie_owner_user_id(self, cookie_id: str) -> Optional[int]:
+        """只取 Cookie 的属主 user_id（消息过滤等热路径用；不解密任何敏感字段）。"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                self._execute_sql(cursor, "SELECT user_id FROM cookies WHERE id = ?", (cookie_id,))
+                row = cursor.fetchone()
+                return int(row[0]) if row and row[0] is not None else None
+            except Exception as e:
+                logger.error(f"获取Cookie属主失败: {e}")
+                return None
+
     def get_cookie_details(self, cookie_id: str) -> Optional[Dict[str, any]]:
         """获取Cookie的详细信息，包括备注、状态文案、暂停时间、账号信息和代理配置"""
         with self.lock:
