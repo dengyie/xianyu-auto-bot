@@ -586,7 +586,36 @@ class AIReplyEngine:
             {"role": "user", "content": user_prompt}
         ]
 
+    # 上游（CPA/负载均衡类网关）存在瞬时 503 或空回复（实测约 25%），
+    # 统一在 _invoke_provider 重试：异常或空回复都算失败，间隔 backoff 再试。
+    PROVIDER_MAX_ATTEMPTS = 3
+    PROVIDER_RETRY_BACKOFF_SECONDS = 0.8
+
     def _invoke_provider(self, settings: dict, messages: List[Dict[str, str]]) -> Optional[str]:
+        """provider 调用统一重试入口：异常或空回复重试，默认共 3 次尝试。"""
+        last_error = None
+        for attempt in range(1, self.PROVIDER_MAX_ATTEMPTS + 1):
+            reply = None
+            try:
+                reply = self._invoke_provider_once(settings, messages)
+            except Exception as exc:
+                last_error = f"exception: {exc}"
+                logger.warning(f"provider 调用异常（第 {attempt}/{self.PROVIDER_MAX_ATTEMPTS} 次）: {exc}")
+            else:
+                if reply and reply.strip():
+                    if attempt > 1:
+                        logger.info(f"provider 重试第 {attempt} 次成功")
+                    return reply
+                last_error = "empty reply"
+                logger.warning(f"provider 返回空回复（第 {attempt}/{self.PROVIDER_MAX_ATTEMPTS} 次）")
+
+            if attempt < self.PROVIDER_MAX_ATTEMPTS:
+                time.sleep(self.PROVIDER_RETRY_BACKOFF_SECONDS)
+
+        logger.error(f"provider 重试耗尽，放弃生成: {last_error}")
+        return None
+
+    def _invoke_provider_once(self, settings: dict, messages: List[Dict[str, str]]) -> Optional[str]:
         """按 API 类型分发 provider 调用（同步阻塞 I/O；异步路径经 to_thread 包装）"""
         api_type = self._resolve_api_type(settings)
         logger.info(f"使用 {api_type} API生成回复")
