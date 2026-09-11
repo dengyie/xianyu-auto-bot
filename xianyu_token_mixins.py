@@ -305,6 +305,7 @@ class TokenMixin:
                             remaining = self._get_qr_login_grace_remaining_seconds()
                             self.last_token_refresh_status = "qr_login_grace_wait"
                             self.last_token_refresh_error_message = f"扫码登录后Token预检命中风控，已进入稳定期退避，剩余{remaining}秒"
+                            self.last_token_refresh_error_until = float(self._get_qr_login_grace_until() or 0)
                             return None
 
                         manual_refresh_state = self.get_manual_refresh_state(self.cookie_id)

@@ -1,9 +1,11 @@
 """扫码稳定期实时展示（修复"剩余N秒"写死不动、面板像卡死的误读）。
 
 后端 _build_qr_grace_display 从持久化 qr_login_grace_until 现算剩余并重写
-token_refresh_error_message；徽章/连接文案由前端按 qr_grace_* 字段渲染。
+token_refresh_error_message；其余带写死倒计时的状态（密码登录退避等）由
+_rewrite_frozen_remaining_message 按记录的 last_token_refresh_error_until
+统一现算；徽章/连接文案由前端按 qr_grace_* 字段渲染。
 """
-from reply_server import _build_qr_grace_display
+from reply_server import _build_qr_grace_display, _rewrite_frozen_remaining_message
 
 
 def test_non_grace_status_returns_none():
@@ -42,3 +44,25 @@ def test_expired_grace_reports_recovery_phase():
 
 def test_invalid_deadline_treated_as_missing():
     assert _build_qr_grace_display('qr_login_grace_wait', 'not-a-number') is None
+
+
+def test_rewrite_updates_frozen_countdown():
+    message = '密码登录失败退避中，剩余1799.0秒'
+    rewritten = _rewrite_frozen_remaining_message(message, 1_000_001_800, now=1_000_000_000)
+    assert rewritten is not None
+    assert '剩余1800秒' in rewritten
+    assert '剩余1799.0秒' not in rewritten
+    assert '预计' in rewritten
+
+
+def test_rewrite_expired_reports_recovery():
+    rewritten = _rewrite_frozen_remaining_message('密码登录失败退避中，剩余30秒', 1_000_000_000, now=1_000_000_050)
+    assert '剩余0秒' in rewritten
+    assert '已到期' in rewritten
+
+
+def test_rewrite_passthrough_without_deadline_or_countdown():
+    assert _rewrite_frozen_remaining_message('无倒计时消息', 1_000_000_000, now=1_000_000_000) == '无倒计时消息'
+    assert _rewrite_frozen_remaining_message('剩余1799.0秒', 0, now=1_000_000_000) == '剩余1799.0秒'
+    assert _rewrite_frozen_remaining_message('剩余1799.0秒', None, now=1_000_000_000) == '剩余1799.0秒'
+    assert _rewrite_frozen_remaining_message(None, 1_000_000_000, now=1_000_000_000) is None

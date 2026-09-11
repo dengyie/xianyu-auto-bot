@@ -9,6 +9,7 @@ from urllib import request as urllib_request, error as urllib_error
 import base64
 import hashlib
 import io
+import re
 import secrets
 import time
 import json
@@ -1691,6 +1692,32 @@ def _build_runtime_risk_control_summary(
     }
 
 
+_FROZEN_REMAINING_PATTERN = re.compile(r'剩余[0-9.]+秒')
+
+
+def _rewrite_frozen_remaining_message(message: Optional[str], error_until: Optional[float], now: float) -> Optional[str]:
+    """把入态时写死"剩余N秒"的静态错误消息重写为实时倒计时。
+
+    状态切换那一刻生成的 token_refresh_error_message（退避/冷却/稳定期）会带着
+    当时的剩余秒数一直展示，面板读起来像卡死。状态侧在设置消息时同步记录
+    last_token_refresh_error_until（epoch 秒），展示层据此现算剩余并补预计
+    时刻；无截止时间或消息不含倒计时则原样返回。
+    """
+    if not message or not error_until:
+        return message
+    try:
+        until = float(error_until)
+    except (TypeError, ValueError):
+        return message
+    if until <= 0 or not _FROZEN_REMAINING_PATTERN.search(message):
+        return message
+    remaining = max(0, int(until - now))
+    rewritten = _FROZEN_REMAINING_PATTERN.sub(f'剩余{remaining}秒', message)
+    if remaining <= 0:
+        return f'{rewritten}（已到期，正在恢复）'
+    return f'{rewritten}（预计 {_format_runtime_timestamp(until)} 结束）'
+
+
 def _build_qr_grace_display(token_refresh_status: Optional[str], grace_until: Optional[int], now: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """扫码登录稳定期的实时展示信息。
 
@@ -2081,6 +2108,13 @@ def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
         logger.warning(f"构建扫码稳定期实时展示失败: {mask_sensitive_text(e)}")
     if qr_grace_display:
         runtime_status.update(qr_grace_display)
+    else:
+        # 非稳定期状态也可能带写死的倒计时（如密码登录退避）：按记录的截止时间现算
+        runtime_status['token_refresh_error_message'] = _rewrite_frozen_remaining_message(
+            runtime_status.get('token_refresh_error_message'),
+            getattr(live_instance, 'last_token_refresh_error_until', None),
+            now,
+        )
 
     runtime_status.update(_build_runtime_risk_control_summary(
         token_refresh_status,

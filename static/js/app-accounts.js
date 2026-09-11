@@ -55,6 +55,7 @@ function getAboutStatusText(type, value) {
             post_slider_session_settling: '滑块后稳定中',
             restarted_after_cookie_refresh: '已触发重连',
             qr_login_grace_wait: '扫码稳定期',
+            password_login_backoff_wait: '密码登录退避中',
             captcha_max_retries_exceeded: '滑块重试超限',
             token_expired_recovery_failed: '过期恢复失败',
             token_refresh_failed: '刷新失败',

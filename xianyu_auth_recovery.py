@@ -426,6 +426,7 @@ class XianyuAuthRecoveryMixin:
             return False
         self.last_token_refresh_status = "qr_login_grace_wait"
         self.last_token_refresh_error_message = f"扫码登录稳定期中，剩余{remaining}秒"
+        self.last_token_refresh_error_until = float(self._get_qr_login_grace_until() or 0)
         logger.warning(f"【{self.cookie_id}】扫码登录稳定期中，暂缓自动认证恢复，还需等待 {remaining} 秒")
         return True
 
@@ -649,6 +650,7 @@ class XianyuAuthRecoveryMixin:
 
         self.last_token_refresh_status = "password_login_backoff_wait"
         self.last_token_refresh_error_message = f"密码登录失败退避中，剩余{remaining_time:.1f}秒"
+        self.last_token_refresh_error_until = float(failure_backoff.get('until') or 0)
         return True
 
 
