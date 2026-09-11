@@ -280,15 +280,17 @@ class ItemPublisher:
     }
 
     async def set_item_shelf_state(self, item_id: str, *, on_shelf: bool) -> Dict[str, Any]:
-        """下架（on_shelf=False）或重新上架商品，单次调用，仅 token 过期时重试。"""
+        """下架（on_shelf=False）或重新上架商品，单次调用，仅 token 过期/网络异常重试。"""
         action = "upshelf" if on_shelf else "downshelf"
         api_name, version = self.SHELF_ACTIONS[action]
         cleaned_item_id = str(item_id or "").strip()
-        if not cleaned_item_id:
-            return {"success": False, "action": action, "item_id": "", "error": "缺少 itemId"}
+        if not cleaned_item_id.isdigit() or not (5 <= len(cleaned_item_id) <= 20):
+            return {"success": False, "action": action, "item_id": cleaned_item_id, "error": "itemId 格式无效"}
 
         last_error = ""
-        for attempt in range(3):
+        attempts = 3
+        for attempt in range(1, attempts + 1):
+            retryable = False
             try:
                 res = await self._post_mtop(
                     api_name=api_name,
@@ -299,21 +301,21 @@ class ItemPublisher:
                 )
             except Exception as exc:
                 last_error = f"exception: {exc}"
-                logger.warning(f"【{self.cookie_id}】{action} 商品 {cleaned_item_id} 请求异常（第 {attempt + 1} 次）: {exc}")
-                await asyncio.sleep(0.5)
-                continue
+                retryable = True
+                logger.warning(f"【{self.cookie_id}】{action} 商品 {cleaned_item_id} 请求异常（第 {attempt} 次）: {exc}")
+            else:
+                if self.is_success_response(res):
+                    logger.info(f"【{self.cookie_id}】{action} 商品 {cleaned_item_id} 成功")
+                    return {"success": True, "action": action, "item_id": cleaned_item_id, "raw": res}
 
-            if self.is_success_response(res):
-                logger.info(f"【{self.cookie_id}】{action} 商品 {cleaned_item_id} 成功")
-                return {"success": True, "action": action, "item_id": cleaned_item_id, "raw": res}
+                last_error = self.extract_error_message(res)
+                logger.warning(f"【{self.cookie_id}】{action} 商品 {cleaned_item_id} 失败: {last_error}")
+                # _m_h5_tk 过期：响应 set-cookie 已带回新 token，重签重试（含历史拼写变体 EXOIRED）
+                retryable = "TOKEN_EXPIRED" in last_error or "TOKEN_EXOIRED" in last_error
 
-            last_error = self.extract_error_message(res)
-            logger.warning(f"【{self.cookie_id}】{action} 商品 {cleaned_item_id} 失败: {last_error}")
-            # _m_h5_tk 过期：响应 set-cookie 已带回新 token，重签重试（含历史拼写变体 EXOIRED）
-            if "TOKEN_EXPIRED" in last_error or "TOKEN_EXOIRED" in last_error:
-                await asyncio.sleep(0.5)
-                continue
-            break
+            if not retryable or attempt == attempts:
+                break
+            await asyncio.sleep(0.5)
 
         return {"success": False, "action": action, "item_id": cleaned_item_id, "error": last_error or "未知错误"}
 

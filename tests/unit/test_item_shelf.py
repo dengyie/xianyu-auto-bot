@@ -39,7 +39,7 @@ async def test_upshelf_uses_symmetric_api(monkeypatch):
     publisher = _publisher()
     calls = _patch_post(monkeypatch, publisher, [{"ret": ["SUCCESS::调用成功"]}])
 
-    result = await publisher.set_item_shelf_state("123", on_shelf=True)
+    result = await publisher.set_item_shelf_state("123456789", on_shelf=True)
 
     assert result["success"] is True
     assert result["action"] == "upshelf"
@@ -54,7 +54,7 @@ async def test_token_expiry_retries_then_succeeds(monkeypatch):
         {"ret": ["SUCCESS::调用成功"]},
     ])
 
-    result = await publisher.set_item_shelf_state("123", on_shelf=False)
+    result = await publisher.set_item_shelf_state("123456789", on_shelf=False)
 
     assert result["success"] is True
     assert len(calls) == 2
@@ -66,7 +66,7 @@ async def test_business_error_not_retried(monkeypatch):
         {"ret": ["FAIL_SYS_API_NOT_FOUNDED::接口不存在"]},
     ])
 
-    result = await publisher.set_item_shelf_state("123", on_shelf=True)
+    result = await publisher.set_item_shelf_state("123456789", on_shelf=True)
 
     assert result["success"] is False
     assert "API_NOT_FOUNDED" in result["error"]
@@ -80,4 +80,16 @@ async def test_missing_item_id_short_circuits(monkeypatch):
     result = await publisher.set_item_shelf_state("  ", on_shelf=False)
 
     assert result["success"] is False
+    assert calls == []
+
+
+async def test_invalid_item_id_format_short_circuits(monkeypatch):
+    publisher = _publisher()
+    calls = _patch_post(monkeypatch, publisher, [])
+
+    for bad_id in ["abc123", "12", "1" * 21, "1079612103929;drop"]:
+        result = await publisher.set_item_shelf_state(bad_id, on_shelf=False)
+        assert result["success"] is False, bad_id
+        assert "格式无效" in result["error"], bad_id
+
     assert calls == []

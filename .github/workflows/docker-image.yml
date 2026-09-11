@@ -21,7 +21,60 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
+  # 部署门禁：此前 push main 时 Test 与本 workflow 并行、互不依赖，
+  # 测试失败照样构建部署；现把 pytest 纳入 needs 链。
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DB_PATH: ':memory:'
+      SQL_LOG_ENABLED: 'false'
+      XY_SLIDER_DRISSION_FALLBACK: 'false'
+      XY_SLIDER_REMOTE_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.28'
+          enable-cache: true
+          python-version: '3.11'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Create virtual environment
+        run: |
+          uv venv .venv --python 3.11
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Install dependencies
+        run: |
+          uv pip install --python .venv/bin/python --require-hashes -r requirements.lock
+          # slidex 单一事实源 = requirements.txt（禁止再硬编码 commit，防三处 pin 漂移）
+          SLIDEX_REQ=$(grep -E '^slidex[[:space:]]*@' requirements.txt | head -1)
+          echo "slidex requirement: $SLIDEX_REQ"
+          uv pip install --python .venv/bin/python --no-deps "$SLIDEX_REQ"
+
+      - name: Prepare runtime directories
+        run: mkdir -p logs data backups static/uploads/images trajectory_history
+
+      - name: Run test suite
+        run: |
+          set -o pipefail
+          timeout --signal=KILL 480 python -m pytest -q --tb=line
+
+      - name: Undefined-name guard (pyflakes F821)
+        run: |
+          uv pip install --python .venv/bin/python --quiet pyflakes
+          if python -m pyflakes *.py utils/*.py db_manager/*.py app/*.py app/api/*.py app/api/routers/*.py app/application/*/*.py app/domain/*/*.py | grep "undefined name"; then
+            echo "::error::undefined names detected (F821)"
+            exit 1
+          fi
+
   build-and-push:
+    needs: pytest
     permissions:
       contents: read
       packages: write
@@ -97,7 +150,17 @@ jobs:
             'sudo docker compose -f /home/mango/xianyu-auto-bot/docker-compose.yml up -d --no-build --force-recreate'
 
       - name: Health check
+        # 1GB 机冷启动可能 3-5 分钟才 healthy（vault 记录），单次 sleep+curl 会误报红；
+        # 循环探测至 healthy，5 分钟仍失败才判红
         run: |
-          sleep 20
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
-            'curl -sS --noproxy "*" http://127.0.0.1:9000/health'
+          for i in $(seq 1 30); do
+            if ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
+              'curl -sS --noproxy "*" -m 5 http://127.0.0.1:9000/health'; then
+              echo "healthy after attempt $i"
+              exit 0
+            fi
+            echo "attempt $i not healthy yet, retrying in 10s..."
+            sleep 10
+          done
+          echo "::error::health check failed after 5 minutes"
+          exit 1

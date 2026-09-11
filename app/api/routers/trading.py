@@ -6,6 +6,7 @@ Shared models/helpers/state live in app/api/models.py, app/api/common.py and app
 
 from typing import Any, Dict, List, Optional
 import re
+import time
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from loguru import logger
 from app.api.models import BatchDeleteRequest, ItemDetailUpdate, ItemSearchMultipleRequest, ItemSearchRequest, ProductBatchPublishRequest, ProductMaterialRequest, ProductMaterialUpdateRequest, ProductSinglePublishRequest
@@ -773,6 +774,10 @@ def create_trading_router() -> APIRouter:
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
+    # 上下架是敏感写操作：每账号最小间隔（防误触连点/脚本风暴，非限流替代品）
+    _shelf_action_last_at: Dict[str, float] = {}
+    _SHELF_ACTION_MIN_INTERVAL_SECONDS = 3.0
+
     async def _apply_item_shelf_action(
         cookie_id: str,
         item_id: str,
@@ -780,8 +785,15 @@ def create_trading_router() -> APIRouter:
         on_shelf: bool,
         current_user: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """卖家商品管理：下架/重新上架（单次 mtop 调用，见 ItemPublisher.set_item_shelf_state）。"""
         cookie_id = reply_server._ensure_cookie_access(cookie_id, current_user)
+
+        if not re.fullmatch(r"\d{5,20}", item_id or ""):
+            raise HTTPException(status_code=400, detail="itemId 格式无效")
+
+        now = time.monotonic()
+        if now - _shelf_action_last_at.get(cookie_id, 0.0) < _SHELF_ACTION_MIN_INTERVAL_SECONDS:
+            raise HTTPException(status_code=429, detail="操作过于频繁，请稍后再试")
+        _shelf_action_last_at[cookie_id] = now
 
         cookie_info = db_manager.db_manager.get_cookie_by_id(cookie_id)
         if not cookie_info:
@@ -798,7 +810,7 @@ def create_trading_router() -> APIRouter:
             async with ItemPublisher(cookies_str, cookie_id, proxy_config=proxy_config) as publisher:
                 result = await publisher.set_item_shelf_state(item_id, on_shelf=on_shelf)
         except Exception as e:
-            logger.error(f"商品上下架请求异常: cookie_id={cookie_id}, item_id={item_id}, err={e}")
+            logger.error(f"商品上下架请求异常: cookie_id={cookie_id}, item_id={item_id}, err={reply_server.mask_sensitive_text(e)}")
             raise HTTPException(status_code=500, detail="商品上下架请求失败，请稍后重试")
 
         if not result.get('success'):

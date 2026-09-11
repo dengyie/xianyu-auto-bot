@@ -51,8 +51,11 @@ jobs:
         run: |
           # 必须装进项目 venv，禁止 --system（runner 系统 Python 受 PEP 668 保护）
           uv pip install --python .venv/bin/python --require-hashes -r requirements.lock
-          uv pip install --python .venv/bin/python --no-deps \
-            "slidex @ git+https://github.com/dengyie/slidex.git@d4d372ba7554795bed8cb71c31b4d481366db99f"
+          # slidex 引用单一事实源 = requirements.txt（历史上三处硬编码 pin 曾漂移：
+          # 2026-09-12 发现本文件仍装旧 commit，导致 CI 测试环境与生产镜像脱节）
+          SLIDEX_REQ=$(grep -E '^slidex[[:space:]]*@' requirements.txt | head -1)
+          echo "slidex requirement: $SLIDEX_REQ"
+          uv pip install --python .venv/bin/python --no-deps "$SLIDEX_REQ"
           python -c "import sys; print(sys.executable); assert sys.version_info[:2] == (3, 11), sys.version"
           node --version
           python -c "import execjs; print('js_runtime=', execjs.get().name)"
