@@ -49,6 +49,17 @@ jobs:
           uv venv .venv --python 3.11
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
+      - name: Verify dependency lock
+        # Test workflow 也有此校验；部署链不能假定它跑过（fail 的 Test 不阻断本 job）
+        run: |
+          uv pip compile requirements.txt \
+            --python-version 3.11 \
+            --python-platform x86_64-unknown-linux-gnu \
+            --generate-hashes \
+            --no-emit-package slidex \
+            --output-file requirements.lock
+          git diff --exit-code -- requirements.lock
+
       - name: Install dependencies
         run: |
           uv pip install --python .venv/bin/python --require-hashes -r requirements.lock
@@ -151,11 +162,12 @@ jobs:
 
       - name: Health check
         # 1GB 机冷启动可能 3-5 分钟才 healthy（vault 记录），单次 sleep+curl 会误报红；
-        # 循环探测至 healthy，5 分钟仍失败才判红
+        # 循环探测至 healthy，5 分钟仍失败才判红。
+        # -f：HTTP >=4xx 视为失败；grep：必须含 "status":"healthy"，防 5xx/降级响应误判
         run: |
           for i in $(seq 1 30); do
             if ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
-              'curl -sS --noproxy "*" -m 5 http://127.0.0.1:9000/health'; then
+              'curl -fsS --noproxy "*" -m 5 http://127.0.0.1:9000/health' | grep -q '"status":"healthy"'; then
               echo "healthy after attempt $i"
               exit 0
             fi

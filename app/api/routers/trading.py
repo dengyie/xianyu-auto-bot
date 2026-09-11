@@ -787,7 +787,7 @@ def create_trading_router() -> APIRouter:
     ) -> Dict[str, Any]:
         cookie_id = reply_server._ensure_cookie_access(cookie_id, current_user)
 
-        if not re.fullmatch(r"\d{5,20}", item_id or ""):
+        if not re.fullmatch(r"\d{5,20}", item_id or "", re.ASCII):
             raise HTTPException(status_code=400, detail="itemId 格式无效")
 
         now = time.monotonic()

@@ -284,7 +284,7 @@ class ItemPublisher:
         action = "upshelf" if on_shelf else "downshelf"
         api_name, version = self.SHELF_ACTIONS[action]
         cleaned_item_id = str(item_id or "").strip()
-        if not cleaned_item_id.isdigit() or not (5 <= len(cleaned_item_id) <= 20):
+        if not (cleaned_item_id.isascii() and cleaned_item_id.isdigit()) or not (5 <= len(cleaned_item_id) <= 20):
             return {"success": False, "action": action, "item_id": cleaned_item_id, "error": "itemId 格式无效"}
 
         last_error = ""

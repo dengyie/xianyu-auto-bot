@@ -4,7 +4,7 @@
 """
 import pytest
 
-from ai_reply_engine import AIReplyEngine
+from ai_reply_engine import AIReplyEngine, ProviderClientError
 
 
 @pytest.fixture
@@ -67,4 +67,13 @@ def test_success_on_first_attempt_stops_early(monkeypatch, engine):
     reply = engine._invoke_provider({"api_type": "openai"}, [{"role": "user", "content": "x"}])
 
     assert reply == "直接成功"
+    assert len(calls) == 1
+
+
+def test_client_error_4xx_not_retried(monkeypatch, engine):
+    calls = _patch_once(monkeypatch, engine, [ProviderClientError("401 Unauthorized")])
+
+    reply = engine._invoke_provider({"api_type": "openai"}, [{"role": "user", "content": "x"}])
+
+    assert reply is None
     assert len(calls) == 1

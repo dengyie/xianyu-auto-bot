@@ -87,7 +87,7 @@ async def test_invalid_item_id_format_short_circuits(monkeypatch):
     publisher = _publisher()
     calls = _patch_post(monkeypatch, publisher, [])
 
-    for bad_id in ["abc123", "12", "1" * 21, "1079612103929;drop"]:
+    for bad_id in ["abc123", "12", "1" * 21, "1079612103929;drop", "１００"]:  # 全角100
         result = await publisher.set_item_shelf_state(bad_id, on_shelf=False)
         assert result["success"] is False, bad_id
         assert "格式无效" in result["error"], bad_id

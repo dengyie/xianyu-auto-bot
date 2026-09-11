@@ -18,6 +18,10 @@ from loguru import logger
 from db_manager import db_manager
 
 
+class ProviderClientError(Exception):
+    """确定性客户端错误（HTTP 4xx）：重试无意义（key 错/参数错/权限不足）。"""
+
+
 class AIReplyEngine:
     """AI回复引擎 - 统一意图识别与回复生成"""
 
@@ -265,7 +269,10 @@ class AIReplyEngine:
 
         if response.status_code != 200:
             logger.error(f"OpenAI Chat API请求失败: {response.status_code} - {response.text}")
-            raise Exception(f"OpenAI Chat API请求失败: {response.status_code} - {response.text}")
+            exc_args = (f"OpenAI Chat API请求失败: {response.status_code} - {response.text}",)
+            if 400 <= response.status_code < 500:
+                raise ProviderClientError(*exc_args)
+            raise Exception(*exc_args)
 
         result = response.json()
         return result['choices'][0]['message']['content'].strip()
@@ -592,12 +599,21 @@ class AIReplyEngine:
     PROVIDER_RETRY_BACKOFF_SECONDS = 0.8
 
     def _invoke_provider(self, settings: dict, messages: List[Dict[str, str]]) -> Optional[str]:
-        """provider 调用统一重试入口：异常或空回复重试，默认共 3 次尝试。"""
+        """provider 调用统一重试入口：异常或空回复重试，默认共 3 次尝试。
+
+        4xx 类确定性失败（key 错/参数错，ProviderClientError）不重试；
+        5xx/网络异常/空回复视为瞬时故障重试。
+        """
         last_error = None
         for attempt in range(1, self.PROVIDER_MAX_ATTEMPTS + 1):
             reply = None
+            retryable = True
             try:
                 reply = self._invoke_provider_once(settings, messages)
+            except ProviderClientError as exc:
+                last_error = f"client error: {exc}"
+                retryable = False
+                logger.warning(f"provider 客户端错误，不重试（第 {attempt}/{self.PROVIDER_MAX_ATTEMPTS} 次）: {exc}")
             except Exception as exc:
                 last_error = f"exception: {exc}"
                 logger.warning(f"provider 调用异常（第 {attempt}/{self.PROVIDER_MAX_ATTEMPTS} 次）: {exc}")
@@ -609,8 +625,9 @@ class AIReplyEngine:
                 last_error = "empty reply"
                 logger.warning(f"provider 返回空回复（第 {attempt}/{self.PROVIDER_MAX_ATTEMPTS} 次）")
 
-            if attempt < self.PROVIDER_MAX_ATTEMPTS:
-                time.sleep(self.PROVIDER_RETRY_BACKOFF_SECONDS)
+            if not retryable or attempt >= self.PROVIDER_MAX_ATTEMPTS:
+                break
+            time.sleep(self.PROVIDER_RETRY_BACKOFF_SECONDS)
 
         logger.error(f"provider 重试耗尽，放弃生成: {last_error}")
         return None
