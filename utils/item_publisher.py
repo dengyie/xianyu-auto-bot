@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import io
 import json
@@ -268,6 +269,53 @@ class ItemPublisher:
             spm_cnt="a21ybx.publish.0.0",
             spm_pre="a21ybx.home.sidebar.1.46413da6EPl7v5",
         )
+
+    # 卖家商品管理动作。downshelf 的 api/版本/payload 直接取自 goofish PC 商品
+    # 详情页前端（p_item-index.js：确认弹窗后单次调用，data 仅 itemId）；upshelf
+    # 在 PC 前端不存在（重新上架在手机 App 仓库），按淘宝系 downshelf/upshelf
+    # 命名对称推断，接口不存在时网关返回 FAIL_SYS_API_NOT_FOUNDED，无副作用。
+    SHELF_ACTIONS = {
+        "downshelf": ("mtop.taobao.idle.item.downshelf", "2.0"),
+        "upshelf": ("mtop.taobao.idle.item.upshelf", "2.0"),
+    }
+
+    async def set_item_shelf_state(self, item_id: str, *, on_shelf: bool) -> Dict[str, Any]:
+        """下架（on_shelf=False）或重新上架商品，单次调用，仅 token 过期时重试。"""
+        action = "upshelf" if on_shelf else "downshelf"
+        api_name, version = self.SHELF_ACTIONS[action]
+        cleaned_item_id = str(item_id or "").strip()
+        if not cleaned_item_id:
+            return {"success": False, "action": action, "item_id": "", "error": "缺少 itemId"}
+
+        last_error = ""
+        for attempt in range(3):
+            try:
+                res = await self._post_mtop(
+                    api_name=api_name,
+                    version=version,
+                    payload={"itemId": cleaned_item_id},
+                    spm_cnt="a21ybx.publish.0.0",
+                    spm_pre="a21ybx.home.sidebar.1.46413da6EPl7v5",
+                )
+            except Exception as exc:
+                last_error = f"exception: {exc}"
+                logger.warning(f"【{self.cookie_id}】{action} 商品 {cleaned_item_id} 请求异常（第 {attempt + 1} 次）: {exc}")
+                await asyncio.sleep(0.5)
+                continue
+
+            if self.is_success_response(res):
+                logger.info(f"【{self.cookie_id}】{action} 商品 {cleaned_item_id} 成功")
+                return {"success": True, "action": action, "item_id": cleaned_item_id, "raw": res}
+
+            last_error = self.extract_error_message(res)
+            logger.warning(f"【{self.cookie_id}】{action} 商品 {cleaned_item_id} 失败: {last_error}")
+            # _m_h5_tk 过期：响应 set-cookie 已带回新 token，重签重试（含历史拼写变体 EXOIRED）
+            if "TOKEN_EXPIRED" in last_error or "TOKEN_EXOIRED" in last_error:
+                await asyncio.sleep(0.5)
+                continue
+            break
+
+        return {"success": False, "action": action, "item_id": cleaned_item_id, "error": last_error or "未知错误"}
 
     async def prepare_sku_config_for_publish(
         self,

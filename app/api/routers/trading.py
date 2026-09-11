@@ -773,6 +773,48 @@ def create_trading_router() -> APIRouter:
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
+    async def _apply_item_shelf_action(
+        cookie_id: str,
+        item_id: str,
+        *,
+        on_shelf: bool,
+        current_user: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """卖家商品管理：下架/重新上架（单次 mtop 调用，见 ItemPublisher.set_item_shelf_state）。"""
+        cookie_id = reply_server._ensure_cookie_access(cookie_id, current_user)
+
+        cookie_info = db_manager.db_manager.get_cookie_by_id(cookie_id)
+        if not cookie_info:
+            raise HTTPException(status_code=404, detail="未找到指定的账号信息")
+
+        cookies_str = cookie_info.get('cookies_str', '')
+        if not cookies_str:
+            raise HTTPException(status_code=400, detail="账号cookie信息为空")
+
+        from utils.item_publisher import ItemPublisher
+
+        proxy_config = db_manager.db_manager.get_cookie_proxy_config(cookie_id)
+        try:
+            async with ItemPublisher(cookies_str, cookie_id, proxy_config=proxy_config) as publisher:
+                result = await publisher.set_item_shelf_state(item_id, on_shelf=on_shelf)
+        except Exception as e:
+            logger.error(f"商品上下架请求异常: cookie_id={cookie_id}, item_id={item_id}, err={e}")
+            raise HTTPException(status_code=500, detail="商品上下架请求失败，请稍后重试")
+
+        if not result.get('success'):
+            return {"success": False, "action": result.get('action'), "item_id": item_id, "message": result.get('error')}
+        return {"success": True, "action": result.get('action'), "item_id": item_id, "message": f"商品{'上架' if on_shelf else '下架'}操作成功"}
+
+    @router.post("/items/{cookie_id}/{item_id}/downshelf")
+    async def downshelf_item(cookie_id: str, item_id: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
+        """下架商品到仓库（卖家动作；重新上架可用同账号 /upshelf 或手机 App 仓库）。"""
+        return await _apply_item_shelf_action(cookie_id, item_id, on_shelf=False, current_user=current_user)
+
+    @router.post("/items/{cookie_id}/{item_id}/upshelf")
+    async def upshelf_item(cookie_id: str, item_id: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
+        """重新上架仓库中的商品（PC web 无此入口，接口按 downshelf 对称推断，未证实前可能返回 API_NOT_FOUNDED）。"""
+        return await _apply_item_shelf_action(cookie_id, item_id, on_shelf=True, current_user=current_user)
+
     @router.post("/items/get-all-from-account")
     async def get_all_items_from_account(request: dict, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """从指定账号获取所有商品信息"""
