@@ -14,6 +14,7 @@ from app.api.common import _dedupe_int_list, _dedupe_str_list, _model_to_dict, _
 import db_manager
 import reply_server
 from utils.image_utils import image_manager
+from utils.item_publisher import ItemPublisher
 import cookie_manager
 import uuid
 
@@ -795,19 +796,8 @@ def create_trading_router() -> APIRouter:
             raise HTTPException(status_code=429, detail="操作过于频繁，请稍后再试")
         _shelf_action_last_at[cookie_id] = now
 
-        cookie_info = db_manager.db_manager.get_cookie_by_id(cookie_id)
-        if not cookie_info:
-            raise HTTPException(status_code=404, detail="未找到指定的账号信息")
-
-        cookies_str = cookie_info.get('cookies_str', '')
-        if not cookies_str:
-            raise HTTPException(status_code=400, detail="账号cookie信息为空")
-
-        from utils.item_publisher import ItemPublisher
-
-        proxy_config = db_manager.db_manager.get_cookie_proxy_config(cookie_id)
         try:
-            async with ItemPublisher(cookies_str, cookie_id, proxy_config=proxy_config) as publisher:
+            async with _open_item_publisher(cookie_id) as publisher:
                 result = await publisher.set_item_shelf_state(item_id, on_shelf=on_shelf)
         except Exception as e:
             logger.error(f"商品上下架请求异常: cookie_id={cookie_id}, item_id={item_id}, err={reply_server.mask_sensitive_text(e)}")
@@ -826,6 +816,65 @@ def create_trading_router() -> APIRouter:
     async def upshelf_item(cookie_id: str, item_id: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """重新上架仓库中的商品（PC web 无此入口，接口按 downshelf 对称推断，未证实前可能返回 API_NOT_FOUNDED）。"""
         return await _apply_item_shelf_action(cookie_id, item_id, on_shelf=True, current_user=current_user)
+
+    def _open_item_publisher(cookie_id: str) -> "ItemPublisher":
+        """构造商品编辑/管理用的 ItemPublisher（含账号代理），所有权校验由调用方先行。"""
+        cookie_info = db_manager.db_manager.get_cookie_by_id(cookie_id)
+        if not cookie_info:
+            raise HTTPException(status_code=404, detail="未找到指定的账号信息")
+        cookies_str = cookie_info.get('cookies_str', '')
+        if not cookies_str:
+            raise HTTPException(status_code=400, detail="账号cookie信息为空")
+        proxy_config = db_manager.db_manager.get_cookie_proxy_config(cookie_id)
+        return ItemPublisher(cookies_str, cookie_id, proxy_config=proxy_config)
+
+    @router.get("/items/{cookie_id}/{item_id}/edit-detail")
+    async def get_item_edit_detail_route(cookie_id: str, item_id: str, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
+        """拉取商品的可编辑表单数据（只读；编辑/改价 payload 结构以此为准）。"""
+        cookie_id = reply_server._ensure_cookie_access(cookie_id, current_user)
+        if not re.fullmatch(r"\d{5,20}", item_id or "", re.ASCII):
+            raise HTTPException(status_code=400, detail="itemId 格式无效")
+        try:
+            async with _open_item_publisher(cookie_id) as publisher:
+                detail = await publisher.get_item_edit_detail(item_id)
+                ok = publisher.is_success_response(detail)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"editDetail 请求异常: cookie_id={cookie_id}, item_id={item_id}, err={reply_server.mask_sensitive_text(e)}")
+            raise HTTPException(status_code=500, detail="拉取商品编辑数据失败，请稍后重试")
+        if not ok:
+            return {"success": False, "message": "editDetail 调用失败", "detail": detail}
+        return {"success": True, "data": detail.get("data")}
+
+    @router.post("/items/{cookie_id}/{item_id}/edit")
+    async def edit_item_route(cookie_id: str, item_id: str, request: dict, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
+        """编辑商品：editDetail 拉表单 → 浅合并 mutations → edit 提交。
+
+        body: {"mutations": {...}, "submit": true}；submit=false 时只回合并预览不提交。
+        """
+        cookie_id = reply_server._ensure_cookie_access(cookie_id, current_user)
+        if not re.fullmatch(r"\d{5,20}", item_id or "", re.ASCII):
+            raise HTTPException(status_code=400, detail="itemId 格式无效")
+        mutations = request.get('mutations')
+        if mutations is not None and not isinstance(mutations, dict):
+            raise HTTPException(status_code=400, detail="mutations 必须是对象")
+        submit = bool(request.get('submit', True))
+
+        try:
+            async with _open_item_publisher(cookie_id) as publisher:
+                result = await publisher.edit_item(item_id, mutations, submit=submit)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"商品编辑请求异常: cookie_id={cookie_id}, item_id={item_id}, err={reply_server.mask_sensitive_text(e)}")
+            raise HTTPException(status_code=500, detail="商品编辑请求失败，请稍后重试")
+
+        if not result.get('success'):
+            return {"success": False, "item_id": item_id, "submitted": result.get('submitted', False), "message": result.get('error')}
+        if not submit:
+            return {"success": True, "submitted": False, "payload_preview": result.get('payload_preview')}
+        return {"success": True, "submitted": True, "item_id": item_id, "message": "商品编辑成功"}
 
     @router.post("/items/get-all-from-account")
     async def get_all_items_from_account(request: dict, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):

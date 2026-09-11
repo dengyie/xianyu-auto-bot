@@ -319,6 +319,59 @@ class ItemPublisher:
 
         return {"success": False, "action": action, "item_id": cleaned_item_id, "error": last_error or "未知错误"}
 
+    async def get_item_edit_detail(self, item_id: str) -> Dict[str, Any]:
+        """拉取商品的可编辑表单数据（官方编辑页第一步，只读；payload 结构以此为准）。"""
+        return await self._post_mtop(
+            api_name="mtop.idle.pc.idleitem.editDetail",
+            version="1.0",
+            payload={"itemId": str(item_id)},
+            spm_cnt="a21ybx.publish.0.0",
+            spm_pre="a21ybx.home.sidebar.1.46413da6EPl7v5",
+        )
+
+    async def edit_item(self, item_id: str, mutations: Optional[Dict[str, Any]] = None, *, submit: bool = True) -> Dict[str, Any]:
+        """编辑商品：editDetail 拉表单 → 浅合并 mutations → edit 提交。
+
+        封装字段（uniqueCode/sourceId/bizcode/publishScene）取自 goofish PC
+        编辑页前端实证；submit=False 时只返回合并后的 payload 预览，不提交。
+        mutations 为浅合并：嵌套结构（如 itemPriceDTO）需整体传入。
+        """
+        cleaned_item_id = str(item_id or "").strip()
+        if not (cleaned_item_id.isascii() and cleaned_item_id.isdigit()) or not (5 <= len(cleaned_item_id) <= 20):
+            return {"success": False, "error": "itemId 格式无效"}
+
+        detail = await self.get_item_edit_detail(cleaned_item_id)
+        if not self.is_success_response(detail):
+            return {"success": False, "error": self.extract_error_message(detail) or "editDetail 调用失败"}
+
+        data = detail.get("data")
+        if not isinstance(data, dict) or not data:
+            return {"success": False, "error": "editDetail 响应缺少 data 表单对象"}
+
+        for key, value in (mutations or {}).items():
+            data[key] = value
+
+        if not submit:
+            return {"success": True, "submitted": False, "payload_preview": data}
+
+        data.update({
+            "uniqueCode": self._build_unique_code(),
+            "sourceId": cleaned_item_id,
+            "bizcode": "pcMainPublish",
+            "publishScene": "pcMainPublish",
+        })
+        res = await self._post_mtop(
+            api_name="mtop.idle.pc.idleitem.edit",
+            version="1.0",
+            payload=data,
+            spm_cnt="a21ybx.publish.0.0",
+            spm_pre="a21ybx.home.sidebar.1.46413da6EPl7v5",
+        )
+        if self.is_success_response(res):
+            logger.info(f"【{self.cookie_id}】编辑商品 {cleaned_item_id} 成功")
+            return {"success": True, "submitted": True, "item_id": cleaned_item_id, "raw": res}
+        return {"success": False, "error": self.extract_error_message(res), "raw": res}
+
     async def prepare_sku_config_for_publish(
         self,
         sku_config: Optional[Dict[str, Any]],
