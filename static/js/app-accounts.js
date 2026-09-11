@@ -54,6 +54,7 @@ function getAboutStatusText(type, value) {
             manual_refresh_browser_stabilizing: '浏览器稳定中',
             post_slider_session_settling: '滑块后稳定中',
             restarted_after_cookie_refresh: '已触发重连',
+            qr_login_grace_wait: '扫码稳定期',
             captcha_max_retries_exceeded: '滑块重试超限',
             token_expired_recovery_failed: '过期恢复失败',
             token_refresh_failed: '刷新失败',
@@ -149,6 +150,13 @@ function buildAboutRiskControlNotice(runtimeStatus) {
     `;
 }
 
+function formatGraceRemainingText(seconds) {
+    const total = Math.max(0, Math.floor(Number(seconds) || 0));
+    const minutes = Math.floor(total / 60);
+    const secs = total % 60;
+    return minutes > 0 ? `${minutes}分${secs}秒` : `${secs}秒`;
+}
+
 function getAccountRuntimeBadge(runtimeStatus) {
     const status = runtimeStatus || {};
     const tokenStatus = String(status.risk_control_status || status.token_refresh_status || '').trim();
@@ -158,6 +166,19 @@ function getAccountRuntimeBadge(runtimeStatus) {
             label: '风控中',
             className: 'bg-warning text-dark',
             title: status.risk_control_summary || status.risk_control_detail || tokenStatus,
+        };
+    }
+    if (tokenStatus === 'qr_login_grace_wait' || Number(status.qr_grace_remaining_seconds) > 0) {
+        const remaining = Number(status.qr_grace_remaining_seconds);
+        const remainingText = Number.isFinite(remaining) && remaining > 0
+            ? `剩余 ${formatGraceRemainingText(remaining)}`
+            : '即将恢复连接';
+        return {
+            label: `稳定期保护中（${remainingText}）`,
+            className: 'bg-info text-dark',
+            title: status.qr_grace_until_display
+                ? `扫码成功后的防风控保护期，预计 ${status.qr_grace_until_display} 自动恢复连接`
+                : (status.token_refresh_error_message || tokenStatus),
         };
     }
     if (connectionState === 'connecting' || connectionState === 'reconnecting') {

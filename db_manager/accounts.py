@@ -219,6 +219,19 @@ class DBAccountsMixin:
             except Exception as e:
                 logger.error(f"更新账号扫码稳定期失败: {e}")
                 return False
+
+    def get_cookie_qr_login_grace_until(self, cookie_id: str) -> int:
+        """读取账号扫码登录稳定期截止时间（epoch 秒；0 = 无稳定期；单列查询零解密）"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                self._execute_sql(cursor, "SELECT qr_login_grace_until FROM cookies WHERE id = ?", (cookie_id,))
+                row = cursor.fetchone()
+                return int(row[0] or 0) if row and row[0] is not None else 0
+            except Exception as e:
+                logger.error(f"读取账号扫码稳定期失败: {e}")
+                return 0
+
     def update_cookie_pause_duration(self, cookie_id: str, pause_duration: int) -> bool:
         """更新Cookie的自动回复暂停时间"""
         with self.lock:

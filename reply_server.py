@@ -1691,6 +1691,39 @@ def _build_runtime_risk_control_summary(
     }
 
 
+def _build_qr_grace_display(token_refresh_status: Optional[str], grace_until: Optional[int], now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """扫码登录稳定期的实时展示信息。
+
+    token_refresh_error_message 是进入稳定期那一刻写死的静态文案（"剩余N秒"
+    不随时间流逝，面板看起来像卡死）；这里从持久化的 qr_login_grace_until
+    现算剩余并重写消息，同时给出预计恢复时刻。
+    """
+    if str(token_refresh_status or '') != 'qr_login_grace_wait':
+        return None
+    try:
+        until = int(grace_until or 0)
+    except (TypeError, ValueError):
+        until = 0
+    if until <= 0:
+        return None
+    current = time.time() if now is None else now
+    remaining = max(0, int(until - current))
+    until_display = _format_runtime_timestamp(until)
+    if remaining <= 0:
+        return {
+            'qr_grace_remaining_seconds': 0,
+            'qr_grace_until': until,
+            'qr_grace_until_display': until_display,
+            'token_refresh_error_message': f'扫码登录稳定期已结束（{until_display}），正在恢复连接',
+        }
+    return {
+        'qr_grace_remaining_seconds': remaining,
+        'qr_grace_until': until,
+        'qr_grace_until_display': until_display,
+        'token_refresh_error_message': f'扫码登录稳定期保护中，剩余{remaining}秒（预计 {until_display} 自动恢复）',
+    }
+
+
 def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
     cleaned_cid = str(cookie_id or '').strip()
     runtime_status = {
@@ -2036,6 +2069,19 @@ def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
         'manual_browser_session_status': manual_browser_status,
         'manual_browser_reason': manual_browser_reason,
     })
+
+    qr_grace_display = None
+    try:
+        qr_grace_display = _build_qr_grace_display(
+            token_refresh_status,
+            db_manager.db_manager.get_cookie_qr_login_grace_until(cleaned_cid),
+            now,
+        )
+    except Exception as e:
+        logger.warning(f"构建扫码稳定期实时展示失败: {mask_sensitive_text(e)}")
+    if qr_grace_display:
+        runtime_status.update(qr_grace_display)
+
     runtime_status.update(_build_runtime_risk_control_summary(
         token_refresh_status,
         runtime_status.get('token_refresh_error_message'),

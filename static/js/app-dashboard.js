@@ -450,7 +450,13 @@ function renderDashboardAccountRuntimeSnapshot(runtimeStatus) {
     const messageStreamDisplay = getMessageStreamRuntimeDisplay(normalizedRuntimeStatus);
     const messageStreamStatus = messageStreamDisplay.status;
 
-    const connectionText = getAboutStatusText('connection', connectionState) || '未运行';
+    // 扫码稳定期：连接态仍是 reconnecting，但语义是"刻意的保护等待"，
+    // 用实时倒计时替代"重连中"避免误读为故障
+    const qrGraceRemaining = Number(normalizedRuntimeStatus.qr_grace_remaining_seconds);
+    const inQrGrace = tokenStatus === 'qr_login_grace_wait' || (Number.isFinite(qrGraceRemaining) && qrGraceRemaining > 0);
+    const connectionText = inQrGrace
+        ? `稳定期保护中（剩余 ${formatGraceRemainingText(qrGraceRemaining)}）`
+        : (getAboutStatusText('connection', connectionState) || '未运行');
     const connectionTone = getAboutStatusVariant('connection', connectionState);
     const keepaliveText = keepaliveDisplayStatus
         ? (getAboutStatusText('keepalive', keepaliveDisplayStatus) || keepaliveDisplayStatus)
