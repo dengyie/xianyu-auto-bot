@@ -843,3 +843,4 @@ _diag/
 edit_detail_snapshot.json
 tools/diag_qr_state*.py
 tools/smoke_edit_phase1.py
+tools/*.py
