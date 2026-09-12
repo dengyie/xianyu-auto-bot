@@ -837,3 +837,9 @@ stdout.txt
 !tests/smoke/test_*.py
 !tests/unit/
 !tests/unit/test_*.py
+
+# 本地诊断产物（含临时快照/截图/运维脚本，不入库）
+_diag/
+edit_detail_snapshot.json
+tools/diag_qr_state*.py
+tools/smoke_edit_phase1.py
