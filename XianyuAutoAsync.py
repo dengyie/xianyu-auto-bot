@@ -871,7 +871,7 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
             if total_cleaned > 0:
                 logger.info(f"【{self.cookie_id}】Playwright缓存清理完成: 删除了 {total_cleaned} 个文件/目录，释放 {total_size_mb:.2f} MB")
             else:
-                logger.warning(f"【{self.cookie_id}】Playwright缓存清理: 没有需要清理的临时文件")
+                logger.debug(f"【{self.cookie_id}】Playwright缓存清理: 没有需要清理的临时文件")
                 
         except Exception as e:
             logger.warning(f"【{self.cookie_id}】清理Playwright缓存时出错: {self._safe_str(e)}")
@@ -1441,7 +1441,8 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
                     process_rate = stats['processed'] / elapsed if elapsed > 0 else 0
                     drop_rate = (stats['dropped_full'] + stats['dropped_expired']) / stats['received'] * 100
                     
-                    logger.info(
+                    # 例行统计每 60 秒一条，降为 DEBUG；丢弃率超标仍走下方 WARNING
+                    logger.debug(
                         f"【{self.cookie_id}】📊 消息队列统计 - "
                         f"队列大小: {self.message_queue.qsize()}/{self.message_queue_max_size} | "
                         f"收到: {stats['received']} | "
@@ -3361,7 +3362,7 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
                 self.pending_heartbeat_mids.remove(response_mid)
             except ValueError:
                 pass
-            logger.warning(f"【{self.cookie_id}】心跳响应正常 [ID:{response_mid}]")
+            logger.debug(f"【{self.cookie_id}】心跳响应正常 [ID:{response_mid}]")
             return True
         except Exception as e:
             logger.error(f"处理心跳响应出错: {self._safe_str(e)}")
@@ -4105,7 +4106,8 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
                                     except Exception:
                                         pass
                                     
-                                    logger.info(f"【{self.cookie_id}】📨 收到消息 [ID:{msg_id}] {msg_preview} {len(message) if message else 0}字节")
+                                    # 每条 WS 帧（含同步包/确认包）都到达这里，逐帧打点降为 DEBUG
+                                    logger.debug(f"【{self.cookie_id}】📨 收到消息 [ID:{msg_id}] {msg_preview} {len(message) if message else 0}字节")
 
                                     # 处理心跳响应（高优先级，直接处理）
                                     if await self.handle_heartbeat_response(message_data):

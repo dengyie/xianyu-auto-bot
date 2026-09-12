@@ -3107,7 +3107,8 @@ class SendMixin:
             self.pending_heartbeat_mids.append(heartbeat_mid)
             await asyncio.wait_for(ws.send(json.dumps(msg)), timeout=2.0)
             self.last_heartbeat_time = time.time()
-            logger.warning(f"【{self.cookie_id}】心跳包已发送 [ID:{heartbeat_mid}]")
+            # 正常心跳是每 15 秒一次的例行事件，降为 DEBUG；超时/断线由异常路径告警
+            logger.debug(f"【{self.cookie_id}】心跳包已发送 [ID:{heartbeat_mid}]")
         except asyncio.TimeoutError:
             raise ConnectionError("心跳发送超时，WebSocket可能已断开")
         except asyncio.CancelledError:

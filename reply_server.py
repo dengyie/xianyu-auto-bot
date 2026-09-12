@@ -851,6 +851,11 @@ async def reject_during_database_maintenance(request: Request, call_next):
     return await call_next(request)
 
 
+# 探活等高频轮询路径不打访问日志
+_SILENT_REQUEST_PATHS = {"/health"}
+_SLOW_REQUEST_SECONDS = 1.0
+
+
 @app.middleware("http")
 async def log_requests(request, call_next):
     start_time = time.time()
@@ -870,12 +875,19 @@ async def log_requests(request, call_next):
     except Exception:
         pass
 
-    logger.info(f"🌐 {user_info} API请求: {request.method} {request.url.path}")
-
     response = await call_next(request)
-
     process_time = time.time() - start_time
-    logger.info(f"✅ {user_info} API响应: {request.method} {request.url.path} - {response.status_code} ({process_time:.3f}s)")
+
+    # 每个请求两条 INFO 会淹没业务日志（探活+面板轮询占线上日志量 1/4）：
+    # 正常请求只留 DEBUG，慢请求 INFO，错误请求 WARNING
+    if request.url.path not in _SILENT_REQUEST_PATHS:
+        summary = f"{user_info} {request.method} {request.url.path} - {response.status_code} ({process_time:.3f}s)"
+        if response.status_code >= 400:
+            logger.warning(f"⚠️ {summary}")
+        elif process_time >= _SLOW_REQUEST_SECONDS:
+            logger.info(f"🐢 慢请求: {summary}")
+        else:
+            logger.debug(f"✅ {summary}")
 
     request_path = request.url.path
     if _should_audit_request(request_path):

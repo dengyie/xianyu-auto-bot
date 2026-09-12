@@ -28,6 +28,23 @@ from utils.blacklist_service import blacklist_service
 from pathlib import Path
 import cookie_manager
 import uuid
+
+
+def _read_log_tail(path: str, max_lines: int, max_bytes: int = 4 * 1024 * 1024) -> List[str]:
+    """只读日志文件尾部，避免为取最后 N 行把整个文件载入内存。"""
+    with open(path, 'rb') as f:
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        read_size = min(size, max_bytes)
+        f.seek(size - read_size)
+        data = f.read()
+    lines = data.decode('utf-8', errors='replace').splitlines()
+    if read_size < size and lines:
+        # 首行大概率被截断，丢弃
+        lines = lines[1:]
+    return lines[-max_lines:]
+
+
 def create_admin_ops_router() -> APIRouter:
     router = APIRouter()
     @router.get("/ai-reply-settings/{cookie_id}")
@@ -553,12 +570,6 @@ def create_admin_ops_router() -> APIRouter:
     ):
         """获取风控日志（管理员专用）"""
         try:
-            reply_server.log_with_user(
-                'info',
-                f"查询风控日志: cookie_id={cookie_id}, processing_status={processing_status}, event_type={event_type}, trigger_scene={trigger_scene}, session_id={session_id}, result_code={result_code}, date_from={date_from}, date_to={date_to}, limit={limit}, offset={offset}",
-                admin_user,
-            )
-
             # 获取风控日志
             logs = db_manager.db_manager.get_risk_control_logs(
                 cookie_id=cookie_id,
@@ -582,8 +593,6 @@ def create_admin_ops_router() -> APIRouter:
                 date_from=date_from,
                 date_to=date_to,
             )
-
-            reply_server.log_with_user('info', f"风控日志查询成功，共 {len(logs)} 条记录，总计 {total_count} 条", admin_user)
 
             return {
                 "success": True,
@@ -852,12 +861,6 @@ def create_admin_ops_router() -> APIRouter:
     ):
         """获取风控日志（管理员专用）"""
         try:
-            reply_server.log_with_user(
-                'info',
-                f"查询风控日志: cookie_id={cookie_id}, processing_status={processing_status}, event_type={event_type}, trigger_scene={trigger_scene}, session_id={session_id}, result_code={result_code}, date_from={date_from}, date_to={date_to}, limit={limit}, offset={offset}",
-                admin_user,
-            )
-
             # 获取风控日志
             logs = db_manager.db_manager.get_risk_control_logs(
                 cookie_id=cookie_id,
@@ -881,8 +884,6 @@ def create_admin_ops_router() -> APIRouter:
                 date_from=date_from,
                 date_to=date_to,
             )
-
-            reply_server.log_with_user('info', f"风控日志查询成功，共 {len(logs)} 条记录，总计 {total_count} 条", admin_user)
 
             return {
                 "success": True,
@@ -1000,63 +1001,33 @@ def create_admin_ops_router() -> APIRouter:
     def get_system_logs(admin_user: Dict[str, Any] = Depends(reply_server.require_admin),
                        lines: int = 100,
                        level: str = None):
-        """获取系统日志（管理员专用）"""
+        """获取系统日志（管理员专用）。只读文件尾部；查询本身不打日志，避免查看行为制造日志。"""
         import os
         import glob
+        import re
 
         try:
-            reply_server.log_with_user('info', f"查询系统日志，行数: {lines}, 级别: {level}", admin_user)
-
-            # 查找日志文件
             log_files = glob.glob("logs/xianyu_*.log")
-            logger.info(f"找到日志文件: {log_files}")
-
             if not log_files:
-                logger.warning("未找到日志文件")
                 return {"logs": [], "message": "未找到日志文件", "success": False}
 
-            # 获取最新的日志文件
             latest_log_file = max(log_files, key=os.path.getctime)
-            logger.info(f"使用最新日志文件: {latest_log_file}")
+            recent_lines = _read_log_tail(latest_log_file, max(1, lines))
 
-            logs = []
-            try:
-                with open(latest_log_file, 'r', encoding='utf-8') as f:
-                    all_lines = f.readlines()
-                    logger.info(f"读取到 {len(all_lines)} 行日志")
-
-                    # 如果指定了日志级别，进行过滤
-                    if level:
-                        filtered_lines = [line for line in all_lines if f"| {level.upper()} |" in line]
-                        logger.info(f"按级别 {level} 过滤后剩余 {len(filtered_lines)} 行")
-                    else:
-                        filtered_lines = all_lines
-
-                    # 获取最后N行
-                    recent_lines = filtered_lines[-lines:] if len(filtered_lines) > lines else filtered_lines
-                    logger.info(f"取最后 {len(recent_lines)} 行日志")
-
-                    for line in recent_lines:
-                        logs.append(line.strip())
-
-            except Exception as e:
-                logger.error(f"读取日志文件失败: {str(e)}")
-                reply_server.log_with_user('error', f"读取日志文件失败: {str(e)}", admin_user)
-                return {"logs": [], "message": f"读取日志文件失败: {str(e)}", "success": False}
-
-            reply_server.log_with_user('info', f"返回日志记录 {len(logs)} 条", admin_user)
-            logger.info(f"成功返回 {len(logs)} 条日志记录")
+            if level:
+                # 兼容两种 sink 格式：realtime 的 "| INFO |" 与按日文件的 "| INFO     |"（level 左对齐 8 字符）
+                level_pattern = re.compile(rf"\|\s*{re.escape(level.upper())}\s*\|")
+                recent_lines = [line for line in recent_lines if level_pattern.search(line)]
 
             return {
-                "logs": logs,
+                "logs": recent_lines,
                 "log_file": latest_log_file,
-                "total_lines": len(logs),
+                "total_lines": len(recent_lines),
                 "success": True
             }
 
         except Exception as e:
             logger.error(f"获取系统日志失败: {str(e)}")
-            reply_server.log_with_user('error', f"获取系统日志失败: {str(e)}", admin_user)
             return {"logs": [], "message": f"获取系统日志失败: {str(e)}", "success": False}
 
     @router.get('/admin/log-files')
@@ -1066,11 +1037,8 @@ def create_admin_ops_router() -> APIRouter:
         import glob
 
         try:
-            reply_server.log_with_user('info', "查询日志文件列表", admin_user)
-
             log_dir = "logs"
             if not os.path.exists(log_dir):
-                logger.warning("日志目录不存在")
                 return {"success": True, "files": []}
 
             log_pattern = os.path.join(log_dir, "xianyu_*.log")
@@ -1092,7 +1060,6 @@ def create_admin_ops_router() -> APIRouter:
             # 按修改时间倒序排序
             files_info.sort(key=lambda item: item.get("modified_ts", 0), reverse=True)
 
-            logger.info(f"返回日志文件列表，共 {len(files_info)} 个文件")
             return {"success": True, "files": files_info}
 
         except Exception as e:

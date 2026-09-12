@@ -2659,6 +2659,43 @@ Cookie数量: {cookie_count}
                     logger.warning(f"清理邮箱验证记录失败: {e}")
                     stats['email_verifications'] = 0
                 
+                # 清理定时评价日志（保留最近30天）
+                try:
+                    cursor.execute(
+                        "DELETE FROM scheduled_rate_logs WHERE created_at < datetime('now', '-30 days')"
+                    )
+                    stats['scheduled_rate_logs'] = cursor.rowcount
+                    if cursor.rowcount > 0:
+                        logger.info(f"清理了 {cursor.rowcount} 条过期的定时评价日志（30天前）")
+                except Exception as e:
+                    logger.warning(f"清理定时评价日志失败: {e}")
+                    stats['scheduled_rate_logs'] = 0
+
+                # 清理通用任务日志（保留最近30天）
+                try:
+                    cursor.execute(
+                        "DELETE FROM scheduled_task_logs WHERE created_at < datetime('now', '-30 days')"
+                    )
+                    stats['scheduled_task_logs'] = cursor.rowcount
+                    if cursor.rowcount > 0:
+                        logger.info(f"清理了 {cursor.rowcount} 条过期的任务日志（30天前）")
+                except Exception as e:
+                    logger.warning(f"清理任务日志失败: {e}")
+                    stats['scheduled_task_logs'] = 0
+
+                # 清理发货日志（保留最近90天）
+                try:
+                    cursor.execute(
+                        "DELETE FROM delivery_logs WHERE created_at < datetime('now', '-' || ? || ' days')",
+                        (days,)
+                    )
+                    stats['delivery_logs'] = cursor.rowcount
+                    if cursor.rowcount > 0:
+                        logger.info(f"清理了 {cursor.rowcount} 条过期的发货日志（{days}天前）")
+                except Exception as e:
+                    logger.warning(f"清理发货日志失败: {e}")
+                    stats['delivery_logs'] = 0
+
                 # 提交更改
                 self.conn.commit()
                 
