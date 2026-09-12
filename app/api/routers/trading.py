@@ -775,9 +775,15 @@ def create_trading_router() -> APIRouter:
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-    # 上下架是敏感写操作：每账号最小间隔（防误触连点/脚本风暴，非限流替代品）
-    _shelf_action_last_at: Dict[str, float] = {}
-    _SHELF_ACTION_MIN_INTERVAL_SECONDS = 3.0
+    # 上下架与商品编辑都是敏感写操作：每账号最小间隔（防误触连点/脚本风暴，非限流替代品）
+    _item_write_last_at: Dict[str, float] = {}
+    _ITEM_WRITE_MIN_INTERVAL_SECONDS = 3.0
+
+    def _enforce_item_write_interval(cookie_id: str) -> None:
+        now = time.monotonic()
+        if now - _item_write_last_at.get(cookie_id, 0.0) < _ITEM_WRITE_MIN_INTERVAL_SECONDS:
+            raise HTTPException(status_code=429, detail="操作过于频繁，请稍后再试")
+        _item_write_last_at[cookie_id] = now
 
     async def _apply_item_shelf_action(
         cookie_id: str,
@@ -791,10 +797,7 @@ def create_trading_router() -> APIRouter:
         if not re.fullmatch(r"\d{5,20}", item_id or "", re.ASCII):
             raise HTTPException(status_code=400, detail="itemId 格式无效")
 
-        now = time.monotonic()
-        if now - _shelf_action_last_at.get(cookie_id, 0.0) < _SHELF_ACTION_MIN_INTERVAL_SECONDS:
-            raise HTTPException(status_code=429, detail="操作过于频繁，请稍后再试")
-        _shelf_action_last_at[cookie_id] = now
+        _enforce_item_write_interval(cookie_id)
 
         try:
             async with _open_item_publisher(cookie_id) as publisher:
@@ -851,7 +854,8 @@ def create_trading_router() -> APIRouter:
     async def edit_item_route(cookie_id: str, item_id: str, request: dict, current_user: Dict[str, Any] = Depends(reply_server.get_current_user)):
         """编辑商品：editDetail 拉表单 → 浅合并 mutations → edit 提交。
 
-        body: {"mutations": {...}, "submit": true}；submit=false 时只回合并预览不提交。
+        body: {"mutations": {...}, "submit": true}。submit 必须**显式传 true** 才提交
+        （默认 False = 干跑预览），防一次误触 POST 真实改写商品。
         """
         cookie_id = reply_server._ensure_cookie_access(cookie_id, current_user)
         if not re.fullmatch(r"\d{5,20}", item_id or "", re.ASCII):
@@ -859,7 +863,9 @@ def create_trading_router() -> APIRouter:
         mutations = request.get('mutations')
         if mutations is not None and not isinstance(mutations, dict):
             raise HTTPException(status_code=400, detail="mutations 必须是对象")
-        submit = bool(request.get('submit', True))
+        submit = bool(request.get('submit', False))
+        if submit:
+            _enforce_item_write_interval(cookie_id)
 
         try:
             async with _open_item_publisher(cookie_id) as publisher:
@@ -873,7 +879,9 @@ def create_trading_router() -> APIRouter:
         if not result.get('success'):
             return {"success": False, "item_id": item_id, "submitted": result.get('submitted', False), "message": result.get('error')}
         if not submit:
-            return {"success": True, "submitted": False, "payload_preview": result.get('payload_preview')}
+            return {"success": True, "submitted": False,
+                    "data_original": result.get('data_original'),
+                    "payload_preview": result.get('payload_preview')}
         return {"success": True, "submitted": True, "item_id": item_id, "message": "商品编辑成功"}
 
     @router.post("/items/get-all-from-account")

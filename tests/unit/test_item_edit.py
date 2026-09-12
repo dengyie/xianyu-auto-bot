@@ -56,6 +56,8 @@ async def test_dry_run_returns_preview_without_submit(monkeypatch):
 
     assert result["success"] is True and result["submitted"] is False
     assert result["payload_preview"]["itemPriceDTO"] == {"price": "460"}
+    # 干跑必须带回原始表单，调用方可 diff 确认只改了目标字段
+    assert result["data_original"]["itemPriceDTO"] == {"price": "500"}
     # 干跑只调 editDetail，绝不触发 edit
     assert len(calls) == 1 and calls[0]["api"].endswith("editDetail")
 

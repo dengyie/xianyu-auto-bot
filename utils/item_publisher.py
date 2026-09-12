@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import copy
 import io
 import json
 import os
@@ -348,11 +349,14 @@ class ItemPublisher:
         if not isinstance(data, dict) or not data:
             return {"success": False, "error": "editDetail 响应缺少 data 表单对象"}
 
+        # 干跑预览要能和原始表单 diff，先快照（mtop 响应为 JSON 值，深拷贝安全）
+        original = copy.deepcopy(data)
         for key, value in (mutations or {}).items():
             data[key] = value
 
         if not submit:
-            return {"success": True, "submitted": False, "payload_preview": data}
+            return {"success": True, "submitted": False,
+                    "data_original": original, "payload_preview": data}
 
         data.update({
             "uniqueCode": self._build_unique_code(),
