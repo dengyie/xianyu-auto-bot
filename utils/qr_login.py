@@ -565,6 +565,8 @@ class QRLoginManager:
         try:
             from playwright.async_api import async_playwright
 
+            # 刻意无头：回调换取登录态的短命工具浏览器（非滑块/账密验证链路），
+            # 有头无指纹收益还白占内存（1GB 机曾被浏览器压进 swap，见下方参数注释）
             playwright = await async_playwright().start()
             browser = await playwright.chromium.launch(
                 headless=True,
@@ -1253,6 +1255,8 @@ class QRLoginManager:
 
             logger.info(f"开始打开扫码登录验证页面（GuDong keep-alive）: {session_id}")
             session.user_hint = '账号被风控：正在打开服务端验证页并截取二维码，请稍候…'
+            # 刻意无头：此浏览器只负责展示验证页供用户手机扫码（截图回传面板），
+            # 扫码动作发生在手机端，有头无指纹收益；内存考量同下
             playwright = await async_playwright().start()
             browser = await playwright.chromium.launch(
                 headless=True,

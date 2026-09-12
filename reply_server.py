@@ -548,6 +548,35 @@ def _consume_cookie_manager_handoff(result: Any) -> None:
             result.result()
 
 
+def restore_system_paused_account(account_id: str, current_user: Dict[str, Any]) -> bool:
+    """重新登录类操作（扫码登录/扫码刷新/手动导入 Cookie）成功后的停用状态收口。
+
+    这些操作都完成了人工身份验证：若账号此前被系统保护性停用（status_note
+    非空），恢复启用并清标记；内存 cookie_status 必须在任务切换（update_cookie
+    读取 original_status）之前置 True，否则切换后的实例会读到禁用状态自查退出
+    （表现为"Cookie 刷新成功但账号不跑"）。用户手动禁用（note 为空）尊重意图，
+    不自动启用。返回是否执行了恢复。
+    """
+    try:
+        details = db_manager.get_cookie_details(account_id) or {}
+        was_system_paused = bool(str(details.get('status_note') or '').strip())
+    except Exception as read_e:
+        log_with_user('warning', f"读取账号停用标记失败，跳过自动恢复: {account_id}, {read_e}", current_user)
+        return False
+    if not was_system_paused:
+        return False
+    try:
+        db_manager.save_cookie_status(account_id, True)
+        db_manager.update_cookie_status_note(account_id, '')
+        if cookie_manager.manager:
+            cookie_manager.manager.cookie_status[account_id] = True
+        log_with_user('info', f"重新登录已恢复系统停用的账号并清除状态标记: {account_id}", current_user)
+        return True
+    except Exception as clear_e:
+        log_with_user('warning', f"清除账号停用状态失败（不影响登录）: {clear_e}", current_user)
+        return False
+
+
 def load_keywords() -> List[Tuple[str, str]]:
     """读取关键字→回复映射表
 
@@ -3515,25 +3544,28 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                     qr_login_grace_minutes = max(5, int(RISK_CONTROL.get('qr_login_grace_minutes', 15) or 15))
                     qr_login_grace_until = int(time.time() + (qr_login_grace_minutes * 60))
                     task_restarted = False
+                    skip_restart_intentional = False
                     warning_message = None
                     final_cookies = temp_instance.cookies_str or real_cookies
 
                     # 扫码即完成了一次人工身份验证。若账号此前被系统保护性停用
                     # （status_note 非空），先恢复启用并清标记，否则任务切换后实例
                     # 会读到禁用状态自查退出（表现为"扫码成功但账号不跑"）。
-                    # 用户手动禁用（note 为空）则尊重意图，不自动启用。
+                    # 用户手动禁用（note 为空且 enabled=False）则尊重意图：
+                    # Cookie 更新落库但不启动任务、不回滚。
+                    manual_disabled = False
                     if not is_new_account:
                         try:
                             paused_details = db_manager.get_cookie_details(account_id) or {}
                             was_system_paused = bool(str(paused_details.get('status_note') or '').strip())
+                            if not was_system_paused:
+                                manual_disabled = not db_manager.get_cookie_status(account_id)
                         except Exception as read_e:
                             log_with_user('warning', f"读取账号停用标记失败，跳过自动恢复: {read_e}", current_user)
                             was_system_paused = False
                         if was_system_paused:
                             try:
-                                db_manager.save_cookie_status(account_id, True)
-                                db_manager.update_cookie_status_note(account_id, '')
-                                if cookie_manager.manager:
+                                if db_manager.restore_cookie_from_pause(account_id) and cookie_manager.manager:
                                     cookie_manager.manager.cookie_status[account_id] = True
                                 log_with_user('info', f"扫码成功已恢复系统停用的账号并清除状态标记: {account_id}", current_user)
                             except Exception as clear_e:
@@ -3545,21 +3577,28 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                                 handoff_result = cookie_manager.manager.add_cookie(account_id, final_cookies, user_id=user_id)
                                 await _await_cookie_manager_handoff(handoff_result)
                                 log_with_user('info', f"已将真实cookie添加到cookie_manager: {account_id}", current_user)
+                            elif manual_disabled:
+                                # 手动禁用：refresh_cookies_from_qr_login 已把新 Cookie 落库，
+                                # 但不启动任务（尊重用户开关），也不走下方回滚
+                                skip_restart_intentional = True
+                                warning_message = "真实Cookie已获取；账号处于手动禁用状态，Cookie已更新落库，任务保持停止（启用账号后生效）"
+                                log_with_user('info', f"账号处于手动禁用状态，扫码Cookie已更新落库，任务保持停止: {account_id}", current_user)
                             else:
                                 # refresh_cookies_from_qr_login 已经保存到数据库了，这里不需要再保存
                                 handoff_result = cookie_manager.manager.update_cookie(account_id, final_cookies, save_to_db=False)
                                 await _await_cookie_manager_handoff(handoff_result)
                                 log_with_user('info', f"已更新cookie_manager中的真实cookie: {account_id}", current_user)
-                            task_restarted = True
-                            db_manager.set_cookie_qr_login_grace_until(account_id, qr_login_grace_until)
-                            XianyuLive.mark_qr_login_grace(account_id, stage='real_cookie_ready', grace_until=qr_login_grace_until)
-                            # 扫码刚拿到全新可信 cookie，立即清掉旧的密码登录失败退避，
-                            # 否则 init() 会被旧的 slider_failed/credentials 退避 skip，
-                            # 表现为"扫码完成但 WS 起不来"（详见 22:43 / 22:08 那两次链路）。
-                            XianyuLive.clear_password_login_failure_backoff(account_id)
-                            log_with_user('info', f"扫码成功后已清除密码登录失败退避: {account_id}", current_user)
-                            warning_message = f"真实Cookie已获取，账号任务已切换；为降低再次触发风控的概率，将进入 {qr_login_grace_minutes} 分钟稳定期，稳定期内不自动预热Token"
-                            log_with_user('warning', f"{warning_message}: {account_id}", current_user)
+                            if not skip_restart_intentional:
+                                task_restarted = True
+                                db_manager.set_cookie_qr_login_grace_until(account_id, qr_login_grace_until)
+                                XianyuLive.mark_qr_login_grace(account_id, stage='real_cookie_ready', grace_until=qr_login_grace_until)
+                                # 扫码刚拿到全新可信 cookie，立即清掉旧的密码登录失败退避，
+                                # 否则 init() 会被旧的 slider_failed/credentials 退避 skip，
+                                # 表现为"扫码完成但 WS 起不来"（详见 22:43 / 22:08 那两次链路）。
+                                XianyuLive.clear_password_login_failure_backoff(account_id)
+                                log_with_user('info', f"扫码成功后已清除密码登录失败退避: {account_id}", current_user)
+                                warning_message = f"真实Cookie已获取，账号任务已切换；为降低再次触发风控的概率，将进入 {qr_login_grace_minutes} 分钟稳定期，稳定期内不自动预热Token"
+                                log_with_user('warning', f"{warning_message}: {account_id}", current_user)
                         else:
                             warning_message = "真实Cookie已获取，但任务管理器未初始化，未启动账号任务"
                             log_with_user('warning', f"{warning_message}: {account_id}", current_user)
@@ -3570,19 +3609,22 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                         log_with_user('warning', f"{warning_message}: {account_id}", current_user)
 
                     if not task_restarted:
+                        # 没有任务在跑就没有稳定期可言
                         db_manager.set_cookie_qr_login_grace_until(account_id, 0)
                         XianyuLive.clear_qr_login_grace(account_id)
                         if not warning_message:
                             warning_message = "真实Cookie已获取，但任务管理器未初始化，未启动账号任务"
                             log_with_user('warning', f"{warning_message}: {account_id}", current_user)
-                        if is_new_account:
-                            db_manager.delete_cookie(account_id)
-                            log_with_user('warning', f"扫码登录未完成切换，已删除临时创建的新账号记录: {account_id}", current_user)
-                        elif previous_cookie_value:
-                            db_manager.update_cookie_account_info(account_id, cookie_value=previous_cookie_value)
-                            log_with_user('warning', f"扫码登录未完成切换，已回滚现有账号Cookie: {account_id}", current_user)
-                        else:
-                            log_with_user('warning', f"扫码登录未完成切换，但未找到可回滚的旧Cookie: {account_id}", current_user)
+                        if not skip_restart_intentional:
+                            # 意外失败才回滚 Cookie；手动禁用是"更新但不启动"，Cookie 保留
+                            if is_new_account:
+                                db_manager.delete_cookie(account_id)
+                                log_with_user('warning', f"扫码登录未完成切换，已删除临时创建的新账号记录: {account_id}", current_user)
+                            elif previous_cookie_value:
+                                db_manager.update_cookie_account_info(account_id, cookie_value=previous_cookie_value)
+                                log_with_user('warning', f"扫码登录未完成切换，已回滚现有账号Cookie: {account_id}", current_user)
+                            else:
+                                log_with_user('warning', f"扫码登录未完成切换，但未找到可回滚的旧Cookie: {account_id}", current_user)
 
                     # 更新风控日志状态
                     if risk_log_id:
@@ -3602,6 +3644,23 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                                         'account_id': account_id,
                                         'is_new_account': is_new_account,
                                         'task_restarted': task_restarted,
+                                        'token_prewarmed': False,
+                                    })
+                                )
+                            elif skip_restart_intentional:
+                                db_manager.update_risk_control_log(
+                                    log_id=risk_log_id,
+                                    processing_status='success',
+                                    processing_result='扫码登录真实Cookie获取成功；账号为手动禁用，Cookie已更新落库，任务保持停止',
+                                    session_id=risk_session_id,
+                                    trigger_scene='qr_login',
+                                    result_code='qr_cookie_refresh_success',
+                                    duration_ms=max(0, int((time.time() - risk_log_started_at) * 1000)),
+                                    event_meta=_build_risk_event_meta({
+                                        'account_id': account_id,
+                                        'is_new_account': is_new_account,
+                                        'task_restarted': task_restarted,
+                                        'manual_disabled_skip_restart': True,
                                         'token_prewarmed': False,
                                     })
                                 )
@@ -3632,6 +3691,7 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                         'cookie_length': len(final_cookies),
                         'token_prewarmed': False,
                         'task_restarted': task_restarted,
+                        'manual_disabled_skip_restart': skip_restart_intentional,
                         'warning_message': warning_message
                     }
                 else:

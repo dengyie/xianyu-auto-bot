@@ -759,14 +759,11 @@ class XianyuAuthRecoveryMixin:
         self._clear_qr_login_grace_period()
 
         try:
-            db_manager.update_cookie_status_note(self.cookie_id, '')
-        except Exception as note_e:
-            logger.error(f"【{self.cookie_id}】清理账号状态文案失败: {self._safe_str(note_e)}")
-
-        try:
-            db_manager.save_cookie_status(self.cookie_id, True)
-        except Exception as status_e:
-            logger.error(f"【{self.cookie_id}】恢复账号启用状态失败: {self._safe_str(status_e)}")
+            # 启用状态与状态文案跨两表，原子恢复避免中途失败留下不一致
+            if not db_manager.restore_cookie_from_pause(self.cookie_id):
+                logger.warning(f"【{self.cookie_id}】账号暂停状态原子清理失败，详见上方日志")
+        except Exception as clear_e:
+            logger.error(f"【{self.cookie_id}】清理账号暂停状态异常: {self._safe_str(clear_e)}")
 
         _mgr = self._cookie_mgr
         if _mgr:

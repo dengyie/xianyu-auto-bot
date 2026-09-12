@@ -682,6 +682,33 @@ class DBAccountsMixin:
             except Exception as e:
                 logger.error(f"保存Cookie状态失败: {e}")
                 raise
+
+    def restore_cookie_from_pause(self, cookie_id: str) -> bool:
+        """系统保护性停用账号的恢复：启用状态与状态文案在同一事务内原子生效。
+
+        enabled 存 cookie_status 表、status_note 存 cookies 表，跨两张表；
+        分两次提交中途失败会留下"已启用但徽章残留"或反向的不一致，
+        恢复语义要求两者同时生效或同时不变。
+        """
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                INSERT OR REPLACE INTO cookie_status (cookie_id, enabled, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ''', (cookie_id, True))
+                self._execute_sql(cursor, "UPDATE cookies SET status_note = '' WHERE id = ?", (cookie_id,))
+                self.conn.commit()
+                logger.info(f"原子恢复账号启用状态并清除状态文案: {cookie_id}")
+                return True
+            except Exception as e:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                logger.error(f"原子恢复账号状态失败: {e}")
+                return False
+
     def get_cookie_status(self, cookie_id: str) -> bool:
         """获取Cookie的启用状态"""
         with self.lock:

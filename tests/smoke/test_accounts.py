@@ -720,11 +720,16 @@ class TestAccounts:
             {"user_id": 2, "username": "user"},
         )
 
-        assert result["task_restarted"] is True
+        assert result["task_restarted"] is False
+        assert result["manual_disabled_skip_restart"] is True
+        assert fake_manager.updated == []  # 手动禁用：不启动任务（无 handoff）
         assert reply_server.db_manager.get_cookie_status(cookie_id) is False
         assert fake_manager.cookie_status.get(cookie_id) is None
         details = reply_server.db_manager.get_cookie_details(cookie_id)
         assert details["status_note"] == ""
+        # Cookie 保留更新后的值（不回滚），启用后直接生效
+        assert "token=real" in (details.get("value") or "")
+        assert "手动禁用" in (result.get("warning_message") or "")
 
     def test_face_verification_screenshot_is_owner_only(self, client, other_user_auth, user_auth):
         account_id = "face_verify_owner_only_account"

@@ -169,7 +169,6 @@ class OrderDetailFetcher:
                     '--metrics-recording-only',
                     '--no-first-run',
                     '--safebrowsing-disable-auto-update',
-                    '--enable-automation',
                     '--password-store=basic',
                     '--use-mock-keychain',
                     # 添加内存优化和稳定性参数
@@ -188,7 +187,9 @@ class OrderDetailFetcher:
             logger.info(f"启动浏览器，参数: {browser_args}")
             self.browser = await self._playwright.chromium.launch(
                 headless=headless,
-                args=browser_args
+                args=browser_args,
+                # 与 slidex 同款：剥掉 Playwright 默认的自动化指纹
+                ignore_default_args=['--enable-automation']
             )
 
             logger.info("浏览器启动成功，创建上下文...")

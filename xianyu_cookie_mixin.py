@@ -1027,7 +1027,6 @@ class CookieMixin:
                     '--disable-web-resources',
                     '--metrics-recording-only',
                     '--safebrowsing-disable-auto-update',
-                    '--enable-automation',
                     '--password-store=basic',
                     '--use-mock-keychain'
                 ])
@@ -1035,7 +1034,9 @@ class CookieMixin:
             # 使用无头浏览器
             browser = await playwright.chromium.launch(
                 headless=True,  # 改回无头模式
-                args=browser_args
+                args=browser_args,
+                # 与 slidex 同款：剥掉 Playwright 默认的自动化指纹
+                ignore_default_args=['--enable-automation']
             )
 
             # 创建浏览器上下文
@@ -1409,7 +1410,6 @@ class CookieMixin:
                     '--disable-web-resources',
                     '--metrics-recording-only',
                     '--safebrowsing-disable-auto-update',
-                    '--enable-automation',
                     '--password-store=basic',
                     '--use-mock-keychain'
                 ])
@@ -1419,7 +1419,9 @@ class CookieMixin:
             show_browser = bool(account_info.get('show_browser', True))
             browser = await playwright.chromium.launch(
                 headless=not show_browser,
-                args=browser_args
+                args=browser_args,
+                # 与 slidex 同款：剥掉 Playwright 默认的自动化指纹
+                ignore_default_args=['--enable-automation']
             )
 
             # 创建浏览器上下文
@@ -1696,7 +1698,6 @@ class CookieMixin:
                     '--disable-web-resources',
                     '--metrics-recording-only',
                     '--safebrowsing-disable-auto-update',
-                    '--enable-automation',
                     '--password-store=basic',
                     '--use-mock-keychain'
                 ])
@@ -1706,7 +1707,9 @@ class CookieMixin:
             show_browser = bool(account_info.get('show_browser', True))
             browser = await playwright.chromium.launch(
                 headless=not show_browser,
-                args=browser_args
+                args=browser_args,
+                # 与 slidex 同款：剥掉 Playwright 默认的自动化指纹
+                ignore_default_args=['--enable-automation']
             )
 
             # 创建浏览器上下文
