@@ -1304,7 +1304,8 @@ async function openAccountEditModal(accountData) {
     document.getElementById('editAccountCookie').value = accountData.value || '';
     document.getElementById('editAccountUsername').value = accountData.username || '';
     document.getElementById('editAccountPassword').value = accountData.password || '';
-    document.getElementById('editAccountShowBrowser').checked = accountData.show_browser || false;
+    // 默认有头：未显式设为 false（含 null/undefined）一律视为开启
+    document.getElementById('editAccountShowBrowser').checked = accountData.show_browser !== false;
     
     // 显示账号ID
     document.getElementById('accountEditIdDisplay').textContent = accountData.id;

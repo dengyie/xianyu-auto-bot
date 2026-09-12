@@ -1306,7 +1306,7 @@ class XianyuAuthRecoveryMixin:
             
             username = account_info.get('username', '')
             password = account_info.get('password', '')
-            show_browser = account_info.get('show_browser', False)
+            show_browser = account_info.get('show_browser', True)
             
             # 检查是否配置了用户名和密码
             if not username or not password:

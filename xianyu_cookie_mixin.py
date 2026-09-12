@@ -1414,9 +1414,9 @@ class CookieMixin:
                     '--use-mock-keychain'
                 ])
 
-            # 读取账号配置以决定浏览器模式（默认无头）
+            # 读取账号配置以决定浏览器模式（默认有头）
             account_info = _db_host().get_cookie_details(self.cookie_id) or {}
-            show_browser = bool(account_info.get('show_browser', False))
+            show_browser = bool(account_info.get('show_browser', True))
             browser = await playwright.chromium.launch(
                 headless=not show_browser,
                 args=browser_args
@@ -1701,9 +1701,9 @@ class CookieMixin:
                     '--use-mock-keychain'
                 ])
 
-            # Cookie刷新模式：读取账号配置以决定浏览器模式（默认无头）
+            # Cookie刷新模式：读取账号配置以决定浏览器模式（默认有头）
             account_info = _db_host().get_cookie_details(self.cookie_id) or {}
-            show_browser = bool(account_info.get('show_browser', False))
+            show_browser = bool(account_info.get('show_browser', True))
             browser = await playwright.chromium.launch(
                 headless=not show_browser,
                 args=browser_args

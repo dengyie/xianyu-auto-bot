@@ -165,7 +165,8 @@ class LoginInfoSettingUpdate(BaseModel):
 class ManualCookieImportRequest(BaseModel):
     account_id: str
     cookie: str
-    show_browser: bool = False
+    # 默认有头：无头指纹是密码链路滑块被硬拒的风险信号之一（2026-09 生产实证）
+    show_browser: bool = True
 
 
 class MessageNotificationIn(BaseModel):

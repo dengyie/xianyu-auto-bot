@@ -1,0 +1,149 @@
+{
+ "success": true,
+ "data": {
+  "imageInfoDOList": [
+   {
+    "major": "true",
+    "templateIndex": "29470_1",
+    "widthSize": "240",
+    "heightSize": "240",
+    "type": "0",
+    "url": "http://img.alicdn.com/bao/uploaded/i4/1926782908/O1CN01iKO0FZ76d9C0UDAm_!!4611686018427387836-0-xy_item.jpg",
+    "extraInfo": {
+     "raw": "false",
+     "isT": "false",
+     "isH": "false"
+    }
+   }
+  ],
+  "attribute_product": "skill",
+  "redirectUrl": "fleamarket://awesome_detail?itemId=1079612103929&hitNativeDetail=true&flutter=true&needNotPreGet=true&isSkill=true",
+  "itemTimestampDTO": {},
+  "intellectSpuInfoDTO": {
+   "defaultDes": "关联淘宝同款",
+   "defaultTitle": "宝贝将被多人看到"
+  },
+  "inputProperties": "",
+  "uniqueCode": "1789154144671952",
+  "mtopTransformData": "{\"shortTitleHighKeyword\":[\"软件资源分享\"]}",
+  "itemTopicParams": {
+   "topicInfos": []
+  },
+  "itemLabelExtList": [
+   {
+    "valueId": "201453616",
+    "channelCateId": "201453616",
+    "labelId": "179760639",
+    "isUserClick": "1",
+    "labelType": "common",
+    "from": "newPublishChoice",
+    "text": "软件/程序/网站开发",
+    "propertyId": "-10000",
+    "properties": "-10000##分类:201453616##软件/程序/网站开发"
+   },
+   {
+    "valueId": "34676488",
+    "channelCateId": "201453616",
+    "labelId": "282042431",
+    "isUserClick": "1",
+    "labelType": "common",
+    "from": "newPublishChoice",
+    "text": "1-5天",
+    "propertyId": "506537872",
+    "properties": "506537872##预计工期:34676488##1-5天"
+   }
+  ],
+  "itemToBuyDTO": {
+   "defaultPrice": "false",
+   "onlyInSameCity": "false",
+   "defaultPic": "false"
+  },
+  "textLabelList": [],
+  "userRightsProtocols": [
+   {
+    "serviceCode": "SKILL_PLAY_NO_MIND",
+    "enable": "false"
+   }
+  ],
+  "itemSkuExtra": {},
+  "itemSkillDTO": {
+   "skillCategoryId": "449212141008997",
+   "skillCategoryName": "软件资源分享"
+  },
+  "supportBargainPrice": "true",
+  "bizCustomData": "{\"shortTitleHighKeyword\":[\"软件资源分享\"],\"topicLevels\":[],\"topics\":[]}",
+  "tags": [],
+  "itemId": "1079612103929",
+  "itemPostFeeDTO": {
+   "canFreeShipping": "true",
+   "onlyTakeSelf": "false",
+   "supportFreight": "true",
+   "idleTemplateId": "0",
+   "templateId": "0",
+   "postPriceInCent": "0"
+  },
+  "hideBid": "true",
+  "trendyGroupBuyInfo": {},
+  "canBorrow": "false",
+  "simpleItem": "true",
+  "itemPriceDTO": {
+   "origPriceInCent": "0",
+   "noBargain": "false",
+   "priceInCent": "50000"
+  },
+  "categoryBarDTO": {
+   "url": "https://market.m.taobao.com/app/idleFish-F2e/IdleFish4Weex/CateSecondary?wh_weex=true"
+  },
+  "commonTagList": [],
+  "canBargain": "true",
+  "jumpUrl": "fleamarket://awesome_detail?itemId=1079612103929&hitNativeDetail=true&flutter=true&needNotPreGet=true&isSkill=true",
+  "lockCpv": "false",
+  "bizActivityType": null,
+  "itemStatus": "0",
+  "itemTypeStr": "b",
+  "attribute_bizActivityType": null,
+  "itemAddrDTO": {
+   "area": "长宁区",
+   "aoiName": "天山二村南区",
+   "city": "上海",
+   "poiName": "天山二村南区",
+   "addressType": "0",
+   "divisionId": "310105",
+   "gps": "31.208306,121.406192",
+   "poiId": "B00155KJZ1",
+   "aoiId": "B00155KJZ1",
+   "prov": "上海"
+  },
+  "defaultPrice": "false",
+  "editorVersion": "0.0.1",
+  "trendyFache": {},
+  "quantity": "10000",
+  "defaultPicUrl": "false",
+  "userId": "0",
+  "hideProSwitcher": "false",
+  "freebies": "false",
+  "itemFrom": "iphone",
+  "itemTableMap": {},
+  "itemTextDTO": {
+   "titleDescSeparate": "false",
+   "shortTitleHighKeyword": [
+    "软件资源分享"
+   ],
+   "descPath": "desc/icoss!01079612103929!12358176110",
+   "shortTitle": "软件资源分享邀请码青春版",
+   "title": "软件资源分享邀请码青春版",
+   "richTextDescPath": "desc/icoss!01079612103929!1148659506",
+   "desc": "linux.do 社区注册邀请码 青春版 Lite版\n使用其注册的账号将没有 oauth 登录权限⚠️⚠️⚠️\n⚠️没有公益站权限\n\n无法登录公益站等系统\n这是唯一的不同点\n只卖注册邀请链接 非成品账号\n\n只是邀请链接。\n只是邀请链接。\n拍前咨询"
+  },
+  "stuffStatus": "9",
+  "attribute_biz_line": "normalbuynow",
+  "itemCatDTO": {
+   "catId": "50023914",
+   "sugShow": "false",
+   "catName": "软件/程序/网站开发",
+   "tbCatId": "50014907",
+   "channelCatId": "201453616"
+  },
+  "properties": "15808291:60465429"
+ }
+}

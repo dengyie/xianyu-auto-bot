@@ -158,7 +158,8 @@ class DBAccountsMixin:
                         'pause_duration': result[7] if result[7] is not None else 10,  # 0是有效值，表示不暂停
                         'username': result[8] or '',
                         'password': password,
-                        'show_browser': bool(result[10]) if result[10] is not None else False,
+                        # NULL 视为默认有头（无头指纹是滑块硬拒风险信号之一）；显式存 0 才是无头
+                        'show_browser': bool(result[10]) if result[10] is not None else True,
                         'created_at': result[11],
                         # 代理配置
                         'proxy_type': result[12] or 'none',

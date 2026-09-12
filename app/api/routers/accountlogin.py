@@ -152,7 +152,7 @@ def create_account_login_router() -> APIRouter:
             password = request.get('password')
             # 检查前端是否明确指定了 show_browser 参数
             show_browser_specified = 'show_browser' in request
-            show_browser = request.get('show_browser', False)
+            show_browser = request.get('show_browser', True)
             refresh_mode = request.get('refresh_mode', False)  # 刷新模式：从数据库读取账密
             risk_log_id = None
 
@@ -177,7 +177,7 @@ def create_account_login_router() -> APIRouter:
 
                 # 获取 show_browser 设置（只有当前端没有明确指定时，才使用数据库配置）
                 if not show_browser_specified:
-                    show_browser = cookie_info.get('show_browser', False)
+                    show_browser = cookie_info.get('show_browser', True)
 
                 reply_server.log_with_user('info', f"刷新Cookie模式: {account_id}, 用户名: {account}, show_browser: {show_browser}", current_user)
 

@@ -166,7 +166,7 @@ async function handleManualCookieImport(event) {
     const accountId = document.getElementById('cookieId').value.trim();
     const cookieValue = document.getElementById('cookieValue').value.trim();
     const showBrowserCheckbox = document.getElementById('manualCookieShowBrowser');
-    const showBrowser = showBrowserCheckbox ? showBrowserCheckbox.checked : false;
+    const showBrowser = showBrowserCheckbox ? showBrowserCheckbox.checked : true;
 
     if (!accountId || !cookieValue) {
         showToast('请填写完整的账号ID和Cookie', 'warning');

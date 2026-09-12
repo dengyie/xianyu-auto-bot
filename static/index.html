@@ -541,9 +541,9 @@
                 </div>
                 <div class="col-12">
                   <div class="form-check">
-                    <input class="form-check-input" type="checkbox" id="passwordLoginShowBrowser" value="1">
+                    <input class="form-check-input" type="checkbox" id="passwordLoginShowBrowser" value="1" checked>
                     <label class="form-check-label" for="passwordLoginShowBrowser">
-                      显示浏览器窗口（如果使用服务器，请勿打开该开关，会导致登录失败）
+                      有头模式（服务器已内置虚拟显示，默认开启以降低滑块风控概率）
                     </label>
                   </div>
                 </div>
@@ -575,9 +575,9 @@
                 </div>
                 <div class="col-12">
                   <div class="form-check">
-                    <input class="form-check-input" type="checkbox" id="manualCookieShowBrowser" value="1">
+                    <input class="form-check-input" type="checkbox" id="manualCookieShowBrowser" value="1" checked>
                     <label class="form-check-label" for="manualCookieShowBrowser">
-                      显示浏览器窗口（默认关闭，优先走无头验证；仅在本机排查时开启）
+                      有头模式（服务器已内置虚拟显示，默认开启以降低滑块风控概率）
                     </label>
                   </div>
                 </div>
@@ -613,9 +613,9 @@
                 </div>
                 <div class="col-12">
                   <div class="form-check">
-                    <input class="form-check-input" type="checkbox" id="refreshCookieShowBrowser" value="1">
+                    <input class="form-check-input" type="checkbox" id="refreshCookieShowBrowser" value="1" checked>
                     <label class="form-check-label" for="refreshCookieShowBrowser">
-                      显示浏览器窗口（仅影响本次刷新，不会改变自动刷新的设置；如果使用服务器，请勿打开该开关）
+                      有头模式（仅影响本次刷新，不改变账号默认设置；服务器已内置虚拟显示）
                     </label>
                   </div>
                 </div>
@@ -5651,8 +5651,8 @@
               <div class="form-check form-switch">
                 <input class="form-check-input" type="checkbox" id="editAccountShowBrowser">
                 <label class="form-check-label" for="editAccountShowBrowser">
-                  显示浏览器
-                  <i class="bi bi-info-circle text-info ms-1" data-bs-toggle="tooltip" title="控制该账号在账密相关流程中是否显示浏览器窗口"></i>
+                  有头模式
+                  <i class="bi bi-info-circle text-info ms-1" data-bs-toggle="tooltip" title="控制该账号在账密相关流程中是否使用有头浏览器（服务器已内置虚拟显示，默认开启以降低滑块风控概率）"></i>
                 </label>
               </div>
               <div class="form-text text-warning">
