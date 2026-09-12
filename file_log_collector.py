@@ -6,6 +6,7 @@
 """
 
 import os
+import sys
 import threading
 from collections import deque
 from typing import Dict, List, Optional
@@ -53,11 +54,22 @@ class FileLogCollector:
         self.setup_loguru_output()
 
     def setup_loguru_output(self):
-        """配置 loguru：文件输出（实时 + 按日轮转）+ 内存队列 sink"""
+        """配置 loguru：sink 拓扑统一在此收口（stderr + 实时文件 + 按日文件 + 内存队列）"""
         try:
             from loguru import logger
         except ImportError:
             return
+
+        # 根治无主的默认 stderr sink：loguru 默认挂 DEBUG 级 stderr，不管理的话
+        # 每个请求的 DEBUG 行都会进 docker logs。移除后重建为 INFO 级运维通道；
+        # 需要 SQL 跟踪等调试输出时设 LOG_CONSOLE_LEVEL=DEBUG。
+        logger.remove()
+        console_level = os.getenv("LOG_CONSOLE_LEVEL", "INFO").upper()
+        logger.add(
+            sys.stderr,
+            level=console_level,
+            format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level} | {name}:{function}:{line} - {message}",
+        )
 
         # 确保logs目录存在
         logs_dir = self.root / "logs"
@@ -90,7 +102,7 @@ class FileLogCollector:
         # 内存环形队列 sink：面板 /logs 接口直接读这里
         logger.add(self._enqueue_entry, level="INFO")
 
-        logger.info("日志收集器已启动（内存队列 + 实时日志 + 按日期轮转日志）")
+        logger.info(f"日志收集器已启动（stderr@{console_level} + 实时日志 + 按日期轮转日志 + 内存队列）")
 
     def _enqueue_entry(self, message):
         """loguru 函数 sink：直接构造结构化日志条目写入内存队列"""

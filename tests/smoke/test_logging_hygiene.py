@@ -107,6 +107,19 @@ def test_file_log_collector_memory_sink_captures_structured_entries(tmp_path):
     assert stats["level_counts"].get("INFO", 0) >= 1
 
 
+def test_read_log_tail_clamps_non_positive_line_counts(tmp_path):
+    """max_lines=0 会触发 lst[-0:] 返回全量的切片陷阱，helper 必须自钳制。"""
+    import reply_server  # 先于 adminops 导入，避免子模块先行的循环导入
+    from app.api.routers.adminops import _read_log_tail
+
+    log_file = tmp_path / "t.log"
+    log_file.write_text("a\nb\nc\n", encoding="utf-8")
+
+    assert _read_log_tail(str(log_file), 0) == ["c"]
+    assert _read_log_tail(str(log_file), -3) == ["c"]
+    assert _read_log_tail(str(log_file), 10) == ["a", "b", "c"]
+
+
 def test_cleanup_old_data_removes_stale_task_and_delivery_logs(_db):
     db = reply_server.db_manager
 
@@ -143,6 +156,8 @@ def test_cleanup_old_data_removes_stale_task_and_delivery_logs(_db):
     assert stats["scheduled_rate_logs"] >= 1
     assert stats["scheduled_task_logs"] >= 1
     assert stats["delivery_logs"] >= 1
+    # 小清理不应触发 VACUUM 全库重建（freelist 门控）
+    assert stats.get("vacuum_executed") is False
 
     with db.lock:
         cur = db.conn.cursor()

@@ -2698,17 +2698,25 @@ Cookie数量: {cookie_count}
 
                 # 提交更改
                 self.conn.commit()
-                
-                # 执行VACUUM以释放磁盘空间（仅当清理了大量数据时）
+
+                # 仅当释放页达到可感知体量（默认页大小 4KB，2000 页≈8MB）才 VACUUM，
+                # 避免例行小清理触发全库重建、短暂阻塞写入
                 total_cleaned = sum(stats.values())
-                if total_cleaned > 100:
-                    logger.info(f"共清理了 {total_cleaned} 条记录，执行VACUUM以释放磁盘空间...")
+                freelist_pages = 0
+                try:
+                    cursor.execute("PRAGMA freelist_count")
+                    row = cursor.fetchone()
+                    freelist_pages = int(row[0]) if row else 0
+                except Exception:
+                    freelist_pages = 0
+                if freelist_pages >= 2000:
+                    logger.info(f"共清理了 {total_cleaned} 条记录，空闲页 {freelist_pages}，执行VACUUM归还磁盘空间...")
                     cursor.execute("VACUUM")
                     logger.info("VACUUM执行完成")
                     stats['vacuum_executed'] = True
                 else:
                     stats['vacuum_executed'] = False
-                
+
                 stats['total_cleaned'] = total_cleaned
                 return stats
                 

@@ -32,6 +32,8 @@ import uuid
 
 def _read_log_tail(path: str, max_lines: int, max_bytes: int = 4 * 1024 * 1024) -> List[str]:
     """只读日志文件尾部，避免为取最后 N 行把整个文件载入内存。"""
+    # 在 helper 内部钳制：max_lines=0 会触发 lst[-0:] 返回全量的切片陷阱
+    max_lines = max(1, max_lines)
     with open(path, 'rb') as f:
         f.seek(0, os.SEEK_END)
         size = f.tell()
