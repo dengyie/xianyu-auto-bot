@@ -1022,6 +1022,11 @@ def create_account_login_router() -> APIRouter:
                     except Exception:
                         pass
 
+                # 扫码刷新 Cookie 同样是人工验证动作：系统保护性停用的账号在此
+                # 恢复启用（内存翻转必须先于 update_cookie 读取 original_status，
+                # 否则切换后的实例会读到禁用状态自查退出）
+                reply_server.restore_system_paused_account(cookie_id, current_user)
+
                 # 如果cookie_manager存在，更新其中的cookie
                 if cookie_manager.manager:
                     # 从数据库获取更新后的cookie

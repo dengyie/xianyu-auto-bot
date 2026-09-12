@@ -731,6 +731,59 @@ class TestAccounts:
         assert "token=real" in (details.get("value") or "")
         assert "手动禁用" in (result.get("warning_message") or "")
 
+    def test_qr_refresh_cookies_restores_system_paused_account(self, client, user_auth, monkeypatch):
+        """扫码刷新 Cookie 路径：系统停用账号应恢复启用，且内存翻转先于任务切换。"""
+        cookie_id = "qr_refresh_paused_restore_cookie"
+
+        class FakeXianyuLive:
+            def __init__(self, *args, **kwargs):
+                self.cookies_str = "unb=refresh-restore; token=real"
+
+            async def refresh_cookies_from_qr_login(self, qr_cookies_str, cookie_id=None, user_id=None):
+                reply_server.db_manager.update_cookie_account_info(
+                    cookie_id,
+                    cookie_value=self.cookies_str,
+                    user_id=user_id,
+                )
+                return True
+
+        class FakeManager:
+            def __init__(self):
+                self.cookie_status = {}
+                self.status_at_update = []
+
+            def update_cookie(self, cookie_id, new_value, save_to_db=True):
+                # 钉住时序：update_cookie 读取 original_status 时内存必须已翻转
+                # 为 True，否则真实实例会读到禁用状态自查退出
+                self.status_at_update.append(self.cookie_status.get(cookie_id))
+                future = concurrent.futures.Future()
+                future.set_result(None)
+                return future
+
+        import XianyuAutoAsync
+
+        reply_server.db_manager.save_cookie(cookie_id, "unb=refresh-restore; token=old", user_id=2)
+        reply_server.db_manager.save_cookie_status(cookie_id, False)
+        reply_server.db_manager.update_cookie_status_note(cookie_id, "待二维码验证")
+
+        fake_manager = FakeManager()
+        monkeypatch.setattr(XianyuAutoAsync, "XianyuLive", FakeXianyuLive)
+        monkeypatch.setattr(reply_server.cookie_manager, "manager", fake_manager)
+
+        resp = client.post(
+            "/qr-login/refresh-cookies",
+            json={"cookie_id": cookie_id, "qr_cookies": "unb=refresh-restore; token=qr"},
+            headers=user_auth,
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        assert fake_manager.status_at_update == [True]
+        assert reply_server.db_manager.get_cookie_status(cookie_id) is True
+        details = reply_server.db_manager.get_cookie_details(cookie_id)
+        assert details["status_note"] == ""
+        assert fake_manager.cookie_status.get(cookie_id) is True
+
     def test_face_verification_screenshot_is_owner_only(self, client, other_user_auth, user_auth):
         account_id = "face_verify_owner_only_account"
         reply_server.db_manager.save_cookie(account_id, "unb=owner; token=value", user_id=2)

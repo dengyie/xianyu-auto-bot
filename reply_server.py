@@ -549,13 +549,16 @@ def _consume_cookie_manager_handoff(result: Any) -> None:
 
 
 def restore_system_paused_account(account_id: str, current_user: Dict[str, Any]) -> bool:
-    """重新登录类操作（扫码登录/扫码刷新/手动导入 Cookie）成功后的停用状态收口。
+    """重新登录类操作（扫码登录/扫码刷新 Cookie/手动导入 Cookie）的停用状态收口。
 
     这些操作都完成了人工身份验证：若账号此前被系统保护性停用（status_note
-    非空），恢复启用并清标记；内存 cookie_status 必须在任务切换（update_cookie
-    读取 original_status）之前置 True，否则切换后的实例会读到禁用状态自查退出
-    （表现为"Cookie 刷新成功但账号不跑"）。用户手动禁用（note 为空）尊重意图，
-    不自动启用。返回是否执行了恢复。
+    非空），原子恢复启用并清标记；内存 cookie_status 必须在任务切换
+    （update_cookie 读取 original_status）之前置 True，否则切换后的实例会
+    读到禁用状态自查退出（表现为"Cookie 刷新成功但账号不跑"）。用户手动
+    禁用（note 为空）尊重意图，不自动启用。返回是否执行了恢复。
+
+    扫码登录主链路（process_qr_login_cookies）因还需区分手动禁用的
+    skip_restart 语义而保留内联实现；本 helper 供其余重登路径复用。
     """
     try:
         details = db_manager.get_cookie_details(account_id) or {}
@@ -566,8 +569,9 @@ def restore_system_paused_account(account_id: str, current_user: Dict[str, Any])
     if not was_system_paused:
         return False
     try:
-        db_manager.save_cookie_status(account_id, True)
-        db_manager.update_cookie_status_note(account_id, '')
+        if not db_manager.restore_cookie_from_pause(account_id):
+            log_with_user('warning', f"原子恢复账号停用状态失败: {account_id}", current_user)
+            return False
         if cookie_manager.manager:
             cookie_manager.manager.cookie_status[account_id] = True
         log_with_user('info', f"重新登录已恢复系统停用的账号并清除状态标记: {account_id}", current_user)
@@ -3112,6 +3116,9 @@ async def _execute_manual_cookie_import(
                     _consume_cookie_manager_handoff(handoff_result)
             else:
                 db_manager.update_cookie_account_info(account_id, cookie_value=cookies_str)
+                # 手动导入也是人工验证动作：系统保护性停用的账号在此恢复启用
+                # （内存翻转须先于任务切换，否则实例读到禁用状态自查退出）
+                restore_system_paused_account(account_id, current_user)
                 if cookie_manager.manager:
                     if account_id in getattr(cookie_manager.manager, 'cookies', {}):
                         handoff_result = cookie_manager.manager.update_cookie(account_id, cookies_str, save_to_db=False)
