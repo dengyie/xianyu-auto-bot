@@ -3518,6 +3518,27 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                     warning_message = None
                     final_cookies = temp_instance.cookies_str or real_cookies
 
+                    # 扫码即完成了一次人工身份验证。若账号此前被系统保护性停用
+                    # （status_note 非空），先恢复启用并清标记，否则任务切换后实例
+                    # 会读到禁用状态自查退出（表现为"扫码成功但账号不跑"）。
+                    # 用户手动禁用（note 为空）则尊重意图，不自动启用。
+                    if not is_new_account:
+                        try:
+                            paused_details = db_manager.get_cookie_details(account_id) or {}
+                            was_system_paused = bool(str(paused_details.get('status_note') or '').strip())
+                        except Exception as read_e:
+                            log_with_user('warning', f"读取账号停用标记失败，跳过自动恢复: {read_e}", current_user)
+                            was_system_paused = False
+                        if was_system_paused:
+                            try:
+                                db_manager.save_cookie_status(account_id, True)
+                                db_manager.update_cookie_status_note(account_id, '')
+                                if cookie_manager.manager:
+                                    cookie_manager.manager.cookie_status[account_id] = True
+                                log_with_user('info', f"扫码成功已恢复系统停用的账号并清除状态标记: {account_id}", current_user)
+                            except Exception as clear_e:
+                                log_with_user('warning', f"清除账号停用状态失败（不影响登录）: {clear_e}", current_user)
+
                     try:
                         if cookie_manager.manager:
                             if is_new_account:

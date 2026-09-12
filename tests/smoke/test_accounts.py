@@ -602,6 +602,130 @@ class TestAccounts:
         assert result["task_restarted"] is False
         assert "runtime handoff exploded" in result["warning_message"]
 
+    @pytest.mark.asyncio
+    async def test_qr_login_restores_system_paused_account(self, user_auth, monkeypatch):
+        """系统保护性停用（status_note 非空）的账号，扫码成功后应自动恢复启用并清标记。"""
+        cookie_id = "qr_paused_restore_cookie"
+
+        class FakeXianyuLive:
+            def __init__(self, *args, **kwargs):
+                self.cookies_str = "unb=qr-paused-restore; token=real"
+
+            async def refresh_cookies_from_qr_login(self, qr_cookies_str, cookie_id=None, user_id=None):
+                reply_server.db_manager.update_cookie_account_info(
+                    cookie_id,
+                    cookie_value=self.cookies_str,
+                    user_id=user_id,
+                )
+                return True
+
+            @classmethod
+            def mark_qr_login_grace(cls, *args, **kwargs):
+                return None
+
+            @classmethod
+            def clear_qr_login_grace(cls, *args, **kwargs):
+                return None
+
+            @classmethod
+            def clear_password_login_failure_backoff(cls, *args, **kwargs):
+                return None
+
+        class FakeManager:
+            def __init__(self):
+                self.cookie_status = {}
+                self.updated = []
+
+            def update_cookie(self, cookie_id, new_value, save_to_db=True):
+                self.updated.append(cookie_id)
+                future = concurrent.futures.Future()
+                future.set_result(None)
+                return future
+
+        import XianyuAutoAsync
+
+        reply_server.db_manager.save_cookie(cookie_id, "unb=qr-paused-restore; token=old", user_id=2)
+        reply_server.db_manager.save_cookie_status(cookie_id, False)
+        reply_server.db_manager.update_cookie_status_note(cookie_id, "待二维码验证")
+
+        fake_manager = FakeManager()
+        monkeypatch.setattr(XianyuAutoAsync, "XianyuLive", FakeXianyuLive)
+        monkeypatch.setattr(reply_server.cookie_manager, "manager", fake_manager)
+
+        result = await reply_server.process_qr_login_cookies(
+            "unb=qr-paused-restore; token=qr",
+            "qr-paused-restore",
+            {"user_id": 2, "username": "user"},
+        )
+
+        assert result["task_restarted"] is True
+        assert fake_manager.updated == [cookie_id]
+        assert reply_server.db_manager.get_cookie_status(cookie_id) is True
+        details = reply_server.db_manager.get_cookie_details(cookie_id)
+        assert details["status_note"] == ""
+        assert fake_manager.cookie_status.get(cookie_id) is True
+
+    @pytest.mark.asyncio
+    async def test_qr_login_keeps_manually_disabled_account(self, user_auth, monkeypatch):
+        """用户手动禁用（status_note 为空）的账号，扫码成功后不自动启用。"""
+        cookie_id = "qr_manual_disabled_cookie"
+
+        class FakeXianyuLive:
+            def __init__(self, *args, **kwargs):
+                self.cookies_str = "unb=qr-manual-disabled; token=real"
+
+            async def refresh_cookies_from_qr_login(self, qr_cookies_str, cookie_id=None, user_id=None):
+                reply_server.db_manager.update_cookie_account_info(
+                    cookie_id,
+                    cookie_value=self.cookies_str,
+                    user_id=user_id,
+                )
+                return True
+
+            @classmethod
+            def mark_qr_login_grace(cls, *args, **kwargs):
+                return None
+
+            @classmethod
+            def clear_qr_login_grace(cls, *args, **kwargs):
+                return None
+
+            @classmethod
+            def clear_password_login_failure_backoff(cls, *args, **kwargs):
+                return None
+
+        class FakeManager:
+            def __init__(self):
+                self.cookie_status = {}
+                self.updated = []
+
+            def update_cookie(self, cookie_id, new_value, save_to_db=True):
+                self.updated.append(cookie_id)
+                future = concurrent.futures.Future()
+                future.set_result(None)
+                return future
+
+        import XianyuAutoAsync
+
+        reply_server.db_manager.save_cookie(cookie_id, "unb=qr-manual-disabled; token=old", user_id=2)
+        reply_server.db_manager.save_cookie_status(cookie_id, False)
+
+        fake_manager = FakeManager()
+        monkeypatch.setattr(XianyuAutoAsync, "XianyuLive", FakeXianyuLive)
+        monkeypatch.setattr(reply_server.cookie_manager, "manager", fake_manager)
+
+        result = await reply_server.process_qr_login_cookies(
+            "unb=qr-manual-disabled; token=qr",
+            "qr-manual-disabled",
+            {"user_id": 2, "username": "user"},
+        )
+
+        assert result["task_restarted"] is True
+        assert reply_server.db_manager.get_cookie_status(cookie_id) is False
+        assert fake_manager.cookie_status.get(cookie_id) is None
+        details = reply_server.db_manager.get_cookie_details(cookie_id)
+        assert details["status_note"] == ""
+
     def test_face_verification_screenshot_is_owner_only(self, client, other_user_auth, user_auth):
         account_id = "face_verify_owner_only_account"
         reply_server.db_manager.save_cookie(account_id, "unb=owner; token=value", user_id=2)
