@@ -2134,7 +2134,7 @@ def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
     try:
         qr_grace_display = _build_qr_grace_display(
             token_refresh_status,
-            db_manager.db_manager.get_cookie_qr_login_grace_until(cleaned_cid),
+            db_manager.get_cookie_qr_login_grace_until(cleaned_cid),
             now,
         )
     except Exception as e:

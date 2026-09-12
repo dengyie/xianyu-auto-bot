@@ -66,3 +66,38 @@ def test_rewrite_passthrough_without_deadline_or_countdown():
     assert _rewrite_frozen_remaining_message('剩余1799.0秒', 0, now=1_000_000_000) == '剩余1799.0秒'
     assert _rewrite_frozen_remaining_message('剩余1799.0秒', None, now=1_000_000_000) == '剩余1799.0秒'
     assert _rewrite_frozen_remaining_message(None, 1_000_000_000, now=1_000_000_000) is None
+
+
+def test_runtime_status_builder_reads_grace_deadline_from_db_instance(monkeypatch):
+    """回归：稳定期截止时间是急切求值的实参，reply_server 里 db_manager 本身就是
+    DBManager 实例；属性链误写成 db_manager.db_manager 会让带实例的运行态构建
+    每次都抛 AttributeError（'DBManager' object has no attribute 'db_manager'），
+    稳定期实时倒计时永远出不来。"""
+    import reply_server
+    from types import SimpleNamespace
+
+    called = []
+    monkeypatch.setattr(
+        reply_server.db_manager,
+        'get_cookie_qr_login_grace_until',
+        lambda cid: called.append(cid) or 0,
+    )
+
+    # 构建器对无实例账号提前返回，探不到稳定期查询；注入带空壳实例的 stub 走全路径
+    class _StubManager:
+        def __init__(self):
+            self.live_instances = {}
+            self.cookie_status = {}
+
+        def get_cookie_status(self, cid):
+            return self.cookie_status.get(cid, True)
+
+    stub_manager = _StubManager()
+    stub_manager.live_instances['grace_regression_cid'] = SimpleNamespace()
+    monkeypatch.setattr(reply_server.cookie_manager, 'manager', stub_manager)
+
+    status = reply_server._build_live_runtime_status('grace_regression_cid')
+
+    assert called == ['grace_regression_cid']
+    assert status['instance_exists'] is True
+    assert not any(k.startswith('qr_grace') for k in status)
