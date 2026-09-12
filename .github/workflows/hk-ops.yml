@@ -1,0 +1,37 @@
+name: HK Ops (manual SSH command)
+
+# hk VPS 的日常运维通道：本机 SSH 直连被 TUN 掐断，主机操作统一走 CI。
+# 与 docker-image.yml 的 deploy job 共用同一 deploy key；只应在需要时手动触发。
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: '要在 hk 上执行的 shell 命令（可用 sudo）'
+        required: true
+        type: string
+
+concurrency:
+  group: hk-docker-serial
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      SSH_HOST: ${{ secrets.XIANYU_DEPLOY_HOST }}
+    steps:
+      - name: Setup deploy key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.XIANYU_DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Run command on hk
+        run: |
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
+            "${{ inputs.command }}"
+
+      - name: Cleanup key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
