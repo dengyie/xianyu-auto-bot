@@ -1404,6 +1404,9 @@ class XianyuAuthRecoveryMixin:
             )
             slider.risk_session_id = risk_session_id
             slider.risk_trigger_scene = trigger_scene
+            # 账号代理必须传给求解器：slidex 密码登录浏览器从 self.proxy_config
+            # 构建 launch proxy，缺失时浏览器直连机房 IP，滑块必被环境分硬拒
+            slider.proxy_config = dict(getattr(self, 'proxy_config', None) or {})
             result = await slider._run_sync_method_on_fresh_thread(
                 slider.login_with_password_playwright,
                 account=username,
