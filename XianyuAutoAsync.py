@@ -3665,10 +3665,9 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
             logger.info(f"【{self.cookie_id}】WebSocket将通过代理连接: {proxy_type}://{self.proxy_config.get('proxy_host')}:{self.proxy_config.get('proxy_port')}")
             
             try:
-                from python_socks.async_.asyncio.v2 import Proxy
+                from python_socks.sync import Proxy as SyncProxy
                 from python_socks import ProxyType as SocksProxyType
-                import ssl
-                
+
                 # 确定代理类型
                 if proxy_type == 'socks5':
                     socks_type = SocksProxyType.SOCKS5
@@ -3678,39 +3677,36 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
                     socks_type = SocksProxyType.HTTP
                 else:
                     socks_type = None
-                
+
                 if socks_type:
                     # 解析WebSocket URL获取目标主机和端口
                     import urllib.parse
                     parsed_url = urllib.parse.urlparse(self.base_url)
                     dest_host = parsed_url.hostname
                     dest_port = parsed_url.port or (443 if parsed_url.scheme == 'wss' else 80)
-                    
-                    # 创建代理连接
-                    proxy = Proxy(
+
+                    # 用 sync API 在线程池里建 CONNECT 隧道，拿到真实 socket。
+                    # 不能用 async v2 的 connect()：它返回 AsyncioSocketStream，
+                    # 交给 ssl/websockets 会炸（no attribute 'getsockopt'）导致静默
+                    # 回落直连；手工 ssl.wrap_socket 则会与 websockets 对 wss 的
+                    # TLS 握手叠成双重 TLS——纯 socket 交给 websockets 即可。
+                    proxy = SyncProxy(
                         proxy_type=socks_type,
                         host=self.proxy_config.get('proxy_host'),
                         port=self.proxy_config.get('proxy_port'),
                         username=self.proxy_config.get('proxy_user') or None,
                         password=self.proxy_config.get('proxy_pass') or None
                     )
-                    
-                    # 通过代理连接到目标服务器
-                    proxy_sock = await proxy.connect(
-                        dest_host=dest_host,
-                        dest_port=dest_port
+                    loop = asyncio.get_running_loop()
+                    proxy_sock = await loop.run_in_executor(
+                        None,
+                        lambda: proxy.connect(dest_host, dest_port, timeout=15),
                     )
-                    
-                    # 如果是wss，需要升级为SSL
-                    if parsed_url.scheme == 'wss':
-                        ssl_context = ssl.create_default_context()
-                        proxy_sock = ssl_context.wrap_socket(
-                            proxy_sock,
-                            server_hostname=dest_host
-                        )
-                    
-                    logger.info(f"【{self.cookie_id}】代理连接建立成功")
-                    
+                    # connect 返回的是带阻塞超时的 socket，交给事件循环前转非阻塞
+                    proxy_sock.setblocking(False)
+
+                    logger.info(f"【{self.cookie_id}】代理连接建立成功（隧道已到 {dest_host}:{dest_port}）")
+
             except ImportError as e:
                 logger.warning(f"【{self.cookie_id}】代理连接需要安装 python-socks: pip install python-socks[asyncio]")
                 logger.warning(f"【{self.cookie_id}】将尝试不使用代理进行WebSocket连接")
