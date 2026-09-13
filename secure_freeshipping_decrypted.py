@@ -148,7 +148,8 @@ class SecureFreeshipping:
                 'https://h5api.m.goofish.com/h5/mtop.idle.groupon.activity.seller.freeshipping/1.0/',
                 params=params,
                 data=data,
-                timeout=request_timeout
+                timeout=request_timeout,
+                proxy=getattr(self, '_http_proxy_url', None)
             ) as response:
                 res_json = await response.json()
 

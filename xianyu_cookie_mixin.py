@@ -11,6 +11,8 @@ from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
 
+from utils.proxy_utils import get_global_proxy_url, playwright_proxy
+
 
 class _HostProxy:
     """属性访问转发到 XianyuAutoAsync 模块级符号（调用时解析）。"""
@@ -590,6 +592,7 @@ class CookieMixin:
 
             async with self.session.get(
                 'https://www.goofish.com/im',
+                proxy=self._get_proxy_url() or get_global_proxy_url(),
                 headers={
                     'cookie': self.cookies_str,
                     'Referer': 'https://www.goofish.com/',
@@ -1036,7 +1039,9 @@ class CookieMixin:
                 headless=True,  # 改回无头模式
                 args=browser_args,
                 # 与 slidex 同款：剥掉 Playwright 默认的自动化指纹
-                ignore_default_args=['--enable-automation']
+                ignore_default_args=['--enable-automation'],
+                # 闲鱼出站代理：账号级优先，回退全局家宽出口
+                proxy=playwright_proxy(self._get_proxy_url() or get_global_proxy_url()),
             )
 
             # 创建浏览器上下文
@@ -1421,7 +1426,9 @@ class CookieMixin:
                 headless=not show_browser,
                 args=browser_args,
                 # 与 slidex 同款：剥掉 Playwright 默认的自动化指纹
-                ignore_default_args=['--enable-automation']
+                ignore_default_args=['--enable-automation'],
+                # 闲鱼出站代理：账号级优先，回退全局家宽出口
+                proxy=playwright_proxy(self._get_proxy_url() or get_global_proxy_url()),
             )
 
             # 创建浏览器上下文
@@ -1709,7 +1716,9 @@ class CookieMixin:
                 headless=not show_browser,
                 args=browser_args,
                 # 与 slidex 同款：剥掉 Playwright 默认的自动化指纹
-                ignore_default_args=['--enable-automation']
+                ignore_default_args=['--enable-automation'],
+                # 闲鱼出站代理：账号级优先，回退全局家宽出口
+                proxy=playwright_proxy(self._get_proxy_url() or get_global_proxy_url()),
             )
 
             # 创建浏览器上下文

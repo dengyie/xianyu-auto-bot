@@ -111,6 +111,13 @@ class DrissionHandler:
         self.co.set_argument("--no-first-run")  # 跳过首次运行设置
         self.co.set_argument("--disable-default-apps")  # 禁用默认应用
 
+        # 闲鱼出站代理：滑块 Drission 兜底也必须走家宽，直连必被环境分硬拒
+        from utils.proxy_utils import get_global_proxy_url
+
+        _proxy_url = get_global_proxy_url()
+        if _proxy_url:
+            self.co.set_proxy(_proxy_url)
+
         # 添加更多兼容性参数
         self.co.set_argument("--disable-background-timer-throttling")
         self.co.set_argument("--disable-renderer-backgrounding")

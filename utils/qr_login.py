@@ -19,6 +19,7 @@ import hashlib
 from urllib.parse import parse_qs, unquote, urlparse
 
 from utils.image_utils import image_manager
+from utils.proxy_utils import get_global_proxy_url, playwright_proxy
 
 
 def generate_headers():
@@ -111,9 +112,9 @@ class QRLoginManager:
         self.api_scan_status = f"{self.host}/newlogin/qrcode/query.do"
         self.api_h5_tk = "https://h5api.m.goofish.com/h5/mtop.gaia.nodejs.gaia.idle.data.gw.v2.index.get/1.0/"
         
-        # 配置代理（如果需要的话，取消注释并修改代理地址）
-        # self.proxy = "http://127.0.0.1:7890"
-        self.proxy = None
+        # 代理：取 XIANYU_GLOBAL_PROXY_URL（compose 注入 mihomo-home 家宽出口）。
+        # 扫码会话的出生 IP 必须与账号后续出口一致，直连机房 IP 会污染新会话
+        self.proxy = get_global_proxy_url()
 
         # 配置超时时间
         self.timeout = httpx.Timeout(connect=30.0, read=60.0, write=30.0, pool=60.0)
@@ -570,6 +571,7 @@ class QRLoginManager:
             playwright = await async_playwright().start()
             browser = await playwright.chromium.launch(
                 headless=True,
+                proxy=playwright_proxy(self.proxy),
                 args=[
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
@@ -1260,6 +1262,7 @@ class QRLoginManager:
             playwright = await async_playwright().start()
             browser = await playwright.chromium.launch(
                 headless=True,
+                proxy=playwright_proxy(self.proxy),
                 args=[
                     '--no-sandbox',
                     '--disable-setuid-sandbox',

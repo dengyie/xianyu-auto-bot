@@ -3436,6 +3436,8 @@ async def _run_qr_login_lite(session_id: str, current_user: Dict[str, Any]):
         # EXPIRED / 异常字符串：让 qrcode_login_lite 抛 TimeoutError，由 finally 收口
 
     try:
+        from utils.proxy_utils import get_global_proxy_url, requests_proxies
+
         cookies, acct = await asyncio.to_thread(
             qrcode_login_lite,
             poll_interval=3.0,
@@ -3443,6 +3445,7 @@ async def _run_qr_login_lite(session_id: str, current_user: Dict[str, Any]):
             show_qrcode_in_terminal=False,
             on_qr_url=_on_qr_url,
             on_status=_on_status,
+            proxies=requests_proxies(get_global_proxy_url()),
         )
         cookie_str = '; '.join(f"{k}={v}" for k, v in cookies.items())
         info = await process_qr_login_cookies(cookie_str, acct.get('unb', ''), current_user)

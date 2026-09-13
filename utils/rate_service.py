@@ -174,7 +174,9 @@ class RateService:
         try:
             timeout = aiohttp.ClientTimeout(total=20)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(RATE_API_URL, params=params, headers=headers, data={"data": data_val}) as response:
+                from utils.proxy_utils import get_global_proxy_url
+
+                async with session.post(RATE_API_URL, params=params, headers=headers, data={"data": data_val}, proxy=get_global_proxy_url()) as response:
                     try:
                         result = await response.json(content_type=None)
                     except Exception:
@@ -295,11 +297,14 @@ async def fetch_merchant_rate_list(
         try:
             timeout = aiohttp.ClientTimeout(total=20)
             async with aiohttp.ClientSession(timeout=timeout) as session:
+                from utils.proxy_utils import get_global_proxy_url
+
                 async with session.post(
                     MERCHANT_RATE_LIST_API_URL,
                     params=params,
                     headers=headers,
                     data={"data": data_val},
+                    proxy=get_global_proxy_url(),
                 ) as response:
                     try:
                         result = await response.json(content_type=None)

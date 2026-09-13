@@ -1531,9 +1531,12 @@ class ItemMixin:
                     '--use-mock-keychain'
                 ])
 
+            from utils.proxy_utils import get_global_proxy_url, playwright_proxy
+
             browser = await playwright.chromium.launch(
                 headless=True,  # 移动模式使用无头模式
-                args=browser_args
+                args=browser_args,
+                proxy=playwright_proxy(self._get_proxy_url() or get_global_proxy_url()),
             )
 
             # 创建移动设备浏览器上下文（模拟iPhone）
@@ -1859,7 +1862,8 @@ class ItemMixin:
             async with self.session.post(
                 'https://h5api.m.goofish.com/h5/mtop.taobao.idle.pc.detail/1.0/',
                 params=params,
-                data=data
+                data=data,
+                proxy=getattr(self, '_http_proxy_url', None)
             ) as response:
                 res_json = await response.json()
 
@@ -2126,7 +2130,8 @@ class ItemMixin:
             async with self.session.post(
                 'https://h5api.m.goofish.com/h5/mtop.idle.web.xyh.item.list/1.0/',
                 params=params,
-                data={'data': data_val}
+                data={'data': data_val},
+                proxy=getattr(self, '_http_proxy_url', None)
             ) as response:
                 res_json = await response.json()
 

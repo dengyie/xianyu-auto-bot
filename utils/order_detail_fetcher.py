@@ -185,11 +185,15 @@ class OrderDetailFetcher:
                 ])
 
             logger.info(f"启动浏览器，参数: {browser_args}")
+            from utils.proxy_utils import get_global_proxy_url, playwright_proxy
+
+            proxy_url = (self.proxy_config or {}).get('proxy_url') if getattr(self, 'proxy_config', None) else None
             self.browser = await self._playwright.chromium.launch(
                 headless=headless,
                 args=browser_args,
                 # 与 slidex 同款：剥掉 Playwright 默认的自动化指纹
-                ignore_default_args=['--enable-automation']
+                ignore_default_args=['--enable-automation'],
+                proxy=playwright_proxy(proxy_url or get_global_proxy_url()),
             )
 
             logger.info("浏览器启动成功，创建上下文...")

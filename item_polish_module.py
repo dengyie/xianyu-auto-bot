@@ -81,6 +81,7 @@ class ItemPolishModule:
                 'https://h5api.m.goofish.com/h5/mtop.taobao.idle.item.polish/1.0/',
                 params=params,
                 data=payload,
+                proxy=getattr(self.runtime, '_http_proxy_url', None),
             ) as response:
                 res_json = await response.json()
                 await self._sync_cookies_from_response(response)
@@ -123,6 +124,7 @@ class ItemPolishModule:
                 'https://h5api.m.goofish.com/h5/mtop.idle.item.polish/1.0/',
                 params=params,
                 data=payload,
+                proxy=getattr(self.runtime, '_http_proxy_url', None),
             ) as response:
                 res_json = await response.json()
                 await self._sync_cookies_from_response(response)

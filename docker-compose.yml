@@ -84,6 +84,9 @@ services:
       - HEARTBEAT_TIMEOUT=${HEARTBEAT_TIMEOUT:-5}
       - TOKEN_REFRESH_INTERVAL=${TOKEN_REFRESH_INTERVAL:-3600}
       - TOKEN_RETRY_INTERVAL=${TOKEN_RETRY_INTERVAL:-300}
+      # 全局闲鱼出站代理：扫码登录/商品/订单/评价等所有闲鱼域名流量经 mihomo-home
+      # 走家宽出口（与账号级代理同款 mixed 端口；账号级配置存在时优先于它）
+      - XIANYU_GLOBAL_PROXY_URL=${XIANYU_GLOBAL_PROXY_URL:-http://mihomo-home:7891}
       - MESSAGE_EXPIRE_TIME=${MESSAGE_EXPIRE_TIME:-300000}
 
     networks:

@@ -722,10 +722,13 @@ class XianyuSearcher:
             
             # 使用 launch_persistent_context 实现跨会话的缓存持久化
             # 这样通过一次滑块验证后，下次搜索可以复用缓存，避免再次出现滑块
+            from utils.proxy_utils import get_global_proxy_url, playwright_proxy
+
             self.context = await playwright.chromium.launch_persistent_context(
                 user_data_dir,  # 第一个参数是用户数据目录，用于持久化
                 headless=True,  # 无头模式，后台运行
                 args=browser_args,
+                proxy=playwright_proxy(get_global_proxy_url()),
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 viewport={'width': 1280, 'height': 720},
                 locale='zh-CN',  # 设置语言为中文

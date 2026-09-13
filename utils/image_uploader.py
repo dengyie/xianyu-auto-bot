@@ -145,7 +145,9 @@ class ImageUploader:
             
             # 发送上传请求
             logger.info(f"开始上传图片到闲鱼CDN: {filename}")
-            async with self.session.post(self.upload_url, data=data, headers=headers) as response:
+            from utils.proxy_utils import get_global_proxy_url
+
+            async with self.session.post(self.upload_url, data=data, headers=headers, proxy=get_global_proxy_url()) as response:
                 if response.status == 200:
                     response_text = await response.text()
                     logger.debug(f"上传响应: {response_text}")

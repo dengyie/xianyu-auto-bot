@@ -323,11 +323,14 @@ class OrderHistoryPageFetcher:
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
 
+        from utils.proxy_utils import get_global_proxy_url
+
         async with self.session.post(
             ORDER_LIST_API_URL,
             params=params,
             data={'data': data_val},
             headers=self._build_request_headers(),
+            proxy=get_global_proxy_url(),
         ) as response:
             try:
                 res_json = await response.json(content_type=None)
