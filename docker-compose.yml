@@ -106,7 +106,7 @@ services:
 
   # 家宽出口 sidecar：把 🏠home-win-CF 节点（VLESS+WS+TLS 经 CF Tunnel，出口=上海移动家宽）
   # 转成本 compose 网络内的 mixed(http+socks) 代理，供账号代理（proxy_host=mihomo-home:7891）使用。
-  # 节点凭据在服务器 ./data/mihomo/config.yml（不在仓库）；不发布端口，仅内网可达。
+  # 节点凭据在服务器 ./data/mihomo/config.yaml（不在仓库）；不发布端口，仅内网可达。
   # home-win 关机 = 该节点 delay 全红、账号 WS 断连，开机自愈（非故障）。
   mihomo-home:
     image: metacubex/mihomo:latest
