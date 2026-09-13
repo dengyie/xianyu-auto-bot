@@ -28,6 +28,10 @@ jobs:
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Run command on hk
+        env:
+          # 供命令经 $HOME_NODE_MIHOMO_CONFIG_B64 引用节点配置（公开仓库：凭据只在
+          # secret 里，严禁写进 dispatch input——input 在 run 页面原文可见，2026-09-13 踩过）
+          HOME_NODE_MIHOMO_CONFIG_B64: ${{ secrets.HOME_NODE_MIHOMO_CONFIG_B64 }}
         run: |
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
             "${{ inputs.command }}"
