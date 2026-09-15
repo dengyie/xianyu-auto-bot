@@ -55,6 +55,10 @@ class DrissionHandler:
         self.slide_attempt = 0  # 当前滑动尝试次数
         self.maximize_window = maximize_window
         self.show_mouse_trace = show_mouse_trace  # 鼠标轨迹可视化
+        self._browser_pid = None  # Chromium 主进程 OS PID，用于 quit() 失败时的进程树强杀
+        self._closed = False  # close() 幂等标记
+        self.browser = None
+        self.page = None
 
         # 🎯 垂直偏移量配置（可调整）
         self.y_drift_range = 3      # 整体漂移趋势范围 ±3像素（原来是±8）
@@ -165,6 +169,14 @@ class DrissionHandler:
             if browser_started:
                 self.page = self.browser.latest_tab  # 获取最新标签页
                 logger.info("获取浏览器标签页成功")
+
+                # 记录 Chromium 主进程 PID：quit() 失败或 CDP 假死时按 PID 强杀进程树
+                try:
+                    self._browser_pid = self.browser.process_id
+                    if self._browser_pid:
+                        logger.info(f"DrissionPage Chromium OS PID: {self._browser_pid}")
+                except Exception as pid_err:
+                    logger.warning(f"获取 Chromium PID 失败（强杀兜底将不可用）: {pid_err}")
 
                 # 如果是有头模式且需要最大化，在浏览器启动后再次确保最大化
                 if maximize_window and not is_headless:
@@ -1318,11 +1330,11 @@ class DrissionHandler:
             return None
 
         finally:
-            # 确保浏览器被关闭
+            # 确保浏览器被关闭（close() 内含 PID 进程树强杀兜底）
             try:
                 self.close()
-            except:
-                pass
+            except Exception as close_err:
+                logger.warning(f"【{self.cookie_id}】关闭 DrissionPage 浏览器失败: {close_err}")
 
 
     def _calculate_slide_distance(self):
@@ -1742,9 +1754,60 @@ class DrissionHandler:
         logger.info("垂直偏移量设置已更新")
 
     def close(self):
-        """关闭浏览器"""
-        # logger.info("关闭浏览器")
-        self.browser.quit()
+        """关闭浏览器：quit() 之后校验 Chromium 进程确实退出，否则按 PID 强杀进程树。
+
+        CDP 假死或连接断开时 browser.quit() 会静默失效，Chromium 会残留并
+        耗尽内存（曾在生产堆积 36 个孤儿进程把宿主机挤进 Swap 颠簸），因此
+        这里必须做 OS 级别的进程树兜底清理。幂等：重复调用无副作用。
+        """
+        if getattr(self, '_closed', False):
+            return
+        self._closed = True
+        quit_error = None
+        try:
+            if self.browser:
+                self.browser.quit(force=True)
+        except Exception as e:
+            quit_error = e
+            logger.warning(f"DrissionPage 浏览器 quit 失败，将按 PID 强杀: {e}")
+
+        if self._browser_pid:
+            self._force_kill_chromium_tree(self._browser_pid)
+            self._browser_pid = None
+
+        if quit_error:
+            raise quit_error
+
+    @staticmethod
+    def _force_kill_chromium_tree(pid):
+        """按 PID 递归强杀 Chromium 进程树（先子后父，SIGKILL 等价）。"""
+        try:
+            import psutil
+            proc = psutil.Process(pid)
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            return
+        except Exception as e:
+            logger.warning(f"检查 Chromium PID={pid} 失败: {e}")
+            return
+
+        killed = 0
+        try:
+            children = proc.children(recursive=True)
+        except Exception:
+            children = []
+        for child in children:
+            try:
+                child.kill()
+                killed += 1
+            except Exception:
+                continue
+        try:
+            proc.kill()
+            killed += 1
+            proc.wait(timeout=5)
+            logger.info(f"强杀 Chromium 进程树 PID={pid} 完成（{killed} 个进程）")
+        except Exception as e:
+            logger.warning(f"强杀 Chromium PID={pid} 失败: {e}")
 
 
 class XianyuApis:

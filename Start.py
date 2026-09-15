@@ -527,6 +527,14 @@ async def main():
     manager = cm.manager
     print("CookieManager 创建完成")
 
+    # 启动孤儿 Chromium 回收看门狗（兜底回收失去管控的浏览器进程，防止内存耗尽）
+    try:
+        from utils.chrome_reaper import orphan_reaper_loop
+        loop.create_task(orphan_reaper_loop())
+        logger.info("孤儿 Chromium 看门狗任务已启动")
+    except Exception as reaper_err:
+        logger.error(f"孤儿 Chromium 看门狗启动失败（不影响主流程）: {reaper_err}")
+
     # 1) 从数据库加载的 Cookie 已经在 CookieManager 初始化时完成
     # 为每个启用的 Cookie 启动任务
     for cid, val in manager.cookies.items():
