@@ -101,8 +101,11 @@ def find_orphan_chromium_pids(now: Optional[float] = None) -> List[int]:
 
 
 def kill_process_tree(pid: int) -> int:
-    """按 PID 递归强杀进程树（先子后父），返回成功杀掉的进程数。"""
-    killed = 0
+    """按 PID 递归强杀进程树（先子后父），返回成功杀掉的进程数。
+
+    杀前校验根进程名必须是 Chromium 家族：quit()/超时后该 PID 理论上存在
+    被系统回收再分配给无关进程的窗口，校验可杜绝 PID 复用误杀。
+    """
     try:
         proc = psutil.Process(pid)
     except (psutil.NoSuchProcess, psutil.ZombieProcess):
@@ -111,6 +114,17 @@ def kill_process_tree(pid: int) -> int:
         logger.warning(f"[chrome-reaper] 检查 PID={pid} 失败: {e}")
         return 0
 
+    try:
+        if not is_chromium_process(proc.name()):
+            logger.warning(f"[chrome-reaper] PID={pid} 已非 Chromium 进程（name={proc.name()}），跳过强杀防 PID 复用误杀")
+            return 0
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return 0
+    except Exception as e:
+        logger.warning(f"[chrome-reaper] 读取 PID={pid} 进程名失败: {e}")
+        return 0
+
+    killed = 0
     try:
         children = proc.children(recursive=True)
     except Exception:

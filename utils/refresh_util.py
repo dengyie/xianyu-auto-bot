@@ -7,6 +7,7 @@ import hashlib
 import base64
 import struct
 import math
+import threading
 from typing import Any, Dict, List
 import requests
 from loguru import logger
@@ -1759,10 +1760,27 @@ class DrissionHandler:
         CDP 假死或连接断开时 browser.quit() 会静默失效，Chromium 会残留并
         耗尽内存（曾在生产堆积 36 个孤儿进程把宿主机挤进 Swap 颠簸），因此
         这里必须做 OS 级别的进程树兜底清理。幂等：重复调用无副作用。
+        quit 挂死防护：quit 卡死会让后面的按 PID 强杀永远执行不到——独立
+        线程计时 30s，超时直接按 PID 强杀（psutil 不依赖 CDP，可解除阻塞）。
         """
         if getattr(self, '_closed', False):
             return
         self._closed = True
+
+        quit_watchdog = None
+        if self._browser_pid:
+            try:
+                quit_watchdog = threading.Timer(
+                    30.0,
+                    self._force_kill_chromium_tree,
+                    args=(self._browser_pid,),
+                )
+                quit_watchdog.daemon = True
+                quit_watchdog.start()
+            except Exception as wd_err:
+                logger.warning(f"关闭看门狗启动失败（不影响正常清理）: {wd_err}")
+                quit_watchdog = None
+
         quit_error = None
         try:
             if self.browser:
@@ -1770,6 +1788,9 @@ class DrissionHandler:
         except Exception as e:
             quit_error = e
             logger.warning(f"DrissionPage 浏览器 quit 失败，将按 PID 强杀: {e}")
+        finally:
+            if quit_watchdog:
+                quit_watchdog.cancel()
 
         if self._browser_pid:
             self._force_kill_chromium_tree(self._browser_pid)
@@ -1780,7 +1801,11 @@ class DrissionHandler:
 
     @staticmethod
     def _force_kill_chromium_tree(pid):
-        """按 PID 递归强杀 Chromium 进程树（先子后父，SIGKILL 等价）。"""
+        """按 PID 递归强杀 Chromium 进程树（先子后父，SIGKILL 等价）。
+
+        杀前校验根进程名必须是 Chromium 家族，防止 quit 之后 PID 被系统回收
+        复用为无关进程时误杀。
+        """
         try:
             import psutil
             proc = psutil.Process(pid)
@@ -1789,6 +1814,17 @@ class DrissionHandler:
         except Exception as e:
             logger.warning(f"检查 Chromium PID={pid} 失败: {e}")
             return
+
+        try:
+            from utils.chrome_reaper import is_chromium_process
+            if not is_chromium_process(proc.name()):
+                logger.warning(f"PID={pid} 已非 Chromium 进程（name={proc.name()}），跳过强杀防 PID 复用误杀")
+                return
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            return
+        except Exception as e:
+            # 校验失败不阻塞兜底（进程确实存在），仅记录
+            logger.warning(f"读取 PID={pid} 进程名失败（继续尝试强杀）: {e}")
 
         killed = 0
         try:

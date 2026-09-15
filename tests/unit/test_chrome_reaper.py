@@ -175,6 +175,7 @@ class TestFindOrphanChromiumPids:
 class TestKillProcessTree:
     def test_kills_children_then_parent(self):
         parent = MagicMock()
+        parent.name.return_value = "chrome"
         child = MagicMock()
         parent.children.return_value = [child]
 
@@ -188,6 +189,29 @@ class TestKillProcessTree:
     def test_missing_process_returns_zero(self):
         with patch.object(psutil, "Process", side_effect=psutil.NoSuchProcess(701)):
             assert chrome_reaper.kill_process_tree(701) == 0
+
+    def test_non_chromium_root_skipped_pid_reuse_guard(self):
+        """quit 后 PID 被回收复用为无关进程时不得误杀。"""
+        parent = MagicMock()
+        parent.name.return_value = "python3"
+
+        with patch.object(psutil, "Process", return_value=parent):
+            killed = chrome_reaper.kill_process_tree(702)
+
+        assert killed == 0
+        parent.kill.assert_not_called()
+
+    def test_name_check_failure_skips_conservatively(self):
+        """reaper 是旁观者：进程名无法核验时（可能已被 PID 复用）宁漏勿杀。"""
+        parent = MagicMock()
+        parent.name.side_effect = OSError("read failed")
+        parent.children.return_value = []
+
+        with patch.object(psutil, "Process", return_value=parent):
+            killed = chrome_reaper.kill_process_tree(703)
+
+        assert killed == 0
+        parent.kill.assert_not_called()
 
 
 class TestReapOrphanChromium:
