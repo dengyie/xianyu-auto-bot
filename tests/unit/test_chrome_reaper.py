@@ -120,6 +120,40 @@ class TestFindOrphanChromiumPids:
 
         assert 503 in result
 
+    def test_container_reparented_to_pid1_is_orphan(self):
+        """生产容器 init:true 场景：父进程死亡后孤儿 re-parent 到 PID 1（tini）。
+
+        回归背景：初版把 PID 1 计入 own_pids（python 的祖先链含 tini），
+        导致 re-parent 孤儿被误判为有主，reaper 在容器内永远不作为。
+        """
+        reparented = _proc(505, "chrome", ppid=1)
+
+        def process_side_effect(pid):
+            if pid == os.getpid():
+                me = MagicMock()
+                me.pid = os.getpid()
+                # 容器内 python 的父进程就是 tini(PID 1)
+                tini = MagicMock()
+                tini.pid = 1
+                me.parent.return_value = tini
+                return me
+            raise psutil.NoSuchProcess(pid)
+
+        with patch.object(psutil, "process_iter", return_value=[reparented]), \
+             patch.object(psutil, "Process", side_effect=process_side_effect):
+            result = chrome_reaper.find_orphan_chromium_pids()
+
+        assert 505 in result
+
+    def test_own_tree_excludes_pid1(self):
+        me = MagicMock()
+        me.pid = 4242
+        tini = MagicMock()
+        tini.pid = 1
+        me.parent.return_value = tini
+
+        assert chrome_reaper._own_process_tree_pids(me) == {4242}
+
     def test_non_chromium_ignored(self):
         python_proc = _proc(504, "python3.11", ppid=999)
 

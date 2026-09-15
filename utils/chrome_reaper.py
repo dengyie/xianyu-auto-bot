@@ -37,14 +37,19 @@ def is_chromium_process(proc_info_name: str) -> bool:
 
 
 def _own_process_tree_pids(root: Optional[psutil.Process] = None) -> Set[int]:
-    """收集当前 Python 进程自身的进程树 PID 集合（self + 祖先）。"""
+    """收集当前 Python 进程自身的进程树 PID 集合（self + 祖先，**不含 PID 1**）。
+
+    PID 1 必须排除：容器内 tini 是本进程祖先，但父进程死亡后的孤儿 Chrome
+    会被内核 re-parent 到 PID 1——若把 1 计入归属，孤儿将被误判为"有主"，
+    reaper 永远不会回收（生产容器 init:true 实况）。
+    """
     try:
         me = root or psutil.Process(os.getpid())
         pids = {me.pid}
         parent = me.parent()
-        # 沿祖先链上溯几层（容器里即 tini -> python），标记归属
+        # 沿祖先链上溯几层（容器里即 tini -> python），标记归属；PID 1 除外
         for _ in range(10):
-            if parent is None:
+            if parent is None or parent.pid <= 1:
                 break
             pids.add(parent.pid)
             try:
@@ -71,7 +76,10 @@ def find_orphan_chromium_pids(now: Optional[float] = None) -> List[int]:
                 continue
             ppid = proc.info.get('ppid')
             # 排除当前应用进程树直系成员（有主，业务代码自行回收）
-            if ppid in own_pids:
+            # ⚠ PID 1 必须排除在 own_pids 之外：容器里 tini/init 是 python 的祖先，
+            # 而父进程死亡后的孤儿会被 re-parent 到 PID 1——若把 1 计入归属，
+            # reaper 会对真正的孤儿永远不作为（本仓库生产容器 init:true 的实况）。
+            if ppid in own_pids and ppid != 1:
                 continue
             parent_alive = False
             if ppid and ppid > 1:
