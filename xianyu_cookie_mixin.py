@@ -82,7 +82,7 @@ class CookieMixin:
         cookies_dict: Optional[Dict[str, Any]] = None,
         source: str = "runtime_update",
     ) -> bool:
-        normalized_cookies = dict(cookies_dict or _host.trans_cookies(_host.cookies_str or ""))
+        normalized_cookies = dict(cookies_dict or _host.trans_cookies(cookies_str or ""))
         if not normalized_cookies:
             logger.warning(f"【{self.cookie_id}】忽略空Cookie更新: source={source}")
             return False
@@ -108,7 +108,7 @@ class CookieMixin:
         source: str = "runtime_update",
     ) -> bool:
         changed = self._set_runtime_cookie_state(
-            cookies_str=_host.cookies_str,
+            cookies_str=cookies_str,
             cookies_dict=cookies_dict,
             source=source,
         )

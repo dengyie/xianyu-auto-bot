@@ -98,3 +98,25 @@ def test_slider_mixin_host_refs_resolve():
     assert refs, "expected _host references in slider_stealth_mixins.py"
     missing = sorted(r for r in refs if not hasattr(host_module, r))
     assert not missing, f"_host refs missing on host module: {missing}"
+
+
+def test_core_mixin_host_refs_resolve():
+    """同一条守卫推广到 core Mixin 全家桶。
+
+    2026-09-19 线上事故：CookieMixin 拆分时把 `_set_runtime_cookie_state` 的
+    方法参数 `cookies_str` 误写成 `_host.cookies_str`（075241f 之前的原实现是
+    参数透传）。该名字只存在于 XianyuAutoAsync.py 的 `if __name__ == '__main__'`
+    分支，容器以导入方式运行 → 每次轻量保活响应带 Set-Cookie 就
+    `module 'XianyuAutoAsync' has no attribute 'cookies_str'`，服务端下发的
+    Cookie 续期被整体丢弃，保活状态被误标 exception。
+    """
+    import re
+    import XianyuAutoAsync as host_module
+
+    missing = []
+    for fname in MIXIN_FILES:
+        src = (ROOT / fname).read_text(encoding="utf-8")
+        for ref in sorted(set(re.findall(r"_host\.(\w+)", src))):
+            if not hasattr(host_module, ref):
+                missing.append(f"{fname}: _host.{ref}")
+    assert not missing, f"幻影属性（宿主模块级不存在，运行期必然 AttributeError）: {missing}"
