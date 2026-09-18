@@ -1953,7 +1953,13 @@ function handleQRCodeSuccess(data) {
         showToast(successMessage, 'success');
     }
 
-    closeQRCodeLoginModal(3000);
+    // 手动停用分支要保留上面渲染的「启用账号并启动任务」按钮供用户点击：
+    // 自动关弹窗会连带销毁按钮（3 秒后用户就点不到了）。
+    // 该分支的关闭时机交给用户点击启用成功后由 enableAccountFromQRLogin 触发，
+    // 或用户自己关弹窗。
+    if (manual_disabled_skip_restart !== true) {
+        closeQRCodeLoginModal(3000);
+    }
     return;
     }
 

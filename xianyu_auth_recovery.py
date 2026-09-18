@@ -50,6 +50,26 @@ db_manager = _HostDBManagerProxy()
 _PASSWORD_LOGIN_DEADLINE_SECONDS = float(os.environ.get('PASSWORD_LOGIN_DEADLINE_SECONDS', '600') or '600')
 
 
+_CHROMIUM_PROCESS_NAMES = {"chromium", "chrome", "chromium-browser", "google-chrome"}
+
+
+def _iter_system_chromium_pids() -> set:
+    """枚举当前系统里所有 Chromium 系进程 PID（尽力而为，任何异常返回空集）。"""
+    try:
+        import psutil
+    except Exception:  # noqa: BLE001
+        return set()
+    pids = set()
+    for proc in psutil.process_iter(["pid", "name"]):
+        try:
+            name = (proc.info.get("name") or "").lower().removesuffix(".exe")
+            if name in _CHROMIUM_PROCESS_NAMES:
+                pids.add(int(proc.info["pid"]))
+        except Exception:  # noqa: BLE001
+            continue
+    return pids
+
+
 
 
 
@@ -1101,30 +1121,105 @@ class XianyuAuthRecoveryMixin:
         return True
 
 
-    def _force_kill_timeout_browser(self, slider) -> str:
-        """按 profile 目录清掉超时登录残留的 Chromium，返回简短清理结果。
+    def _force_kill_timeout_browser(self, slider, captured_pids: Optional[list] = None) -> str:
+        """按 PID 与 profile 目录清掉超时登录残留的 Chromium，返回简短清理结果。
 
         超时后同步登录线程仍在跑（daemon 线程无法取消），若不杀进程，
         残留 Chromium 会一直占着账号级 profile 的 SingletonLock 与内存，
         后续登录会继续失败并叠加内存压力。
+
+        `force_clean_context=True` 时登录浏览器用 Playwright 临时 profile 启动，
+        不带账号 profile 的 `--user-data-dir`，按目录查会扑空——所以优先使用
+        启动时通过 `_install_timeout_browser_pid_capture` 捕获到的 PID，
+        profile 目录查找只作为持久化上下文路径的兜底。
         """
         try:
             from slidex import _chromium_lifecycle as chromium_lifecycle
         except Exception as import_e:  # noqa: BLE001 清理失败不能影响主流程
             return f"清理不可用({self._safe_str(import_e)[:60]})"
+
+        pids: list = []
+        for pid in (captured_pids or []):
+            try:
+                pid_int = int(pid)
+            except (TypeError, ValueError):
+                continue
+            if pid_int > 0 and pid_int not in pids:
+                pids.append(pid_int)
+
+        # 兜底：持久化上下文路径按 profile 目录找（干净上下文无目录，多为空）
         try:
             profile_dir = slider._resolve_account_persistent_profile_dir()
-            pids = chromium_lifecycle.find_chromium_pids_by_user_data_dir(profile_dir)
-            killed = 0
-            for pid in pids:
-                try:
-                    if chromium_lifecycle.kill_chromium_process_tree(pid):
-                        killed += 1
-                except Exception as kill_e:  # noqa: BLE001
-                    logger.warning(f"【{self.cookie_id}】杀残留浏览器进程失败 PID={pid}: {self._safe_str(kill_e)}")
-            return f"已清理 Chromium 进程数={killed}"
-        except Exception as clean_e:  # noqa: BLE001
-            return f"清理异常({self._safe_str(clean_e)[:60]})"
+            find_all = getattr(
+                chromium_lifecycle, 'find_chromium_pids_by_user_data_dir', None
+            ) or getattr(chromium_lifecycle, 'find_chromium_pid_by_user_data_dir', None)
+            if find_all:
+                found = find_all(profile_dir)
+                if not isinstance(found, (list, tuple, set)):
+                    found = [found] if found else []
+                for pid in found:
+                    try:
+                        pid_int = int(pid)
+                    except (TypeError, ValueError):
+                        continue
+                    if pid_int > 0 and pid_int not in pids:
+                        pids.append(pid_int)
+        except Exception as dir_e:  # noqa: BLE001
+            logger.warning(f"【{self.cookie_id}】按 profile 目录查找残留浏览器失败: {self._safe_str(dir_e)}")
+
+        if not pids:
+            return "未发现残留 Chromium 进程"
+
+        kill_fn = getattr(chromium_lifecycle, 'kill_chromium_process_tree', None)
+        if not kill_fn:
+            kill_fn = getattr(chromium_lifecycle, 'kill_chromium_by_pid', None)
+        if not kill_fn:
+            return f"清理不可用(无可用杀进程接口: {pids})"
+
+        killed = 0
+        for pid in pids:
+            try:
+                if kill_fn(pid):
+                    killed += 1
+            except Exception as kill_e:  # noqa: BLE001
+                logger.warning(f"【{self.cookie_id}】杀残留浏览器进程失败 PID={pid}: {self._safe_str(kill_e)}")
+        return f"已清理 Chromium 进程数={killed}"
+
+    def _install_timeout_browser_pid_capture(self, slider, pids_sink: list) -> str:
+        """包装干净上下文启动器，捕获登录浏览器的 OS PID 供超时收口使用。
+
+        干净上下文（`force_clean_context=True`）最终走
+        `_launch_clean_cookie_seeded_context` → `playwright.chromium.launch()`，
+        不带账号 profile 的 `--user-data-dir`；且 Playwright Python 的 Browser
+        不暴露 OS PID（slidex 里 `browser.process` 恒为 None）。超时后按目录
+        找 PID 会扑空（2026-09-19 自审 P2#1）。这里在启动前后 diff 系统
+        Chromium 进程集合，把新增 PID 记入 pids_sink，收口时按 PID 杀进程树。
+        """
+        launcher_name = '_launch_clean_cookie_seeded_context'
+        try:
+            original = getattr(slider, launcher_name)
+        except Exception as wrap_e:  # noqa: BLE001
+            return f"PID捕获不可用({self._safe_str(wrap_e)[:50]})"
+        if getattr(original, '_xianyu_pid_capture_installed', False):
+            return 'PID捕获已安装'
+
+        def _capturing_launcher(*args, **kwargs):
+            before = _iter_system_chromium_pids()
+            browser, context = original(*args, **kwargs)
+            for pid in sorted(_iter_system_chromium_pids() - before):
+                if pid not in pids_sink:
+                    pids_sink.append(pid)
+                logger.warning(
+                    f"【{self.cookie_id}】密码登录浏览器启动，捕获 Chromium PID={pid}（超时收口将按此清理）"
+                )
+            return browser, context
+
+        _capturing_launcher._xianyu_pid_capture_installed = True
+        try:
+            setattr(slider, launcher_name, _capturing_launcher)
+        except Exception as set_e:  # noqa: BLE001
+            return f"PID捕获安装失败({self._safe_str(set_e)[:50]})"
+        return 'PID捕获已安装'
 
     async def _handle_password_login_timeout(
         self,
@@ -1135,13 +1230,14 @@ class XianyuAuthRecoveryMixin:
         trigger_scene: Optional[str],
         base_event_meta: Optional[Dict[str, Any]],
         risk_log_started_at: float,
+        captured_browser_pids: Optional[list] = None,
     ) -> None:
         """密码登录整体超时的收口：杀残留浏览器、记退避/风控日志并通知。
 
         没有这道收口时，登录线程挂死会让 last_token_refresh_status 永远停在
         "started"、token_refresh_lock 不放，账号静默停摆且无重试（2026-09-16 事故）。
         """
-        kill_note = self._force_kill_timeout_browser(slider)
+        kill_note = self._force_kill_timeout_browser(slider, captured_browser_pids)
         message = (
             f"密码登录超过 {int(_PASSWORD_LOGIN_DEADLINE_SECONDS)} 秒未返回，"
             f"已中止本次尝试并清理浏览器（{kill_note}）"
@@ -1490,6 +1586,10 @@ class XianyuAuthRecoveryMixin:
             # 线程不可取消。Chromium 被 OOM 或 CDP 假死时那个 future 永不完成，
             # 若在此处无限等待，token_refresh_lock 与 last_token_refresh_status
             # 会被永久占住，账号静默停摆（2026-09-16 事故根因）。
+            # 干净上下文用临时 profile，超时后按目录找不到 PID；这里预先安装
+            # PID 捕获，超时收口才能按 PID 杀进程树（P2#1）。
+            captured_browser_pids: list = []
+            self._install_timeout_browser_pid_capture(slider, captured_browser_pids)
             try:
                 result = await asyncio.wait_for(
                     slider._run_sync_method_on_fresh_thread(
@@ -1510,6 +1610,7 @@ class XianyuAuthRecoveryMixin:
                     trigger_scene=trigger_scene,
                     base_event_meta=base_event_meta,
                     risk_log_started_at=risk_log_started_at,
+                    captured_browser_pids=captured_browser_pids,
                 )
                 return False
             
