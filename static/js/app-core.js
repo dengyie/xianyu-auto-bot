@@ -495,6 +495,15 @@ async function handleApiError(err) {
     toggleLoading(false);
 }
 
+// 会话失效统一收口：清本地 token 并回到登录页。
+// 容器重启会清空服务端内存态 SESSION_TOKENS，此时任何裸 fetch 若不识别
+// 401 就会把"未登录"误报成"生成二维码失败"之类的业务错误。
+function handleAuthExpired() {
+    localStorage.removeItem('auth_token');
+    authToken = null;
+    window.location.href = '/';
+}
+
 // API请求包装
 async function fetchJSON(url, opts = {}) {
     toggleLoading(true);
@@ -509,8 +518,7 @@ async function fetchJSON(url, opts = {}) {
     const res = await fetch(url, opts);
     if (res.status === 401) {
         // 未授权，跳转到登录页面
-        localStorage.removeItem('auth_token');
-        window.location.href = '/';
+        handleAuthExpired();
         return;
     }
     if (!res.ok) {

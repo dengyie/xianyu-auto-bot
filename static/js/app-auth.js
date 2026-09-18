@@ -1193,6 +1193,72 @@ function resetQRCodeVerificationState() {
     qrCodeVerificationState.inFlight = false;
     qrCodeVerificationState.completed = false;
     qrCodeVerificationState.activeSessionId = null;
+    clearQRManualDisabledAction();
+}
+
+// 移除上一次扫码留下的"启用账号"按钮，避免残留到新会话
+function clearQRManualDisabledAction() {
+    const action = document.getElementById('qrManualDisabledAction');
+    if (action) action.remove();
+}
+
+// 手动禁用账号扫码成功后的收口动作：真 Cookie 已更新，但任务按用户开关保持停止。
+// 给出显式的一键启用，避免"扫码成功却什么都没发生"的无出口状态。
+function renderManualDisabledEnableAction(accountId) {
+    const statusBox = document.getElementById('qrCodeStatus');
+    if (!statusBox) return;
+    clearQRManualDisabledAction();
+
+    const wrapper = document.createElement('div');
+    wrapper.id = 'qrManualDisabledAction';
+    wrapper.className = 'mt-3';
+
+    const hint = document.createElement('div');
+    hint.className = 'alert alert-warning border-0 mb-2';
+    hint.innerHTML = '<i class="bi bi-pause-circle me-2"></i>'
+        + '账号当前处于<strong>手动停用</strong>状态，新 Cookie 已保存但任务未启动。';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-success';
+    button.innerHTML = '<i class="bi bi-play-circle me-1"></i>启用账号并启动任务';
+    button.addEventListener('click', () => enableAccountFromQRLogin(accountId, button));
+
+    wrapper.appendChild(hint);
+    wrapper.appendChild(button);
+    statusBox.appendChild(wrapper);
+}
+
+async function enableAccountFromQRLogin(accountId, button) {
+    const originalHtml = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>正在启用...';
+    try {
+        const response = await fetch(`${apiBase}/cookies/${encodeURIComponent(accountId)}/status`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${getAuthToken()}`
+            },
+            body: JSON.stringify({ enabled: true })
+        });
+        if (response.status === 401) {
+            handleAuthExpired();
+            return;
+        }
+        if (!response.ok) {
+            const text = await response.text().catch(() => '');
+            throw new Error(text || `HTTP ${response.status}`);
+        }
+        document.getElementById('statusText').textContent = '账号已启用，任务已启动';
+        showToast(`账号 "${accountId}" 已启用，任务已启动`, 'success');
+        clearQRManualDisabledAction();
+        closeQRCodeLoginModal(1500);
+    } catch (error) {
+        button.disabled = false;
+        button.innerHTML = originalHtml;
+        showToast('启用账号失败: ' + (error.message || error), 'danger');
+    }
 }
 
 function closeQRCodeLoginModal(delay = 3000) {
@@ -1271,6 +1337,9 @@ async function generateQRCode() {
         } else {
         showQRCodeError(data.message || '生成二维码失败');
         }
+    } else if (response.status === 401) {
+        // 会话已失效（如容器重启清空内存 token）：回登录页，而不是误报"生成失败"
+        handleAuthExpired();
     } else {
         showQRCodeError('生成二维码失败');
     }
@@ -1407,6 +1476,11 @@ async function checkQRCodeStatus() {
             handleQRCodeSuccess(data);
             break;
         }
+    } else if (response.status === 401) {
+        // 会话失效：停止轮询并回登录页
+        qrCodeVerificationState.completed = true;
+        clearQRCodeCheck();
+        handleAuthExpired();
     }
     } catch (error) {
     console.error('检查二维码状态失败:', error);
@@ -1817,6 +1891,7 @@ function handleQRCodeSuccess(data) {
         cookie_length,
         token_prewarmed,
         task_restarted,
+        manual_disabled_skip_restart,
         warning_message
     } = data.account_info;
 
@@ -1836,12 +1911,23 @@ function handleQRCodeSuccess(data) {
     // 添加真实cookie获取状态信息
     if (real_cookie_refreshed === true) {
         if (task_restarted === false) {
-            successMessage += '\n✅ 真实Cookie已获取';
-            if (warning_message) {
-                successMessage += `\n⚠️ ${warning_message}`;
+            if (manual_disabled_skip_restart === true) {
+                // 手动禁用：真实 Cookie 已成功更新，只是按用户开关未启动任务——是成功而非失败
+                successMessage += '\n✅ 真实Cookie已获取并保存成功';
+                if (warning_message) {
+                    successMessage += `\n⚠️ ${warning_message}`;
+                }
+                document.getElementById('statusText').textContent = '登录完成，真实Cookie已更新（账号手动停用）';
+                showToast(successMessage, 'success');
+                renderManualDisabledEnableAction(account_id);
+            } else {
+                successMessage += '\n✅ 真实Cookie已获取';
+                if (warning_message) {
+                    successMessage += `\n⚠️ ${warning_message}`;
+                }
+                document.getElementById('statusText').textContent = '登录完成，但账号任务尚未切换';
+                showToast(successMessage, 'warning');
             }
-            document.getElementById('statusText').textContent = '登录完成，但账号任务尚未切换';
-            showToast(successMessage, 'warning');
         } else if (token_prewarmed === false) {
             successMessage += '\n✅ 真实Cookie获取并保存成功';
             if (warning_message) {

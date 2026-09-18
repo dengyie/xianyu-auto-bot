@@ -509,8 +509,10 @@ class TestAccounts:
             "timestamp": 9999999999,
             "account_info": {
                 "account_id": "qr-runtime-failed",
-                "real_cookie_refreshed": False,
+                # 真实 Cookie 已获取（否则不会走到任务切换），只是任务切换失败被回滚
+                "real_cookie_refreshed": True,
                 "task_restarted": False,
+                "manual_disabled_skip_restart": False,
                 "warning_message": "真实Cookie已获取，但任务管理器未初始化，未启动账号任务",
             },
         }
@@ -521,6 +523,30 @@ class TestAccounts:
         data = resp.json()
         assert data["status"] == "error"
         assert "任务" in data["message"]
+
+    def test_qr_login_processed_manual_disabled_is_success_not_error(self, client, user_auth):
+        """手动禁用账号扫码成功：真 Cookie 已更新，轮询必须报 success 而非 error。"""
+        session_id = "qr_login_manual_disabled_success"
+        reply_server.qr_check_processed[session_id] = {
+            "processed": True,
+            "processing": False,
+            "timestamp": 9999999999,
+            "account_info": {
+                "account_id": "qr-manual-disabled",
+                "real_cookie_refreshed": True,
+                "task_restarted": False,
+                "manual_disabled_skip_restart": True,
+                "warning_message": "真实Cookie已获取；账号处于手动禁用状态，Cookie已更新落库，任务保持停止（启用账号后生效）",
+            },
+        }
+
+        resp = client.get(f"/qr-login/check/{session_id}", headers=user_auth)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "success"
+        assert data["account_info"]["manual_disabled_skip_restart"] is True
+        assert data["account_info"]["real_cookie_refreshed"] is True
 
     @pytest.mark.asyncio
     async def test_qr_login_lite_runtime_handoff_failure_is_error(self, user_auth, monkeypatch):
@@ -541,8 +567,9 @@ class TestAccounts:
         async def fake_process_qr_login_cookies(cookies, unb, current_user):
             return {
                 "account_id": unb,
-                "real_cookie_refreshed": False,
+                "real_cookie_refreshed": True,
                 "task_restarted": False,
+                "manual_disabled_skip_restart": False,
                 "warning_message": "真实Cookie已获取，但任务管理器未初始化，未启动账号任务",
             }
 
@@ -722,6 +749,9 @@ class TestAccounts:
 
         assert result["task_restarted"] is False
         assert result["manual_disabled_skip_restart"] is True
+        # 真实 Cookie 已成功落库——"是否获取到真实Cookie"与"是否切换任务"是两件事，
+        # 手动禁用只是不启动任务，不能误判成"真实Cookie获取失败"
+        assert result["real_cookie_refreshed"] is True
         assert fake_manager.updated == []  # 手动禁用：不启动任务（无 handoff）
         assert reply_server.db_manager.get_cookie_status(cookie_id) is False
         assert fake_manager.cookie_status.get(cookie_id) is None

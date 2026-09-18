@@ -11,6 +11,7 @@
   本模块严禁在模块级 import XianyuAutoAsync（运行期惰性导入除外）。
 """
 import asyncio
+import os
 import secrets
 import time
 from collections import defaultdict
@@ -42,6 +43,11 @@ class _HostDBManagerProxy:
 
 
 db_manager = _HostDBManagerProxy()
+
+
+# 密码登录（含滑块求解）整体时限。合法流程含浏览器冷启动与多次滑块重试，
+# 通常 2~4 分钟；超过该上限即视为 Chromium 假死/OOM，收口为失败并重试。
+_PASSWORD_LOGIN_DEADLINE_SECONDS = float(os.environ.get('PASSWORD_LOGIN_DEADLINE_SECONDS', '600') or '600')
 
 
 
@@ -1095,6 +1101,79 @@ class XianyuAuthRecoveryMixin:
         return True
 
 
+    def _force_kill_timeout_browser(self, slider) -> str:
+        """按 profile 目录清掉超时登录残留的 Chromium，返回简短清理结果。
+
+        超时后同步登录线程仍在跑（daemon 线程无法取消），若不杀进程，
+        残留 Chromium 会一直占着账号级 profile 的 SingletonLock 与内存，
+        后续登录会继续失败并叠加内存压力。
+        """
+        try:
+            from slidex import _chromium_lifecycle as chromium_lifecycle
+        except Exception as import_e:  # noqa: BLE001 清理失败不能影响主流程
+            return f"清理不可用({self._safe_str(import_e)[:60]})"
+        try:
+            profile_dir = slider._resolve_account_persistent_profile_dir()
+            pids = chromium_lifecycle.find_chromium_pids_by_user_data_dir(profile_dir)
+            killed = 0
+            for pid in pids:
+                try:
+                    if chromium_lifecycle.kill_chromium_process_tree(pid):
+                        killed += 1
+                except Exception as kill_e:  # noqa: BLE001
+                    logger.warning(f"【{self.cookie_id}】杀残留浏览器进程失败 PID={pid}: {self._safe_str(kill_e)}")
+            return f"已清理 Chromium 进程数={killed}"
+        except Exception as clean_e:  # noqa: BLE001
+            return f"清理异常({self._safe_str(clean_e)[:60]})"
+
+    async def _handle_password_login_timeout(
+        self,
+        slider,
+        *,
+        risk_session_id: Optional[str],
+        refresh_risk_log_id: Optional[int],
+        trigger_scene: Optional[str],
+        base_event_meta: Optional[Dict[str, Any]],
+        risk_log_started_at: float,
+    ) -> None:
+        """密码登录整体超时的收口：杀残留浏览器、记退避/风控日志并通知。
+
+        没有这道收口时，登录线程挂死会让 last_token_refresh_status 永远停在
+        "started"、token_refresh_lock 不放，账号静默停摆且无重试（2026-09-16 事故）。
+        """
+        kill_note = self._force_kill_timeout_browser(slider)
+        message = (
+            f"密码登录超过 {int(_PASSWORD_LOGIN_DEADLINE_SECONDS)} 秒未返回，"
+            f"已中止本次尝试并清理浏览器（{kill_note}）"
+        )
+        logger.error(f"【{self.cookie_id}】{message}")
+        self.last_token_refresh_status = 'failed'
+        self.last_token_refresh_error_message = message
+        backoff_reason, backoff_seconds = self.classify_password_login_failure(message)
+        self.set_password_login_failure_backoff(self.cookie_id, backoff_reason, backoff_seconds)
+        logger.warning(f"【{self.cookie_id}】已进入失败退避期: {backoff_reason}, {backoff_seconds}秒")
+        if refresh_risk_log_id:
+            self._update_risk_log(
+                refresh_risk_log_id,
+                session_id=risk_session_id,
+                trigger_scene=trigger_scene,
+                result_code='password_login_timeout',
+                processing_status='failed',
+                error_message=message[:200],
+                duration_ms=max(0, int((time.time() - risk_log_started_at) * 1000)),
+                event_meta=self._build_risk_event_meta(
+                    trigger_scene=trigger_scene,
+                    extra={**(base_event_meta or {}), 'backoff_reason': backoff_reason, 'backoff_seconds': backoff_seconds},
+                ),
+            )
+        try:
+            await self.send_token_refresh_notification(
+                message,
+                "password_login_timeout",
+            )
+        except Exception as notify_e:  # noqa: BLE001 通知失败不影响退避与解锁
+            logger.warning(f"【{self.cookie_id}】发送登录超时通知失败: {self._safe_str(notify_e)}")
+
     async def _try_password_login_refresh(
         self,
         trigger_reason: str = "令牌/Session过期",
@@ -1407,14 +1486,32 @@ class XianyuAuthRecoveryMixin:
             # 账号代理必须传给求解器：slidex 密码登录浏览器从 self.proxy_config
             # 构建 launch proxy，缺失时浏览器直连机房 IP，滑块必被环境分硬拒
             slider.proxy_config = dict(getattr(self, 'proxy_config', None) or {})
-            result = await slider._run_sync_method_on_fresh_thread(
-                slider.login_with_password_playwright,
-                account=username,
-                password=password,
-                show_browser=show_browser,
-                notification_callback=notification_callback_wrapper,
-                force_clean_context=True,
-            )
+            # 整体时限：_run_sync_method_on_fresh_thread 把同步登录丢到 daemon 线程，
+            # 线程不可取消。Chromium 被 OOM 或 CDP 假死时那个 future 永不完成，
+            # 若在此处无限等待，token_refresh_lock 与 last_token_refresh_status
+            # 会被永久占住，账号静默停摆（2026-09-16 事故根因）。
+            try:
+                result = await asyncio.wait_for(
+                    slider._run_sync_method_on_fresh_thread(
+                        slider.login_with_password_playwright,
+                        account=username,
+                        password=password,
+                        show_browser=show_browser,
+                        notification_callback=notification_callback_wrapper,
+                        force_clean_context=True,
+                    ),
+                    timeout=_PASSWORD_LOGIN_DEADLINE_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                await self._handle_password_login_timeout(
+                    slider,
+                    risk_session_id=risk_session_id,
+                    refresh_risk_log_id=refresh_risk_log_id,
+                    trigger_scene=trigger_scene,
+                    base_event_meta=base_event_meta,
+                    risk_log_started_at=risk_log_started_at,
+                )
+                return False
             
             if result:
                 logger.info(f"【{self.cookie_id}】密码登录成功，获取到Cookie")

@@ -520,6 +520,11 @@ def _qr_runtime_handoff_error(account_info: Optional[Dict[str, Any]]) -> Optiona
     if not isinstance(account_info, dict):
         return None
 
+    # 手动禁用的账号属于"真 Cookie 已更新、按用户开关不启动任务"，
+    # 是预期结果而非错误，不能当作 error 返回给前端。
+    if account_info.get('manual_disabled_skip_restart'):
+        return None
+
     if account_info.get('task_restarted') is False and not account_info.get('fallback_reason'):
         return (
             account_info.get('warning_message')
@@ -3569,6 +3574,10 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                     skip_restart_intentional = False
                     warning_message = None
                     final_cookies = temp_instance.cookies_str or real_cookies
+                    # 真实 Cookie 已在 refresh_cookies_from_qr_login 中落库。
+                    # task_restarted 表示"任务是否切换"，与"真实 Cookie 是否获取"
+                    # 是两件事，不能互相赋值——只有走下方回滚分支时才置 False。
+                    real_cookie_refreshed = True
 
                     # 扫码即完成了一次人工身份验证。若账号此前被系统保护性停用
                     # （status_note 非空），先恢复启用并清标记，否则任务切换后实例
@@ -3639,6 +3648,7 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                             log_with_user('warning', f"{warning_message}: {account_id}", current_user)
                         if not skip_restart_intentional:
                             # 意外失败才回滚 Cookie；手动禁用是"更新但不启动"，Cookie 保留
+                            real_cookie_refreshed = False
                             if is_new_account:
                                 db_manager.delete_cookie(account_id)
                                 log_with_user('warning', f"扫码登录未完成切换，已删除临时创建的新账号记录: {account_id}", current_user)
@@ -3709,7 +3719,7 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                     return {
                         'account_id': account_id,
                         'is_new_account': is_new_account,
-                        'real_cookie_refreshed': task_restarted,  # 回滚时为 False，成功切换时为 True
+                        'real_cookie_refreshed': real_cookie_refreshed,  # 与任务是否切换无关，仅表示真实 Cookie 是否落库
                         'cookie_length': len(final_cookies),
                         'token_prewarmed': False,
                         'task_restarted': task_restarted,
