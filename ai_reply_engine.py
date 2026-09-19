@@ -275,7 +275,14 @@ class AIReplyEngine:
             raise Exception(*exc_args)
 
         result = response.json()
-        return result['choices'][0]['message']['content'].strip()
+        try:
+            return result['choices'][0]['message']['content'].strip()
+        except (KeyError, IndexError, TypeError) as exc:
+            # 200 但缺 choices：new-api 类网关上游闪断时的典型形态（body 里
+            # 才有真正的错误原因，如额度/渠道）。带上 body 抛可重试异常，
+            # 别只留一个 KeyError('choices') 让日志失去上下文。
+            snippet = json.dumps(result, ensure_ascii=False)[:300]
+            raise Exception(f"OpenAI Chat API响应缺少choices: {exc} - body: {snippet}") from exc
 
     def _call_openai_responses_api(self, settings: dict, messages: list, max_tokens: int = 100, temperature: float = 0.7) -> str:
         """调用OpenAI Responses API"""
@@ -388,7 +395,14 @@ class AIReplyEngine:
             raise Exception(f"Azure OpenAI API请求失败: {response.status_code} - {response.text}")
 
         result = response.json()
-        return result['choices'][0]['message']['content'].strip()
+        try:
+            return result['choices'][0]['message']['content'].strip()
+        except (KeyError, IndexError, TypeError) as exc:
+            # 200 但缺 choices：new-api 类网关上游闪断时的典型形态（body 里
+            # 才有真正的错误原因，如额度/渠道）。带上 body 抛可重试异常，
+            # 别只留一个 KeyError('choices') 让日志失去上下文。
+            snippet = json.dumps(result, ensure_ascii=False)[:300]
+            raise Exception(f"OpenAI Chat API响应缺少choices: {exc} - body: {snippet}") from exc
 
     def is_ai_enabled(self, cookie_id: str) -> bool:
         """检查指定账号是否启用AI回复"""
@@ -627,7 +641,9 @@ class AIReplyEngine:
 
             if not retryable or attempt >= self.PROVIDER_MAX_ATTEMPTS:
                 break
-            time.sleep(self.PROVIDER_RETRY_BACKOFF_SECONDS)
+            # 指数退避：0.8s → 1.6s → 3.2s。2026-09-19 22:38 实测：网关上游
+            # 闪断窗口 >12s，固定 0.8s 间隔的 3 连重试全部落在窗口里。
+            time.sleep(self.PROVIDER_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1)))
 
         logger.error(f"provider 重试耗尽，放弃生成: {last_error}")
         return None
