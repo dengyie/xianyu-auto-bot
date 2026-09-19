@@ -76,6 +76,28 @@ def test_pinned_slidex_has_headful_consistency_script(slider):
     assert "getHighEntropyValues" in script
     # brands 必须与 UA 池版本（119）一致，不能漏出真实内核版本
     assert '"version": "119"' in script
+    # UA-CH 高层平台名必须是 Windows（真实 Chrome 从不发 "Win32"）
+    assert 'platform: "Windows"' in script
+    assert 'platform: "Win32"' not in script
+    # webdriver 必须是 present 的 false（undefined 是缺失语义，可探测）
+    assert "Navigator.prototype, 'webdriver', () => false" in script
+
+
+def test_pinned_slidex_applies_network_fingerprint_in_headful(slider):
+    """有头页面也要走 CDP UA/UA-CH 网络层覆盖（否则 Sec-CH-UA 头仍是
+    真实内核派生值）。旧接口名 _apply_headless_network_fingerprint 的
+    headless 门禁版本视为回退。"""
+    import slidex.stealth as stealth_module
+    from slidex.stealth import XianyuSliderStealth
+
+    assert hasattr(XianyuSliderStealth, "_apply_network_fingerprint"), (
+        "缺少 _apply_network_fingerprint——pin 回退到了有头不统一网络层的版本"
+    )
+    assert not hasattr(XianyuSliderStealth, "_apply_headless_network_fingerprint"), (
+        "旧的 _apply_headless_network_fingerprint 仍在——headless 门禁回来了"
+    )
+    src = Path(stealth_module.__file__).read_text(encoding="utf-8")
+    assert "platformName" in src, "platformName 拆分缺失（platform vs UA-CH 高层平台名）"
 
 
 def test_pinned_slidex_has_no_numeric_plugins_anywhere():

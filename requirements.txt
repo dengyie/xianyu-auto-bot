@@ -45,7 +45,7 @@ qrcode[pil]>=7.4.2
 # ==================== 浏览器自动化 ====================
 playwright==1.59.0
 DrissionPage>=4.0.0
-slidex @ git+https://github.com/dengyie/slidex.git@6b3190a
+slidex @ git+https://github.com/dengyie/slidex.git@8a7e961
 
 # ==================== 加密和安全 ====================
 PyJWT>=2.8.0
