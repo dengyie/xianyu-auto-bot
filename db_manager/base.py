@@ -27,6 +27,7 @@ DYNAMIC_TABLE_WHITELIST = frozenset({
     'ai_reply_settings', 'ai_conversations', 'ai_item_cache', 'item_info',
     'message_notifications', 'cards', 'delivery_rules', 'notification_channels',
     'user_settings', 'system_settings', 'email_verifications', 'captcha_codes', 'orders', 'item_replay',
+    'user_sessions',
     # 遗留迁移专用表（_migrate_table_data）
     'old_notification_channels',
 })
@@ -368,6 +369,21 @@ class DBBase:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             ''')
+
+            # 创建用户会话表（持久化会话支持）
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                token TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                username TEXT NOT NULL,
+                is_admin BOOLEAN DEFAULT FALSE,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            ''')
+            self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id)")
+            self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions(expires_at)")
 
             # 创建邮箱验证码表
             cursor.execute('''

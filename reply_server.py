@@ -502,16 +502,14 @@ async def cleanup_qr_check_records():
 
 
 async def _qr_check_cleanup_loop(interval: int = 300):
-    """后台定期清理扫码检查记录，保证即使客户端停止轮询也能回收内存。
-
-    与请求路径触发互补：请求路径只在有新 check 请求时清理；客户端登录
-    完成或放弃后再不轮询时，记录会一直滞留直到下次轮询——本循环兜底。
-    """
+    """后台定期清理扫码检查记录与过期用户会话，防止内存与数据库无限膨胀。"""
     while True:
         try:
             await cleanup_qr_check_records()
+            if hasattr(db_manager, "cleanup_expired_sessions"):
+                db_manager.cleanup_expired_sessions()
         except Exception as e:  # noqa: BLE001 守护循环绝不能因单次异常退出
-            logger.warning(f"扫码检查记录后台清理异常: {e}")
+            logger.warning(f"后台维护清理异常: {e}")
         await asyncio.sleep(interval)
 
 
@@ -622,26 +620,34 @@ KEYWORDS_MAPPING = load_keywords()
 # 认证相关模型
 
 
-def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[Dict[str, Any]]:
-    """验证token并返回用户信息"""
-    if not credentials:
+def verify_token(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+) -> Optional[Dict[str, Any]]:
+    """验证token并返回用户信息（支持 Authorization 头和 auth_token Cookie 双轨）"""
+    raw_token = credentials.credentials if credentials else request.cookies.get("auth_token")
+    if not raw_token:
         return None
 
-    return session_service.verify(credentials.credentials, db_manager.get_user_by_id)
+    user_info = session_service.verify(raw_token, db_manager.get_user_by_id)
+    if user_info and "token" not in user_info:
+        user_info = {**user_info, "token": raw_token}
+    return user_info
 
 
 def _remove_session_tokens_for_user(user_id: int) -> int:
     """Remove all in-memory session tokens for a user after permission changes."""
     return session_service.revoke_user(user_id)
 
-def verify_admin_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Dict[str, Any]:
+def verify_admin_token(
+    user_info: Optional[Dict[str, Any]] = Depends(verify_token),
+) -> Dict[str, Any]:
     """验证管理员token"""
-    user_info = verify_token(credentials)
     if not user_info:
         raise HTTPException(status_code=401, detail="未授权访问")
 
     # 检查是否是管理员（优先使用is_admin字段，兼容旧的admin用户名判断）
-    is_admin = user_info.get('is_admin', False) or user_info['username'] == ADMIN_USERNAME
+    is_admin = user_info.get('is_admin', False) or user_info.get('username') == ADMIN_USERNAME
     if not is_admin:
         raise HTTPException(status_code=403, detail="需要管理员权限")
 
@@ -700,20 +706,31 @@ def log_with_user(level: str, message: str, user_info: Dict[str, Any] = None):
 
 def _audit_actor_from_request(request: Request) -> Optional[Dict[str, Any]]:
     try:
+        raw_token = None
         auth_header = request.headers.get("Authorization")
-        if not auth_header or not auth_header.startswith("Bearer "):
+        if auth_header and auth_header.startswith("Bearer "):
+            raw_token = auth_header.split(" ", 1)[1]
+        elif hasattr(request, "cookies"):
+            raw_token = request.cookies.get("auth_token")
+
+        if not raw_token:
             return None
-        token = auth_header.split(" ", 1)[1]
-        token_data = SESSION_TOKENS.get(token)
-        if not token_data:
-            return None
-        if time.time() - token_data.get('timestamp', 0) > TOKEN_EXPIRE_TIME:
-            return None
-        return {
-            "user_id": token_data.get("user_id"),
-            "username": token_data.get("username"),
-            "is_admin": bool(token_data.get("is_admin", False)),
-        }
+
+        token_data = SESSION_TOKENS.get(raw_token)
+        if token_data and time.time() - token_data.get('timestamp', 0) <= TOKEN_EXPIRE_TIME:
+            return {
+                "user_id": token_data.get("user_id"),
+                "username": token_data.get("username"),
+                "is_admin": bool(token_data.get("is_admin", False)),
+            }
+        user = session_service.verify(raw_token, db_manager.get_user_by_id)
+        if user:
+            return {
+                "user_id": user.get("user_id"),
+                "username": user.get("username"),
+                "is_admin": bool(user.get("is_admin", False)),
+            }
+        return None
     except Exception:
         return None
 
@@ -868,15 +885,22 @@ async def log_requests(request, call_next):
     # 获取用户信息
     user_info = "未登录"
     try:
-        # 从请求头中获取Authorization
+        raw_token = None
         auth_header = request.headers.get("Authorization")
         if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header.split(" ")[1]
-            if token in SESSION_TOKENS:
-                token_data = SESSION_TOKENS[token]
-                # 检查token是否过期
+            raw_token = auth_header.split(" ")[1]
+        elif hasattr(request, "cookies"):
+            raw_token = request.cookies.get("auth_token")
+
+        if raw_token:
+            if raw_token in SESSION_TOKENS:
+                token_data = SESSION_TOKENS[raw_token]
                 if time.time() - token_data['timestamp'] <= TOKEN_EXPIRE_TIME:
                     user_info = f"【{token_data['username']}#{token_data['user_id']}】"
+            else:
+                user = session_service.verify(raw_token, db_manager.get_user_by_id)
+                if user:
+                    user_info = f"【{user['username']}#{user['user_id']}】"
     except Exception:
         pass
 

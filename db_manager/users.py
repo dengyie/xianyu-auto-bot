@@ -814,23 +814,23 @@ class DBUsersMixin:
         with self.lock:
             try:
                 cursor = self.conn.cursor()
-                # 检查is_admin列是否存在
+                # 检查列是否存在
                 cursor.execute("PRAGMA table_info(users)")
                 columns = [col[1] for col in cursor.fetchall()]
                 has_is_admin = 'is_admin' in columns
+                has_is_active = 'is_active' in columns
 
+                select_cols = ['id', 'username', 'email', 'created_at', 'updated_at']
                 if has_is_admin:
-                    cursor.execute('''
-                    SELECT id, username, email, created_at, updated_at, is_admin
-                    FROM users
-                    WHERE id = ?
-                    ''', (user_id,))
-                else:
-                    cursor.execute('''
-                    SELECT id, username, email, created_at, updated_at
-                    FROM users
-                    WHERE id = ?
-                    ''', (user_id,))
+                    select_cols.append('is_admin')
+                if has_is_active:
+                    select_cols.append('is_active')
+
+                cursor.execute(f'''
+                SELECT {', '.join(select_cols)}
+                FROM users
+                WHERE id = ?
+                ''', (user_id,))
 
                 row = cursor.fetchone()
                 if row:
@@ -841,10 +841,16 @@ class DBUsersMixin:
                         'created_at': row[3],
                         'updated_at': row[4],
                     }
+                    col_idx = 5
                     if has_is_admin:
-                        user_data['is_admin'] = bool(row[5]) if row[5] is not None else (row[1] == 'admin')
+                        user_data['is_admin'] = bool(row[col_idx]) if row[col_idx] is not None else (row[1] == 'admin')
+                        col_idx += 1
                     else:
                         user_data['is_admin'] = (row[1] == 'admin')
+                    if has_is_active:
+                        user_data['is_active'] = bool(row[col_idx]) if row[col_idx] is not None else True
+                    else:
+                        user_data['is_active'] = True
                     return user_data
                 return None
             except Exception as e:
@@ -904,7 +910,10 @@ class DBUsersMixin:
                 # 9. 删除用户的消息通知
                 cursor.execute('DELETE FROM message_notifications WHERE cookie_id IN (SELECT id FROM cookies WHERE user_id = ?)', (user_id,))
 
-                # 10. 最后删除用户本身
+                # 10. 删除用户的会话
+                cursor.execute('DELETE FROM user_sessions WHERE user_id = ?', (user_id,))
+
+                # 11. 最后删除用户本身
                 cursor.execute('DELETE FROM users WHERE id = ?', (user_id,))
 
                 # 提交事务
@@ -918,3 +927,94 @@ class DBUsersMixin:
                 cursor.execute('ROLLBACK')
                 logger.error(f"删除用户及相关数据失败: {e}")
                 return False
+
+    def save_user_session(
+        self,
+        token: str,
+        user_id: int,
+        username: str,
+        is_admin: bool,
+        created_at: float,
+        expires_at: float,
+    ) -> bool:
+        """保存用户会话（用于持久化登录态）"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                INSERT OR REPLACE INTO user_sessions (token, user_id, username, is_admin, created_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ''', (token, user_id, username, 1 if is_admin else 0, created_at, expires_at))
+                self.conn.commit()
+                return True
+            except Exception as e:
+                logger.error(f"保存用户会话失败: {e}")
+                self.conn.rollback()
+                return False
+
+    def get_user_session(self, token: str) -> Optional[Dict[str, Any]]:
+        """获取有效的用户会话"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                now = time.time()
+                cursor.execute('''
+                SELECT token, user_id, username, is_admin, created_at, expires_at
+                FROM user_sessions
+                WHERE token = ? AND expires_at > ?
+                ''', (token, now))
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        "token": row[0],
+                        "user_id": row[1],
+                        "username": row[2],
+                        "is_admin": bool(row[3]),
+                        "created_at": row[4],
+                        "expires_at": row[5],
+                    }
+                return None
+            except Exception as e:
+                logger.error(f"获取用户会话失败: {e}")
+                return None
+
+    def delete_user_session(self, token: str) -> bool:
+        """删除指定用户会话"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('DELETE FROM user_sessions WHERE token = ?', (token,))
+                self.conn.commit()
+                return cursor.rowcount > 0
+            except Exception as e:
+                logger.error(f"删除用户会话失败: {e}")
+                self.conn.rollback()
+                return False
+
+    def delete_user_sessions_by_user_id(self, user_id: int) -> int:
+        """删除用户的所有会话"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('DELETE FROM user_sessions WHERE user_id = ?', (user_id,))
+                self.conn.commit()
+                return cursor.rowcount
+            except Exception as e:
+                logger.error(f"删除用户所有会话失败: {e}")
+                self.conn.rollback()
+                return 0
+
+    def cleanup_expired_sessions(self) -> int:
+        """清理已过期的用户会话"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                now = time.time()
+                cursor.execute('DELETE FROM user_sessions WHERE expires_at <= ?', (now,))
+                self.conn.commit()
+                return cursor.rowcount
+            except Exception as e:
+                logger.error(f"清理过期会话失败: {e}")
+                self.conn.rollback()
+                return 0
+

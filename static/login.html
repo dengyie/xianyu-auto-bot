@@ -348,6 +348,32 @@
 
     // 页面初始化
     document.addEventListener('DOMContentLoaded', async function() {
+      // 检查当前是否有活跃的 Cookie 或 Token 登录态，如有则直接免密跳转
+      try {
+        var existingToken = localStorage.getItem('auth_token') || '';
+        var headers = {};
+        if (existingToken) {
+          headers['Authorization'] = 'Bearer ' + existingToken;
+        }
+        var verifyResp = await fetch('/verify', {
+          headers: headers,
+          credentials: 'same-origin'
+        });
+        if (verifyResp.ok) {
+          var verifyResult = await verifyResp.json();
+          if (verifyResult.authenticated) {
+            if (verifyResult.token) {
+              localStorage.setItem('auth_token', verifyResult.token);
+            }
+            window.location.href = verifyResult.is_admin ? '/admin' : '/download';
+            return;
+          }
+        }
+      } catch (e) {
+        // 忽略静默探测失败，继续走正常登录表单流程
+        console.debug('免密登录探测跳过:', e);
+      }
+
       await checkLoginCaptchaEnabled();
       if (loginCaptchaEnabled) {
         loadSecurityCaptcha();

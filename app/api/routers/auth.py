@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 
@@ -25,15 +25,28 @@ def create_auth_router(
                 "username": user_info["username"],
                 "is_admin": user_info.get("is_admin", False)
                 or user_info["username"] == admin_username,
+                "token": user_info.get("token"),
             }
         return {"authenticated": False}
 
     @router.post("/logout")
     async def logout(
+        request: Request,
+        response: Response,
         credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     ):
-        if credentials:
-            session_service.revoke(credentials.credentials)
+        raw_token = credentials.credentials if credentials else request.cookies.get("auth_token")
+        if raw_token:
+            session_service.revoke(raw_token)
+        forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+        is_secure = request.url.scheme == "https" or forwarded_proto == "https"
+        response.delete_cookie(
+            key="auth_token",
+            path="/",
+            httponly=True,
+            samesite="lax",
+            secure=is_secure,
+        )
         return {"message": "已登出"}
 
     return router

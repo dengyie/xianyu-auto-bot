@@ -16,6 +16,8 @@ def _db():
     reply_server.db_manager = db
     import db_manager as dbm
     dbm.db_manager = db
+    if hasattr(reply_server, "session_service"):
+        reply_server.session_service.session_store = db
     return db
 
 
@@ -74,6 +76,10 @@ def _clear_sessions():
     """Clear SESSION_TOKENS and DOWNLOAD_TOKENS between smoke tests."""
     reply_server.SESSION_TOKENS.clear()
     reply_server.DOWNLOAD_TOKENS.clear()
+    from app.api import state
+    state.login_ip_tracker.clear()
+    state.login_user_tracker.clear()
+    state.username_rate_tracker.clear()
 
 
 @pytest.fixture

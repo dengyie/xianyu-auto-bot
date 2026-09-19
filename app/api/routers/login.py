@@ -10,7 +10,7 @@ import io
 import os
 import secrets
 import time
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel
@@ -19,6 +19,23 @@ from app.api import state
 import db_manager
 import reply_server
 from utils.client_ip import get_client_ip
+
+
+def _set_auth_cookie(response: Response, request: Request, token: str) -> None:
+    """为浏览器端设置 HttpOnly 安全 Cookie"""
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    is_secure = request.url.scheme == "https" or forwarded_proto == "https"
+    response.set_cookie(
+        key="auth_token",
+        value=token,
+        max_age=int(state.TOKEN_EXPIRE_TIME),
+        expires=int(state.TOKEN_EXPIRE_TIME),
+        path="/",
+        httponly=True,
+        samesite="lax",
+        secure=is_secure,
+    )
+
 
 
 # 防暴力破解/验证码状态容器留在 reply_server（tests 直接操作 reply_server.login_ip_tracker 等）
@@ -528,7 +545,7 @@ def create_login_router(session_service, security, verify_dependency, admin_user
             return HTMLResponse('<h3>Register page not found</h3>')
 
     @router.post('/login')
-    async def login(login_request: LoginRequest, request: Request):
+    async def login(login_request: LoginRequest, request: Request, response: Response):
     
         # 获取客户端IP（考虑代理）
         client_ip = get_client_ip(request)
@@ -628,6 +645,7 @@ def create_login_router(session_service, security, verify_dependency, admin_user
                     user_is_admin = user.get('is_admin', False)
 
                     token = state.session_service.issue(user)
+                    _set_auth_cookie(response, request, token)
                     reply_server.audit_event(
                         category="auth",
                         action="login",
@@ -699,6 +717,7 @@ def create_login_router(session_service, security, verify_dependency, admin_user
                 user_is_admin = user.get('is_admin', False)
 
                 token = state.session_service.issue(user)
+                _set_auth_cookie(response, request, token)
 
                 if user_is_admin:
                     logger.info(f"【{user['username']}#{user['id']}】邮箱登录成功（管理员）(IP: {client_ip})")
@@ -766,6 +785,7 @@ def create_login_router(session_service, security, verify_dependency, admin_user
             user_is_admin = user.get('is_admin', False)
 
             token = state.session_service.issue(user)
+            _set_auth_cookie(response, request, token)
 
             if user_is_admin:
                 logger.info(f"【{user['username']}#{user['id']}】验证码登录成功（管理员）(IP: {client_ip})")

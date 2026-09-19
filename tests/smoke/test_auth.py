@@ -110,3 +110,120 @@ class TestAuth:
         assert resp.status_code == 200
         data = resp.json()
         assert data.get("success") is False
+
+    def test_login_sets_auth_cookie_with_security_flags(self, client):
+        """POST /login sets auth_token cookie with HttpOnly, SameSite=lax, and Path=/."""
+        resp = client.post("/login", json={
+            "username": "admin",
+            "password": "admin123",
+        })
+        assert resp.status_code == 200
+        set_cookie = resp.headers.get("set-cookie", "")
+        assert "auth_token=" in set_cookie
+        assert "httponly" in set_cookie.lower()
+        assert "samesite=lax" in set_cookie.lower()
+        assert "path=/" in set_cookie.lower()
+
+    def test_verify_and_protected_route_with_cookie_only(self, client):
+        """Authentication succeeds using Cookie alone without Authorization header."""
+        login_resp = client.post("/login", json={
+            "username": "admin",
+            "password": "admin123",
+        })
+        token = login_resp.json()["token"]
+
+        verify_resp = client.get("/verify", cookies={"auth_token": token})
+        assert verify_resp.status_code == 200
+        verify_data = verify_resp.json()
+        assert verify_data["authenticated"] is True
+        assert verify_data["username"] == "admin"
+        assert verify_data["is_admin"] is True
+        assert verify_data["token"] == token
+
+    def test_logout_with_cookie_clears_cookie_and_revokes_session(self, client):
+        """POST /logout via Cookie deletes cookie and revokes session."""
+        login_resp = client.post("/login", json={
+            "username": "admin",
+            "password": "admin123",
+        })
+        token = login_resp.json()["token"]
+
+        logout_resp = client.post("/logout", cookies={"auth_token": token})
+        assert logout_resp.status_code == 200
+        logout_set_cookie = logout_resp.headers.get("set-cookie", "")
+        assert "auth_token=" in logout_set_cookie
+        assert "max-age=0" in logout_set_cookie.lower() or "expires=" in logout_set_cookie.lower()
+
+        after_resp = client.get("/verify", cookies={"auth_token": token})
+        assert after_resp.json()["authenticated"] is False
+
+    def test_session_persistence_restores_from_db_after_memory_cleared(self, client):
+        """Sessions survive memory wipes by rehydrating from SQLite user_sessions table."""
+        from reply_server import SESSION_TOKENS
+
+        login_resp = client.post("/login", json={
+            "username": "admin",
+            "password": "admin123",
+        })
+        token = login_resp.json()["token"]
+        assert token in SESSION_TOKENS
+
+        # 模拟服务重启或内存清理
+        SESSION_TOKENS.clear()
+        assert token not in SESSION_TOKENS
+
+        # 通过 Cookie 再次访问，验证自动从 SQLite 回源恢复
+        resp = client.get("/verify", cookies={"auth_token": token})
+        assert resp.status_code == 200
+        assert resp.json()["authenticated"] is True
+        assert resp.json()["username"] == "admin"
+        # 确认已重新写回内存缓存
+        assert token in SESSION_TOKENS
+
+    def test_inactive_user_session_is_rejected_and_evicted(self, client):
+        """Inactive user sessions are rejected and purged from memory and DB."""
+        from reply_server import db_manager, SESSION_TOKENS
+
+        db_manager.set_system_setting("registration_enabled", "true")
+        db_manager.save_verification_code("user_test@local", "888888")
+        client.post("/register", json={
+            "username": "user_test",
+            "email": "user_test@local",
+            "password": "password123",
+            "verification_code": "888888",
+        })
+        user = db_manager.get_user_by_username("user_test")
+
+        login_resp = client.post("/login", json={
+            "username": "user_test",
+            "password": "password123",
+        })
+        token = login_resp.json()["token"]
+
+        v1 = client.get("/verify", cookies={"auth_token": token})
+        assert v1.json()["authenticated"] is True
+
+        # 将用户置为禁用 (is_active = 0)
+        with db_manager.lock:
+            cursor = db_manager.conn.cursor()
+            cursor.execute("UPDATE users SET is_active = 0 WHERE id = ?", (user["id"],))
+            db_manager.conn.commit()
+
+        # 再次请求验证，应该拒绝访问并注销该 token
+        v2 = client.get("/verify", cookies={"auth_token": token})
+        assert v2.json()["authenticated"] is False
+        assert token not in SESSION_TOKENS
+        assert db_manager.get_user_session(token) is None
+
+    def test_cleanup_expired_sessions(self, client):
+        """cleanup_expired_sessions deletes stale sessions and keeps valid ones."""
+        from reply_server import db_manager
+        import time
+        now = time.time()
+        db_manager.save_user_session("valid_tok", 1, "admin", True, now, now + 3600)
+        db_manager.save_user_session("stale_tok", 1, "admin", True, now - 7200, now - 3600)
+
+        cleaned = db_manager.cleanup_expired_sessions()
+        assert cleaned >= 1
+        assert db_manager.get_user_session("valid_tok") is not None
+        assert db_manager.get_user_session("stale_tok") is None

@@ -193,20 +193,26 @@ function showToast(message, type) {
 }
 
 async function checkAuth() {
-  if (!authToken) {
-    window.location.href = '/';
-    return false;
-  }
   try {
+    var headers = {};
+    if (authToken) {
+      headers['Authorization'] = 'Bearer ' + authToken;
+    }
     var response = await fetch('/verify', {
-      headers: { 'Authorization': 'Bearer ' + authToken }
+      headers: headers,
+      credentials: 'same-origin'
     });
     var result = await response.json();
     if (!result.authenticated) {
       localStorage.removeItem('auth_token');
       localStorage.removeItem('user_info');
+      authToken = '';
       window.location.href = '/';
       return false;
+    }
+    if (result.token) {
+      localStorage.setItem('auth_token', result.token);
+      authToken = result.token;
     }
     document.getElementById('usernameDisplay').textContent = result.username;
     return true;
@@ -217,13 +223,19 @@ async function checkAuth() {
 
 async function doLogout() {
   try {
+    var headers = {};
+    if (authToken) {
+      headers['Authorization'] = 'Bearer ' + authToken;
+    }
     await fetch('/logout', {
       method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + authToken }
+      headers: headers,
+      credentials: 'same-origin'
     });
   } catch (e) {}
   localStorage.removeItem('auth_token');
   localStorage.removeItem('user_info');
+  authToken = '';
   window.location.href = '/login.html';
 }
 

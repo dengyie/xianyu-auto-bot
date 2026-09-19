@@ -19,7 +19,12 @@ DOWNLOAD_TOKENS = {}  # 下载一次性token: {token_str: {user_id, file_id, exp
 
 TOKEN_EXPIRE_TIME = 24 * 60 * 60  # token过期时间：24小时
 
-session_service = SessionService(SESSION_TOKENS, TOKEN_EXPIRE_TIME)
+try:
+    from db_manager import db_manager
+    session_service = SessionService(SESSION_TOKENS, TOKEN_EXPIRE_TIME, session_store=db_manager)
+except Exception:
+    session_service = SessionService(SESSION_TOKENS, TOKEN_EXPIRE_TIME)
+
 
 # 扫码登录检查锁 - 防止并发处理同一个session
 qr_check_locks = defaultdict(lambda: asyncio.Lock())

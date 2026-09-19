@@ -2115,44 +2115,53 @@ async function logout() {
     stopSalesSummaryRefreshTimer();
     
     try {
-    if (authToken) {
-        await fetch('/logout', {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${authToken}`
+        const headers = {};
+        if (authToken) {
+            headers['Authorization'] = `Bearer ${authToken}`;
         }
+        await fetch('/logout', {
+            method: 'POST',
+            headers: headers,
+            credentials: 'same-origin'
         });
-    }
-    localStorage.removeItem('auth_token');
-    window.location.href = '/';
     } catch (err) {
-    console.error('登出失败:', err);
-    localStorage.removeItem('auth_token');
-    window.location.href = '/';
+        console.error('登出失败:', err);
+    } finally {
+        localStorage.removeItem('auth_token');
+        localStorage.removeItem('user_info');
+        authToken = '';
+        window.location.href = '/';
     }
 }
 
 // 检查认证状态
 async function checkAuth() {
     const token = getAuthToken();
-    if (!token) {
-    window.location.href = '/';
-    return false;
-    }
 
     try {
-    const response = await fetch('/verify', {
-        headers: {
-        'Authorization': `Bearer ${token}`
+        const headers = {};
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
         }
-    });
-    const result = await response.json();
+        const response = await fetch('/verify', {
+            headers: headers,
+            credentials: 'same-origin'
+        });
+        const result = await response.json();
 
-    if (!result.authenticated) {
-        localStorage.removeItem('auth_token');
-        window.location.href = '/';
-        return false;
-    }
+        if (!result.authenticated) {
+            localStorage.removeItem('auth_token');
+            localStorage.removeItem('user_info');
+            authToken = '';
+            window.location.href = '/';
+            return false;
+        }
+
+        // 如果通过 Cookie 恢复鉴权，同步回填 localStorage 保证老组件透明运行
+        if (result.token) {
+            localStorage.setItem('auth_token', result.token);
+            authToken = result.token;
+        }
 
     // 检查是否为管理员，显示管理员菜单和功能
     if (result.is_admin === true) {
