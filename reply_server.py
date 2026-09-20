@@ -620,12 +620,26 @@ KEYWORDS_MAPPING = load_keywords()
 # 认证相关模型
 
 
+def _extract_request_token(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = None,
+) -> Optional[str]:
+    """Prefer a non-empty Bearer token; otherwise fall back to the auth cookie."""
+    header_token = (credentials.credentials or "").strip() if credentials else ""
+    if header_token:
+        return header_token
+    cookie_token = request.cookies.get("auth_token") if hasattr(request, "cookies") else None
+    if cookie_token:
+        return cookie_token.strip() or None
+    return None
+
+
 def verify_token(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> Optional[Dict[str, Any]]:
     """验证token并返回用户信息（支持 Authorization 头和 auth_token Cookie 双轨）"""
-    raw_token = credentials.credentials if credentials else request.cookies.get("auth_token")
+    raw_token = _extract_request_token(request, credentials)
     if not raw_token:
         return None
 
@@ -709,8 +723,8 @@ def _audit_actor_from_request(request: Request) -> Optional[Dict[str, Any]]:
         raw_token = None
         auth_header = request.headers.get("Authorization")
         if auth_header and auth_header.startswith("Bearer "):
-            raw_token = auth_header.split(" ", 1)[1]
-        elif hasattr(request, "cookies"):
+            raw_token = auth_header.split(" ", 1)[1].strip()
+        if not raw_token and hasattr(request, "cookies"):
             raw_token = request.cookies.get("auth_token")
 
         if not raw_token:
@@ -888,8 +902,8 @@ async def log_requests(request, call_next):
         raw_token = None
         auth_header = request.headers.get("Authorization")
         if auth_header and auth_header.startswith("Bearer "):
-            raw_token = auth_header.split(" ")[1]
-        elif hasattr(request, "cookies"):
+            raw_token = auth_header.split(" ", 1)[1].strip()
+        if not raw_token and hasattr(request, "cookies"):
             raw_token = request.cookies.get("auth_token")
 
         if raw_token:

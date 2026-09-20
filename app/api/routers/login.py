@@ -16,6 +16,7 @@ from loguru import logger
 from pydantic import BaseModel
 from app.api.common import CAPTCHA_EXPIRE_SECONDS
 from app.api import state
+from app.application.auth.sessions import SessionPersistenceError
 import db_manager
 import reply_server
 from utils.client_ip import get_client_ip
@@ -389,6 +390,15 @@ class LoginResponse(BaseModel):
     captcha_required: Optional[bool] = None  # 是否需要验证码
 
 
+def _issue_session_or_fail(user: Dict[str, Any]) -> tuple[Optional[str], Optional[LoginResponse]]:
+    """Issue a durable session. On persistence failure, return a login error instead of a one-shot token."""
+    try:
+        return state.session_service.issue(user), None
+    except SessionPersistenceError as exc:
+        logger.error(f"登录会话持久化失败: user_id={user.get('id')} username={user.get('username')} error={exc}")
+        return None, LoginResponse(success=False, message="登录状态保存失败，请稍后重试")
+
+
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
@@ -644,7 +654,9 @@ def create_login_router(session_service, security, verify_dependency, admin_user
                     # 获取is_admin状态
                     user_is_admin = user.get('is_admin', False)
 
-                    token = state.session_service.issue(user)
+                    token, persist_error = _issue_session_or_fail(user)
+                    if persist_error:
+                        return persist_error
                     _set_auth_cookie(response, request, token)
                     reply_server.audit_event(
                         category="auth",
@@ -716,7 +728,9 @@ def create_login_router(session_service, security, verify_dependency, admin_user
                 # 获取is_admin状态
                 user_is_admin = user.get('is_admin', False)
 
-                token = state.session_service.issue(user)
+                token, persist_error = _issue_session_or_fail(user)
+                if persist_error:
+                    return persist_error
                 _set_auth_cookie(response, request, token)
 
                 if user_is_admin:
@@ -784,7 +798,9 @@ def create_login_router(session_service, security, verify_dependency, admin_user
             # 获取is_admin状态
             user_is_admin = user.get('is_admin', False)
 
-            token = state.session_service.issue(user)
+            token, persist_error = _issue_session_or_fail(user)
+            if persist_error:
+                return persist_error
             _set_auth_cookie(response, request, token)
 
             if user_is_admin:

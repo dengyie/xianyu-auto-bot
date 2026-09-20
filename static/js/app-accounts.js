@@ -2157,8 +2157,8 @@ async function checkAuth() {
             return false;
         }
 
-        // 如果通过 Cookie 恢复鉴权，同步回填 localStorage 保证老组件透明运行
-        if (result.token) {
+        // Cookie 水合：仅在本地没有 token 时回填，避免每次 /verify 把 HttpOnly 会话再写入 JS
+        if (result.token && !getAuthToken()) {
             localStorage.setItem('auth_token', result.token);
             authToken = result.token;
         }
@@ -2208,9 +2208,8 @@ async function checkAuth() {
 
     return true;
     } catch (err) {
-    localStorage.removeItem('auth_token');
-    window.location.href = '/';
-    return false;
+        console.error('认证状态检查失败，保留当前登录态:', err);
+        return true;
     }
 }
 

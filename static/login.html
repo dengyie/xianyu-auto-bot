@@ -316,6 +316,7 @@
         var response = await fetch('/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
           body: JSON.stringify(loginData)
         });
 
@@ -362,7 +363,7 @@
         if (verifyResp.ok) {
           var verifyResult = await verifyResp.json();
           if (verifyResult.authenticated) {
-            if (verifyResult.token) {
+            if (verifyResult.token && !existingToken) {
               localStorage.setItem('auth_token', verifyResult.token);
             }
             window.location.href = verifyResult.is_admin ? '/admin' : '/download';

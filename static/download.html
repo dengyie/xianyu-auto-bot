@@ -210,14 +210,15 @@ async function checkAuth() {
       window.location.href = '/';
       return false;
     }
-    if (result.token) {
+    if (result.token && !authToken) {
       localStorage.setItem('auth_token', result.token);
       authToken = result.token;
     }
     document.getElementById('usernameDisplay').textContent = result.username;
     return true;
   } catch (e) {
-    return false;
+    console.error('认证状态检查失败，保留当前登录态:', e);
+    return true;
   }
 }
 

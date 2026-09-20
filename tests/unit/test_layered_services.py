@@ -112,6 +112,90 @@ def test_session_service_supports_session_store_persistence_and_rehydration():
     assert token2 not in store_db
 
 
+def test_session_service_issue_fails_closed_when_store_cannot_persist():
+    module = _import_required("app.application.auth.sessions")
+    sessions = {}
+
+    class FailingStore:
+        def save_user_session(self, **_kwargs):
+            raise RuntimeError("disk full")
+
+    service = module.SessionService(
+        sessions=sessions,
+        expire_seconds=60,
+        token_factory=lambda: "token-should-not-leak",
+        clock=lambda: 100.0,
+        session_store=FailingStore(),
+    )
+    user = {"id": 11, "username": "carol", "is_admin": False, "is_active": True}
+
+    with pytest.raises(module.SessionPersistenceError):
+        service.issue(user)
+    assert sessions == {}
+
+
+def test_session_service_issue_fails_closed_when_store_returns_false():
+    module = _import_required("app.application.auth.sessions")
+    sessions = {}
+
+    class RejectingStore:
+        def save_user_session(self, **_kwargs):
+            return False
+
+    service = module.SessionService(
+        sessions=sessions,
+        expire_seconds=60,
+        token_factory=lambda: "token-should-not-leak",
+        clock=lambda: 100.0,
+        session_store=RejectingStore(),
+    )
+    user = {"id": 12, "username": "dave", "is_admin": False, "is_active": True}
+
+    with pytest.raises(module.SessionPersistenceError):
+        service.issue(user)
+    assert sessions == {}
+
+
+def test_session_service_honors_store_expires_at_after_rehydration():
+    module = _import_required("app.application.auth.sessions")
+    now = 100.0
+    sessions = {}
+    store_db = {
+        "old-token": {
+            "token": "old-token",
+            "user_id": 13,
+            "username": "erin",
+            "is_admin": False,
+            "created_at": 10.0,
+            "expires_at": 150.0,
+        }
+    }
+
+    class FakeSessionStore:
+        def get_user_session(self, token):
+            item = store_db.get(token)
+            if item and item["expires_at"] > now:
+                return item
+            return None
+
+        def delete_user_session(self, token):
+            return store_db.pop(token, None) is not None
+
+    service = module.SessionService(
+        sessions=sessions,
+        expire_seconds=60,
+        clock=lambda: now,
+        session_store=FakeSessionStore(),
+    )
+    user = {"id": 13, "username": "erin", "is_admin": False, "is_active": True}
+
+    assert service.verify("old-token", lambda uid: user if uid == 13 else None) is not None
+    now = 151.0
+    assert service.verify("old-token", lambda uid: user if uid == 13 else None) is None
+    assert "old-token" not in sessions
+    assert "old-token" not in store_db
+
+
 def test_account_ownership_policy_returns_owned_id_and_raises_typed_errors():
     module = _import_required("app.domain.accounts.ownership")
 

@@ -140,6 +140,36 @@ class TestAuth:
         assert verify_data["is_admin"] is True
         assert verify_data["token"] == token
 
+    def test_verify_with_authorization_header_does_not_echo_token(self, client):
+        """Bearer callers already have the token; /verify must not copy it back into JS."""
+        login_resp = client.post("/login", json={
+            "username": "admin",
+            "password": "admin123",
+        })
+        token = login_resp.json()["token"]
+
+        verify_resp = client.get("/verify", headers={"Authorization": f"Bearer {token}"})
+        assert verify_resp.status_code == 200
+        verify_data = verify_resp.json()
+        assert verify_data["authenticated"] is True
+        assert "token" not in verify_data
+
+    def test_empty_bearer_header_falls_back_to_cookie(self, client):
+        """An empty Authorization: Bearer value must not block Cookie authentication."""
+        login_resp = client.post("/login", json={
+            "username": "admin",
+            "password": "admin123",
+        })
+        token = login_resp.json()["token"]
+
+        verify_resp = client.get(
+            "/verify",
+            headers={"Authorization": "Bearer "},
+            cookies={"auth_token": token},
+        )
+        assert verify_resp.status_code == 200
+        assert verify_resp.json()["authenticated"] is True
+
     def test_logout_with_cookie_clears_cookie_and_revokes_session(self, client):
         """POST /logout via Cookie deletes cookie and revokes session."""
         login_resp = client.post("/login", json={
@@ -227,3 +257,25 @@ class TestAuth:
         assert cleaned >= 1
         assert db_manager.get_user_session("valid_tok") is not None
         assert db_manager.get_user_session("stale_tok") is None
+
+    def test_login_fails_closed_when_session_cannot_be_persisted(self, client, monkeypatch):
+        """A login that cannot write user_sessions must not mint a one-shot memory token."""
+        from reply_server import SESSION_TOKENS, session_service
+
+        def boom(**_kwargs):
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(session_service.session_store, "save_user_session", boom)
+        before = dict(SESSION_TOKENS)
+
+        resp = client.post("/login", json={
+            "username": "admin",
+            "password": "admin123",
+        })
+        data = resp.json()
+        assert resp.status_code == 200
+        assert data["success"] is False
+        assert data.get("token") is None
+        assert "保存失败" in data.get("message", "")
+        assert SESSION_TOKENS == before
+        assert "auth_token=" not in (resp.headers.get("set-cookie") or "").lower()
