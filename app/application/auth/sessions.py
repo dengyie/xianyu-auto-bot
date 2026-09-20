@@ -68,6 +68,34 @@ class SessionService:
         self.sessions.pop(token, None)
         self._store_call("delete_user_session", token, default=False)
 
+    def _load_session(self, token: str) -> dict[str, Any] | None:
+        session = self.sessions.get(token)
+        if not session:
+            db_session = self._store_call("get_user_session", token, default=None)
+            if db_session:
+                session = {
+                    "user_id": db_session["user_id"],
+                    "username": db_session["username"],
+                    "is_admin": db_session["is_admin"],
+                    "timestamp": db_session["created_at"],
+                    "expires_at": db_session.get("expires_at"),
+                }
+                self.sessions[token] = session
+        if not session:
+            return None
+        if self._is_expired(session):
+            self._evict(token)
+            return None
+        return session
+
+    def lookup(self, token: str) -> dict[str, Any] | None:
+        """Return a live session without hitting the user table.
+
+        Used by request logs and audit attribution so they share the same
+        expiry rules as authentication, without a second user-loader path.
+        """
+        return self._load_session(token)
+
     def issue(self, user: dict[str, Any]) -> str:
         token = self.token_factory()
         now = self.clock()
@@ -94,24 +122,8 @@ class SessionService:
         token: str,
         user_loader: Callable[[int], dict[str, Any] | None],
     ) -> dict[str, Any] | None:
-        session = self.sessions.get(token)
-        # 内存未命中时，尝试从持久化存储中回源加载
+        session = self._load_session(token)
         if not session:
-            db_session = self._store_call("get_user_session", token, default=None)
-            if db_session:
-                session = {
-                    "user_id": db_session["user_id"],
-                    "username": db_session["username"],
-                    "is_admin": db_session["is_admin"],
-                    "timestamp": db_session["created_at"],
-                    "expires_at": db_session.get("expires_at"),
-                }
-                self.sessions[token] = session
-
-        if not session:
-            return None
-        if self._is_expired(session):
-            self._evict(token)
             return None
 
         user = user_loader(session.get("user_id"))

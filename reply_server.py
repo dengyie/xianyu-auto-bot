@@ -620,18 +620,39 @@ KEYWORDS_MAPPING = load_keywords()
 # 认证相关模型
 
 
+def _token_from_authorization_header(authorization: Optional[str]) -> Optional[str]:
+    """Parse a non-empty Bearer token from an Authorization header."""
+    if not authorization:
+        return None
+    scheme, separator, remainder = authorization.partition(" ")
+    if not separator or scheme.lower() != "bearer":
+        return None
+    token = remainder.strip()
+    return token or None
+
+
 def _extract_request_token(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = None,
 ) -> Optional[str]:
     """Prefer a non-empty Bearer token; otherwise fall back to the auth cookie."""
     header_token = (credentials.credentials or "").strip() if credentials else ""
+    if not header_token:
+        header_token = _token_from_authorization_header(request.headers.get("Authorization"))
     if header_token:
         return header_token
     cookie_token = request.cookies.get("auth_token") if hasattr(request, "cookies") else None
     if cookie_token:
         return cookie_token.strip() or None
     return None
+
+
+def _session_user_from_request(request: Request) -> Optional[Dict[str, Any]]:
+    """Resolve the current session with the same token + TTL rules as auth."""
+    raw_token = _extract_request_token(request)
+    if not raw_token:
+        return None
+    return session_service.lookup(raw_token)
 
 
 def verify_token(
@@ -720,31 +741,14 @@ def log_with_user(level: str, message: str, user_info: Dict[str, Any] = None):
 
 def _audit_actor_from_request(request: Request) -> Optional[Dict[str, Any]]:
     try:
-        raw_token = None
-        auth_header = request.headers.get("Authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            raw_token = auth_header.split(" ", 1)[1].strip()
-        if not raw_token and hasattr(request, "cookies"):
-            raw_token = request.cookies.get("auth_token")
-
-        if not raw_token:
+        user = _session_user_from_request(request)
+        if not user:
             return None
-
-        token_data = SESSION_TOKENS.get(raw_token)
-        if token_data and time.time() - token_data.get('timestamp', 0) <= TOKEN_EXPIRE_TIME:
-            return {
-                "user_id": token_data.get("user_id"),
-                "username": token_data.get("username"),
-                "is_admin": bool(token_data.get("is_admin", False)),
-            }
-        user = session_service.verify(raw_token, db_manager.get_user_by_id)
-        if user:
-            return {
-                "user_id": user.get("user_id"),
-                "username": user.get("username"),
-                "is_admin": bool(user.get("is_admin", False)),
-            }
-        return None
+        return {
+            "user_id": user.get("user_id"),
+            "username": user.get("username"),
+            "is_admin": bool(user.get("is_admin", False)),
+        }
     except Exception:
         return None
 
@@ -899,22 +903,9 @@ async def log_requests(request, call_next):
     # 获取用户信息
     user_info = "未登录"
     try:
-        raw_token = None
-        auth_header = request.headers.get("Authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            raw_token = auth_header.split(" ", 1)[1].strip()
-        if not raw_token and hasattr(request, "cookies"):
-            raw_token = request.cookies.get("auth_token")
-
-        if raw_token:
-            if raw_token in SESSION_TOKENS:
-                token_data = SESSION_TOKENS[raw_token]
-                if time.time() - token_data['timestamp'] <= TOKEN_EXPIRE_TIME:
-                    user_info = f"【{token_data['username']}#{token_data['user_id']}】"
-            else:
-                user = session_service.verify(raw_token, db_manager.get_user_by_id)
-                if user:
-                    user_info = f"【{user['username']}#{user['user_id']}】"
+        user = _session_user_from_request(request)
+        if user:
+            user_info = f"【{user['username']}#{user['user_id']}】"
     except Exception:
         pass
 

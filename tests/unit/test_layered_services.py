@@ -196,6 +196,33 @@ def test_session_service_honors_store_expires_at_after_rehydration():
     assert "old-token" not in store_db
 
 
+def test_session_service_lookup_uses_expires_at_without_user_loader():
+    module = _import_required("app.application.auth.sessions")
+    now = 100.0
+    sessions = {
+        "live-token": {
+            "user_id": 14,
+            "username": "frank",
+            "is_admin": False,
+            "timestamp": 10.0,
+            "expires_at": 150.0,
+        }
+    }
+    service = module.SessionService(
+        sessions=sessions,
+        expire_seconds=60,
+        clock=lambda: now,
+    )
+
+    looked_up = service.lookup("live-token")
+    assert looked_up is not None
+    assert looked_up["username"] == "frank"
+
+    now = 151.0
+    assert service.lookup("live-token") is None
+    assert "live-token" not in sessions
+
+
 def test_account_ownership_policy_returns_owned_id_and_raises_typed_errors():
     module = _import_required("app.domain.accounts.ownership")
 

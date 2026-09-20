@@ -10,6 +10,8 @@ import os
 from collections import defaultdict
 from typing import Any, Dict
 
+from loguru import logger
+
 from app.application.auth.sessions import SessionService
 
 
@@ -23,6 +25,7 @@ try:
     from db_manager import db_manager
     session_service = SessionService(SESSION_TOKENS, TOKEN_EXPIRE_TIME, session_store=db_manager)
 except Exception:
+    logger.warning("session store unavailable; sessions will not persist across restarts")
     session_service = SessionService(SESSION_TOKENS, TOKEN_EXPIRE_TIME)
 
 

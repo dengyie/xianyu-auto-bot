@@ -352,6 +352,34 @@ def test_admin_status_revocation_invalidates_existing_admin_token(client, auth):
     assert client.get("/admin/users", headers=stale_auth).status_code == 401
 
 
+def test_admin_user_delete_immediately_revokes_memory_sessions(client, auth):
+    import secrets
+    import time
+
+    db_manager = reply_server.db_manager
+    assert db_manager.create_user("tempuser", "tempuser@test.local", "test123")
+    temp_user = db_manager.get_user_by_username("tempuser")
+
+    stale_token = secrets.token_urlsafe(32)
+    reply_server.SESSION_TOKENS[stale_token] = {
+        "user_id": temp_user["id"],
+        "username": "tempuser",
+        "is_admin": False,
+        "timestamp": time.time(),
+        "expires_at": time.time() + 3600,
+    }
+    stale_auth = {"Authorization": f"Bearer {stale_token}"}
+
+    assert client.get("/verify", headers=stale_auth).json()["authenticated"] is True
+
+    deleted = client.delete(f"/admin/users/{temp_user['id']}", headers=auth)
+    assert deleted.status_code == 200
+    assert stale_token not in reply_server.SESSION_TOKENS
+    assert db_manager.get_user_session(stale_token) is None
+    assert client.get("/verify", headers=stale_auth).json()["authenticated"] is False
+    assert client.get("/api/orders", headers=stale_auth).status_code == 401
+
+
 def test_admin_log_access_is_admin_only_and_missing_exports_are_safe(
     client, auth, user_auth, monkeypatch
 ):

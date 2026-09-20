@@ -770,6 +770,7 @@ def create_admin_ops_router() -> APIRouter:
             success = db_manager.db_manager.delete_user_and_data(user_id)
 
             if success:
+                removed_tokens = reply_server._remove_session_tokens_for_user(user_id)
                 reply_server.audit_event(
                     category="admin",
                     action="admin_user_delete",
@@ -781,6 +782,7 @@ def create_admin_ops_router() -> APIRouter:
                     details={
                         "target_username": user_to_delete.get("username"),
                         "target_user_id": user_id,
+                        "revoked_sessions": removed_tokens,
                     },
                 )
                 reply_server.log_with_user('info', f"用户删除成功: {user_to_delete['username']} (ID: {user_id})", admin_user)

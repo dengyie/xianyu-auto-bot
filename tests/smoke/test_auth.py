@@ -170,6 +170,24 @@ class TestAuth:
         assert verify_resp.status_code == 200
         assert verify_resp.json()["authenticated"] is True
 
+    def test_lowercase_bearer_header_authenticates(self, client):
+        """Authorization scheme matching is case-insensitive for Bearer."""
+        from reply_server import _token_from_authorization_header
+
+        login_resp = client.post("/login", json={
+            "username": "admin",
+            "password": "admin123",
+        })
+        token = login_resp.json()["token"]
+
+        assert _token_from_authorization_header(f"bearer {token}") == token
+        assert _token_from_authorization_header("Bearer ") is None
+        assert _token_from_authorization_header("Basic abc") is None
+
+        verify_resp = client.get("/verify", headers={"Authorization": f"bearer {token}"})
+        assert verify_resp.status_code == 200
+        assert verify_resp.json()["authenticated"] is True
+
     def test_logout_with_cookie_clears_cookie_and_revokes_session(self, client):
         """POST /logout via Cookie deletes cookie and revokes session."""
         login_resp = client.post("/login", json={
