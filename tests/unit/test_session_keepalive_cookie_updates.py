@@ -101,6 +101,27 @@ async def test_persist_runtime_cookie_state_passes_argument_through():
     assert host.config_updates == 1
 
 
+def test_recent_auth_ok_keepalive_skips_password_login_when_cookie_still_valid():
+    """WS 连败不等于 Cookie 失效：保活刚成功时不要开密码登录进处罚页。"""
+    import time
+
+    from XianyuAutoAsync import XianyuLive
+
+    host = XianyuLive.__new__(XianyuLive)
+    host.last_session_keepalive_status = "success"
+    host.last_session_keepalive_time = time.time()
+    host.session_keepalive_interval = 600
+
+    assert host._has_recent_auth_ok_keepalive() is True
+
+    host.last_session_keepalive_status = "network_failed"
+    assert host._has_recent_auth_ok_keepalive() is False
+
+    host.last_session_keepalive_status = "success"
+    host.last_session_keepalive_time = time.time() - 10
+    assert host._has_recent_auth_ok_keepalive(window_seconds=5) is False
+
+
 def test_source_has_no_phantom_host_cookies_str():
     """源码契约：任何 `_host.cookies_str` 都会在容器里 100% 命中 AttributeError。"""
     offenders = []

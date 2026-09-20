@@ -2180,6 +2180,18 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
         window = window_seconds or self.slider_success_reentry_window
         return (time.time() - self.last_slider_success_at) <= window
 
+    def _has_recent_auth_ok_keepalive(self, window_seconds: int = None) -> bool:
+        """WS 连败不等于 Cookie 失效；轻量保活刚成功时不要开密码登录进处罚页。"""
+        if getattr(self, 'last_session_keepalive_status', None) != 'success':
+            return False
+        last_at = float(getattr(self, 'last_session_keepalive_time', 0) or 0)
+        if last_at <= 0:
+            return False
+        if window_seconds is None:
+            interval = float(getattr(self, 'session_keepalive_interval', 600) or 600)
+            window_seconds = max(interval * 2, 120)
+        return (time.time() - last_at) <= window_seconds
+
 
     def _is_auth_failure_ret(self, ret_value: Any) -> bool:
         if isinstance(ret_value, str):
@@ -4212,55 +4224,66 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
 
                     # 检查是否超过最大失败次数
                     if self.connection_failures >= self.max_connection_failures:
-                        self._set_connection_state(ConnectionState.FAILED, f"连续失败{self.max_connection_failures}次")
-                        logger.warning(f"【{self.cookie_id}】连续失败{self.max_connection_failures}次，尝试通过密码登录刷新Cookie...")
-                        
-                        try:
-                            # 调用统一的密码登录刷新方法
-                            refresh_success = await self._try_password_login_refresh(
-                                f"连续失败{self.max_connection_failures}次",
-                                ignore_slider_failed_backoff=self._has_recent_slider_success(),
+                        if self._has_recent_auth_ok_keepalive():
+                            logger.warning(
+                                f"【{self.cookie_id}】连续失败{self.max_connection_failures}次，"
+                                f"但轻量保活仍成功，判定 Cookie 有效，跳过密码登录，继续重连"
                             )
-                            
-                            if refresh_success:
-                                logger.info(f"【{self.cookie_id}】✅ 密码登录刷新成功，将重置失败计数并继续重连")
-                                # 重置失败计数，因为已经刷新了Cookie
-                                self.connection_failures = 0
-                                # 更新连接状态
-                                self._set_connection_state(ConnectionState.RECONNECTING, "Cookie已刷新，准备重连")
-                                # 短暂等待后继续重连循环
-                                await asyncio.sleep(2)
-                                continue
-                            else:
-                                logger.warning(f"【{self.cookie_id}】❌ 密码登录刷新失败，将重启实例...")
-                        except Exception as refresh_e:
-                            logger.error(f"【{self.cookie_id}】密码登录刷新过程异常: {self._safe_str(refresh_e)}")
-                            logger.warning(f"【{self.cookie_id}】将重启实例...")
-                        
-                        # 如果密码登录刷新失败或异常，则重启实例
-                        logger.error(f"【{self.cookie_id}】准备重启实例...")
-                        self.connection_failures = 0  # 重置失败计数
-                        
-                        # 先清理后台任务，避免与重启过程冲突
-                        logger.info(f"【{self.cookie_id}】重启前先清理后台任务...")
-                        try:
-                            await asyncio.wait_for(
-                                self._cancel_background_tasks(),
-                                timeout=8.0  # 给足够时间让任务响应
+                            self.connection_failures = 0
+                            self._set_connection_state(
+                                ConnectionState.RECONNECTING,
+                                "保活仍成功，跳过密码登录",
                             )
-                            logger.info(f"【{self.cookie_id}】后台任务已清理完成")
-                        except asyncio.TimeoutError:
-                            logger.warning(f"【{self.cookie_id}】后台任务清理超时，强制继续重启")
-                        except Exception as cleanup_e:
-                            logger.error(f"【{self.cookie_id}】后台任务清理失败: {self._safe_str(cleanup_e)}")
-                        
-                        # 触发重启（不等待完成）
-                        await self._restart_instance()
-                        
-                        # ⚠️ 重要：_restart_instance() 已触发重启，2秒后当前任务会被取消
-                        # 不要在这里等待或执行其他操作，让任务自然退出
-                        logger.info(f"【{self.cookie_id}】重启请求已触发，主程序即将退出，新实例将自动启动")
-                        return  # 退出当前连接循环，等待被取消
+                        else:
+                            self._set_connection_state(ConnectionState.FAILED, f"连续失败{self.max_connection_failures}次")
+                            logger.warning(f"【{self.cookie_id}】连续失败{self.max_connection_failures}次，尝试通过密码登录刷新Cookie...")
+
+                            try:
+                                # 调用统一的密码登录刷新方法
+                                refresh_success = await self._try_password_login_refresh(
+                                    f"连续失败{self.max_connection_failures}次",
+                                    ignore_slider_failed_backoff=self._has_recent_slider_success(),
+                                )
+
+                                if refresh_success:
+                                    logger.info(f"【{self.cookie_id}】✅ 密码登录刷新成功，将重置失败计数并继续重连")
+                                    # 重置失败计数，因为已经刷新了Cookie
+                                    self.connection_failures = 0
+                                    # 更新连接状态
+                                    self._set_connection_state(ConnectionState.RECONNECTING, "Cookie已刷新，准备重连")
+                                    # 短暂等待后继续重连循环
+                                    await asyncio.sleep(2)
+                                    continue
+                                else:
+                                    logger.warning(f"【{self.cookie_id}】❌ 密码登录刷新失败，将重启实例...")
+                            except Exception as refresh_e:
+                                logger.error(f"【{self.cookie_id}】密码登录刷新过程异常: {self._safe_str(refresh_e)}")
+                                logger.warning(f"【{self.cookie_id}】将重启实例...")
+
+                            # 如果密码登录刷新失败或异常，则重启实例
+                            logger.error(f"【{self.cookie_id}】准备重启实例...")
+                            self.connection_failures = 0  # 重置失败计数
+
+                            # 先清理后台任务，避免与重启过程冲突
+                            logger.info(f"【{self.cookie_id}】重启前先清理后台任务...")
+                            try:
+                                await asyncio.wait_for(
+                                    self._cancel_background_tasks(),
+                                    timeout=8.0  # 给足够时间让任务响应
+                                )
+                                logger.info(f"【{self.cookie_id}】后台任务已清理完成")
+                            except asyncio.TimeoutError:
+                                logger.warning(f"【{self.cookie_id}】后台任务清理超时，强制继续重启")
+                            except Exception as cleanup_e:
+                                logger.error(f"【{self.cookie_id}】后台任务清理失败: {self._safe_str(cleanup_e)}")
+
+                            # 触发重启（不等待完成）
+                            await self._restart_instance()
+
+                            # ⚠️ 重要：_restart_instance() 已触发重启，2秒后当前任务会被取消
+                            # 不要在这里等待或执行其他操作，让任务自然退出
+                            logger.info(f"【{self.cookie_id}】重启请求已触发，主程序即将退出，新实例将自动启动")
+                            return  # 退出当前连接循环，等待被取消
 
                     # 计算重试延迟
                     retry_delay = self._calculate_retry_delay(error_msg)
