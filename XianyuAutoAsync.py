@@ -77,7 +77,11 @@ def _create_token_refresh_slider(slider_cls, **kwargs):
         return slider_cls(**kwargs)
     except TypeError:
         kwargs.pop('config', None)
-        return slider_cls(**kwargs)
+        try:
+            return slider_cls(**kwargs)
+        except TypeError:
+            kwargs.pop('provider', None)
+            return slider_cls(**kwargs)
 
 
 PROTECTED_SESSION_COOKIE_FIELDS = (
@@ -2537,6 +2541,7 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
                     headless=True,
                     proxy=self.proxy_config,
                     config=cfg,
+                    provider="auto",
                 )
                 # 兼容 orchestrator 读取 user_id/initial_cookies
                 if not getattr(solver, 'user_id', None):

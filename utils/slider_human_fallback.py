@@ -175,6 +175,7 @@ async def run_human_captcha_session(
             "cookies_str": cookies_str or "",
             "headless": headless,
             "proxy": dict(proxy or {}),
+            "provider": "auto",
         }
         if SlidexConfig is not None:
             try:
@@ -185,18 +186,26 @@ async def run_human_captcha_session(
         try:
             solver = SliderSolver(**kwargs)
         except TypeError:
-            # legacy 构造签名可能不同
-            solver = SliderSolver(
-                cookie_id=cookie_id,
-                cookies_str=cookies_str or "",
-                headless=headless,
-            )
+            kwargs.pop("config", None)
+            try:
+                solver = SliderSolver(**kwargs)
+            except TypeError:
+                kwargs.pop("provider", None)
+                try:
+                    solver = SliderSolver(**kwargs)
+                except TypeError:
+                    solver = SliderSolver(
+                        cookie_id=cookie_id,
+                        cookies_str=cookies_str or "",
+                        headless=headless,
+                    )
 
         logger.info(f"[{cookie_id}] human captcha bootstrap via {runtime}")
         await solver._init_browser()  # noqa: SLF001 — 产品路径需要 live page
         await solver._load_page(verification_url)  # noqa: SLF001
+        slider_found = False
         try:
-            await solver._wait_slider()  # noqa: SLF001
+            slider_found = bool(await solver._wait_slider())  # noqa: SLF001
         except Exception as wait_e:
             logger.warning(f"[{cookie_id}] wait slider soft-fail (仍启动人工面板): {wait_e}")
 
@@ -215,8 +224,17 @@ async def run_human_captcha_session(
             solver.page,
             cookie_id=str(cookie_id or "default"),
         )
+        if slider_found:
+            try:
+                live_session = captcha_controller.active_sessions.get(session_id)
+                if isinstance(live_session, dict):
+                    live_session["captcha_seen"] = True
+            except Exception:
+                pass
         session_token = str((session_info or {}).get("token") or "")
         control_url = build_captcha_control_url(session_id, session_token)
+        captcha_info = (session_info or {}).get("captcha_info")
+        saw_captcha = slider_found or bool(captcha_info)
 
         logger.warning("=" * 60)
         logger.warning(f"[{cookie_id}] 自动滑块失败，已启动人工 captcha 面板")
@@ -238,6 +256,20 @@ async def run_human_captcha_session(
                     completed = bool(await captcha_controller.check_completion(session_id))
                 if not completed and hasattr(captcha_controller, "is_completed"):
                     completed = bool(captcha_controller.is_completed(session_id))
+                if completed and not saw_captcha:
+                    peek_cookies = {}
+                    try:
+                        if hasattr(solver, "_get_cookies"):
+                            peek_cookies = await solver._get_cookies()  # noqa: SLF001
+                    except Exception:
+                        peek_cookies = {}
+                    if (peek_cookies or {}).get("x5sec"):
+                        saw_captcha = True
+                    else:
+                        logger.warning(
+                            f"[{cookie_id}] 忽略从未观察到滑块时的立即完成（空壳页假通过）"
+                        )
+                        completed = False
                 if completed:
                     cookies = {}
                     if hasattr(solver, "_get_cookies"):

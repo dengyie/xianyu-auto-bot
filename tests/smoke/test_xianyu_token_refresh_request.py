@@ -92,6 +92,43 @@ class TestXianyuTokenRefreshRequest:
         assert slider_cls is FakeLegacySliderSolver
         assert runtime_name == "legacy"
 
+    def test_create_token_refresh_slider_passes_provider_auto(self):
+        captured = {}
+
+        class FakeSlider:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        XianyuAutoAsync._create_token_refresh_slider(
+            FakeSlider,
+            cookie_id="u1",
+            cookies_str="c=1",
+            headless=True,
+            proxy={},
+            config=object(),
+            provider="auto",
+        )
+        assert captured["provider"] == "auto"
+        assert captured["cookie_id"] == "u1"
+
+    def test_create_token_refresh_slider_pops_provider_for_legacy(self):
+        class LegacySlider:
+            def __init__(self, cookie_id="default", cookies_str="", headless=True, proxy=None):
+                self.cookie_id = cookie_id
+                self.cookies_str = cookies_str
+
+        solver = XianyuAutoAsync._create_token_refresh_slider(
+            LegacySlider,
+            cookie_id="u2",
+            cookies_str="c=2",
+            headless=True,
+            proxy={},
+            config=object(),
+            provider="auto",
+        )
+        assert solver.cookie_id == "u2"
+        assert solver.cookies_str == "c=2"
+
     @pytest.mark.asyncio
     async def test_refresh_token_reuses_session_and_passes_proxy(self):
         fake_response = _FakeTokenRefreshResponse()
@@ -157,11 +194,12 @@ class TestXianyuTokenRefreshRequest:
         created_sliders = []
 
         class _FakeSlider:
-            def __init__(self, cookie_id="default", cookies_str="", headless=True, proxy=None, trajectory_mode="auto", **_kwargs):
+            def __init__(self, cookie_id="default", cookies_str="", headless=True, proxy=None, trajectory_mode="auto", **kwargs):
                 self.cookie_id = cookie_id
                 self.cookies_str = cookies_str
                 self.headless = headless
                 self.proxy = proxy
+                self.kwargs = kwargs
                 self.user_id = cookie_id
                 self.initial_cookies = cookies_str
                 created_sliders.append(self)
@@ -233,6 +271,7 @@ class TestXianyuTokenRefreshRequest:
         assert result is None
         assert len(created_sliders) == 1
         assert created_sliders[0].cookie_id == "token_refresh_captcha_scene_test"
+        assert created_sliders[0].kwargs.get("provider") == "auto"
         assert live.last_slider_captcha_engine == "playwright"
         assert "mocked primary failure" in (live.last_slider_result_message or "")
         assert len(human_calls) == 1
@@ -247,11 +286,12 @@ class TestXianyuTokenRefreshRequest:
         created_sliders = []
 
         class _FakeSlider:
-            def __init__(self, cookie_id="default", cookies_str="", headless=True, proxy=None, trajectory_mode="auto", **_kwargs):
+            def __init__(self, cookie_id="default", cookies_str="", headless=True, proxy=None, trajectory_mode="auto", **kwargs):
                 self.cookie_id = cookie_id
                 self.cookies_str = cookies_str
                 self.headless = headless
                 self.proxy = proxy
+                self.kwargs = kwargs
                 self.user_id = cookie_id
                 self.initial_cookies = cookies_str
                 created_sliders.append(self)
