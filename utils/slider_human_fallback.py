@@ -159,12 +159,14 @@ async def run_human_captcha_session(
             message=f"slidex.remote 不可用: {import_e}",
         )
 
-    timeout = float(timeout if timeout is not None else _env_float("SLIDEX_REMOTE_TIMEOUT", 180.0))
-    poll_interval = float(
-        poll_interval if poll_interval is not None else _env_float("SLIDEX_REMOTE_POLL", 2.0)
-    )
-    timeout = max(30.0, timeout)
-    poll_interval = max(0.5, poll_interval)
+    if timeout is None:
+        timeout = max(30.0, _env_float("SLIDEX_REMOTE_TIMEOUT", 180.0))
+    else:
+        timeout = max(0.1, float(timeout))
+    if poll_interval is None:
+        poll_interval = max(0.5, _env_float("SLIDEX_REMOTE_POLL", 2.0))
+    else:
+        poll_interval = max(0.05, float(poll_interval))
 
     SlidexConfig, SliderSolver, runtime = await _load_slider_solver_class()
     solver = None
