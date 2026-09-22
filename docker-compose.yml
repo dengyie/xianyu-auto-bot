@@ -43,7 +43,10 @@ services:
       - ENABLE_VNC=${ENABLE_VNC:-false}
       - VNC_PASSWORD=${VNC_PASSWORD:-}
       - DISPLAY=:99             # 虚拟显示编号
-      
+      # 滑块验证有头 + patchright 反检测栈（XY_SLIDER_HEADLESS=0 依赖上面的 Xvfb DISPLAY）
+      - XY_SLIDER_HEADLESS=${XY_SLIDER_HEADLESS:-0}
+      - XY_SLIDER_AUTOMATION_BACKEND=${XY_SLIDER_AUTOMATION_BACKEND:-patchright}
+
       - PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}
       - PYTHONDONTWRITEBYTECODE=${PYTHONDONTWRITEBYTECODE:-1}
       - TZ=${TZ:-Asia/Shanghai}
