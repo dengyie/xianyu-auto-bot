@@ -71,7 +71,7 @@ source venv/bin/activate
 
 # 3. 安装锁定依赖
 pip install --require-hashes -r requirements.lock
-pip install --no-deps "slidex @ git+https://github.com/dengyie/slidex.git@c32ce9fbd061c8ddfb02ac663b43fed9426dc480"
+pip install --no-deps "slidex @ git+https://github.com/dengyie/slidex.git@68186de8ecd0977a3cd1f59462a062a18f24261d"
 
 # 4. 安装 Playwright 浏览器
 playwright install chromium
@@ -220,7 +220,7 @@ uv pip compile requirements.txt \
   --output-file requirements.lock
 ```
 
-Playwright 固定为 `1.59.0`。`slidex` 因为是 VCS 依赖，不能参与 pip 的 `--require-hashes`，因此从主锁文件中排除，并以 `--no-deps` 单独安装固定提交 `c32ce9fbd061c8ddfb02ac663b43fed9426dc480`（0.6.4）；其余依赖仍全部强制哈希校验。
+Playwright 固定为 `1.59.0`。`slidex` 因为是 VCS 依赖，不能参与 pip 的 `--require-hashes`，因此从主锁文件中排除，并以 `--no-deps` 单独安装固定提交 `68186de8ecd0977a3cd1f59462a062a18f24261d`（0.6.4）；其余依赖仍全部强制哈希校验。
 
 ## ❓ 常见问题
 

@@ -1116,6 +1116,7 @@ class XianyuSliderStealth(SliderVerificationMixin, SliderHarvestMixin, SliderTra
         self._slider_refresh_mode = False
         self.risk_session_id = None
         self.risk_trigger_scene = None
+        self._in_password_login_flow = False
         self._password_slider_runtime_hardened = False
         self.browser_features = {}
         self.browser_identity = {}
@@ -1211,6 +1212,8 @@ class XianyuSliderStealth(SliderVerificationMixin, SliderHarvestMixin, SliderTra
 
     def _should_abort_token_refresh_slider_flow_after_failure(self) -> Tuple[bool, str]:
         """识别 token_refresh 场景下的已知硬拒绝，尽快交给外层走账密恢复。"""
+        if getattr(self, "_in_password_login_flow", False):
+            return False, ""
         if getattr(self, "risk_trigger_scene", None) != "token_refresh":
             return False, ""
 

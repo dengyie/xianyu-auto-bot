@@ -59,12 +59,17 @@ class PasswordLoginMixin:
             previous_slider_refresh_mode = getattr(self, '_slider_refresh_mode', False)
             self._slider_refresh_mode = force_clean_context
             previous_risk_trigger_scene = getattr(self, 'risk_trigger_scene', None)
-            inferred_risk_trigger_scene = 'manual_password_refresh' if force_clean_context else 'password_login'
-            if not previous_risk_trigger_scene:
-                self.risk_trigger_scene = inferred_risk_trigger_scene
-                logger.info(f"【{self.pure_user_id}】密码登录流程自动补齐 risk_trigger_scene={self.risk_trigger_scene}")
+            previous_in_password_login_flow = getattr(self, '_in_password_login_flow', False)
+            self._in_password_login_flow = True
+            target_risk_trigger_scene = 'manual_password_refresh' if force_clean_context else 'password_login'
+            self.risk_trigger_scene = target_risk_trigger_scene
+            if previous_risk_trigger_scene and previous_risk_trigger_scene != target_risk_trigger_scene:
+                logger.info(
+                    f"【{self.pure_user_id}】密码登录流程切换 risk_trigger_scene={self.risk_trigger_scene}"
+                    f"（原场景: {previous_risk_trigger_scene}）"
+                )
             else:
-                logger.info(f"【{self.pure_user_id}】密码登录流程沿用 risk_trigger_scene={previous_risk_trigger_scene}")
+                logger.info(f"【{self.pure_user_id}】密码登录流程设置 risk_trigger_scene={self.risk_trigger_scene}")
             self._password_slider_runtime_hardened = False
 
             # 检查日期有效性
@@ -1142,6 +1147,7 @@ class PasswordLoginMixin:
             self._slider_refresh_mode = previous_slider_refresh_mode
             self._password_slider_runtime_hardened = False
             self.risk_trigger_scene = previous_risk_trigger_scene
+            self._in_password_login_flow = previous_in_password_login_flow
             # 最外层 finally：确保任何退出路径都释放并发槽位
             try:
                 self._release_concurrency_slot("密码登录finally兜底")
