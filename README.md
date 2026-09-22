@@ -192,6 +192,8 @@ xianyu-auto-bot/
 | `XY_MANUAL_SLIDER_TIMEOUT` | `180` | 人工滑块等待超时（秒，下限 30） |
 | `XY_SLIDER_RISK_WINDOW` | `1800` | token 刷新滑块风控门控回看窗口（秒，下限 300） |
 | `XY_SLIDER_RISK_FAILURE_THRESHOLD` | `6` | 窗口内连续失败达到该值且无成功记录时延迟验证（下限 3） |
+| `XY_SLIDER_HEADLESS` | `0`（compose 默认） | 滑块/人工面板浏览器无头开关；`1` 无头，`0` 有头（容器内依赖 `USE_XVFB=true`） |
+| `XY_SLIDER_AUTOMATION_BACKEND` | `patchright`（compose 默认） | 浏览器自动化后端：`patchright`（反 CDP 检测）/ `playwright`（回退） |
 | `XY_OUTBOUND_IP_PROBE_URL` | `https://api.ipify.org?format=json` | 出口 IP 一致性探测地址；置空可禁用 |
 
 部署仍走 **Actions → GHCR → VPS `./docker-deploy.sh update`**，不要在 VPS 上 `compose build`。不要默认公网暴露 Chrome/noVNC。
