@@ -72,6 +72,11 @@ def _load_token_refresh_slider_runtime():
         return _LegacySliderConfig, SliderSolver, 'legacy'
 
 
+def _slider_headless_from_env() -> bool:
+    """XY_SLIDER_HEADLESS 默认 1（无头）；设 0/false/off/no 时以有头模式运行（容器内需 USE_XVFB=true 提供 DISPLAY）。"""
+    return os.environ.get("XY_SLIDER_HEADLESS", "1").strip().lower() not in {"0", "false", "off", "no"}
+
+
 def _create_token_refresh_slider(slider_cls, **kwargs):
     try:
         return slider_cls(**kwargs)
@@ -2397,7 +2402,7 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
                 cookie_id=self.cookie_id,
                 cookies_str=self.cookies_str,
                 verification_url=verification_url,
-                headless=True,
+                headless=_slider_headless_from_env(),
                 proxy=getattr(self, "proxy_config", None),
                 notification_callback=_notify,
             )
@@ -2538,7 +2543,7 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
                     SliderSolver,
                     cookie_id=self.cookie_id,
                     cookies_str=self.cookies_str,
-                    headless=True,
+                    headless=_slider_headless_from_env(),
                     proxy=self.proxy_config,
                     config=cfg,
                     provider="auto",

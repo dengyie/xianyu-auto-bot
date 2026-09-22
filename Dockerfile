@@ -94,14 +94,17 @@ ENV NODE_PATH=/usr/lib/node_modules
 COPY requirements.txt requirements.lock ./
 RUN pip install --no-cache-dir --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple&& \
     pip install --no-cache-dir --require-hashes -r requirements.lock -i https://pypi.tuna.tsinghua.edu.cn/simple && \
-    pip install --no-cache-dir --no-deps "slidex @ git+https://github.com/dengyie/slidex.git@68186de"
+    pip install --no-cache-dir --no-deps "slidex @ git+https://github.com/dengyie/slidex.git@9b81229"
 
 # 复制项目文件
 COPY . .
 
 # 安装Playwright浏览器（必须在复制项目文件之后）
+# patchright 的 chromium revision（1243）与 playwright 1.59（1223）不同，需各自安装；
+# 两者共用 PLAYWRIGHT_BROWSERS_PATH=/ms-playwright。
 RUN playwright install chromium && \
     playwright install-deps chromium && \
+    patchright install chromium && \
     CHROME_BIN="$(find /ms-playwright -type f -path '*/chrome-linux*/chrome' | head -n 1)" && \
     test -n "$CHROME_BIN" && \
     ln -sf "$CHROME_BIN" /usr/bin/chromium && \
