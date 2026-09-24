@@ -354,6 +354,14 @@ update_deployment() {
         print_warning "检测到 .git；生产推荐无 git 目录，仅 pull 镜像"
     fi
 
+    # 1GB 内存机器：pull（多层解压 + page cache）与业务容器（Chromium 峰值）
+    # 并发会 OOM 死锁整机（2026-09-24 事故：ssh 失联数小时，只能等 swap 缓过来）。
+    # update 固定先停服务再 pull，pull 完成后 up -d 重建容器。
+    if compose ps -q 2>/dev/null | grep -q .; then
+        print_warning "1GB 机器安全流程：先停服务再拉镜像（pull 后 up -d 自动重启）"
+        compose stop
+    fi
+
     pull_image
 
     print_info "用新镜像重建容器（--no-build）..."
@@ -420,7 +428,7 @@ show_help() {
     echo "  logs [service]      查看日志"
     echo "  health              健康检查"
     echo "  backup              备份数据"
-    echo "  update              备份 + pull + recreate（推荐发版）"
+    echo "  update              备份 + 停服务 + pull + recreate（1GB 安全发版）"
     echo "  cleanup             清理环境"
     echo "  help                显示帮助信息"
     echo ""
