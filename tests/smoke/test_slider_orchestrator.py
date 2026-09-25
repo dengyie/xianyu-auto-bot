@@ -171,3 +171,52 @@ def test_token_refresh_path_imports_orchestrator():
     success_return = src.find("return cookies_str", src.find("slider cookie merge"))
     assert fail_idx > 0 and success_return > 0
     assert fail_idx > success_return
+
+
+def test_cdp_preflight_unreachable_fails_fast(monkeypatch):
+    """隧道不在线时快速失败（不挂 180s connect 超时），并给出可操作提示。"""
+    import asyncio
+    from utils.slider_orchestrator import _invoke_slider_async
+
+    class _Solver:
+        def __init__(self):
+            self.called = False
+
+        async def solve_on_existing_page(self, cdp, url):
+            self.called = True
+            return True, {"x5sec": "ok"}
+
+    async def _unreachable(endpoint, timeout=3.0):
+        return False
+
+    monkeypatch.setenv("XY_SLIDER_CDP_ENDPOINT", "http://172.19.0.1:9222")
+    monkeypatch.setattr("utils.slider_orchestrator.cdp_endpoint_reachable", _unreachable)
+
+    solver = _Solver()
+    ok, cookies = asyncio.run(_invoke_slider_async(solver, "https://example.com/punish"))
+    assert (ok, cookies) == (False, None)
+    assert solver.called is False
+
+
+def test_cdp_preflight_reachable_calls_solve(monkeypatch):
+    import asyncio
+    from utils.slider_orchestrator import _invoke_slider_async
+
+    class _Solver:
+        def __init__(self):
+            self.args = None
+
+        async def solve_on_existing_page(self, cdp, url):
+            self.args = (cdp, url)
+            return True, {"x5sec": "ok"}
+
+    async def _reachable(endpoint, timeout=3.0):
+        return True
+
+    monkeypatch.setenv("XY_SLIDER_CDP_ENDPOINT", "http://172.19.0.1:9222")
+    monkeypatch.setattr("utils.slider_orchestrator.cdp_endpoint_reachable", _reachable)
+
+    solver = _Solver()
+    ok, cookies = asyncio.run(_invoke_slider_async(solver, "https://example.com/punish"))
+    assert ok is True and cookies == {"x5sec": "ok"}
+    assert solver.args == ("http://172.19.0.1:9222", "https://example.com/punish")

@@ -169,6 +169,25 @@ xianyu-auto-bot/
 
 可用 `python -c "import secrets; print(secrets.token_urlsafe(32))"` 生成独立密钥。不同用途不得复用同一密钥。
 
+### CDP 模式（真实设备指纹拖滑块，可选兜底）
+
+账号被滑块风控针对时，容器内浏览器怎么拖都会被拒（设备指纹不匹配）；此时 bot 可连接**用户 PC 上的真实 Chrome** 拖滑块（真实设备指纹 + 家宽直连，人也可以随时接管拖动）。开关为环境变量：
+
+| 变量 | 用途 |
+|------|------|
+| `XY_SLIDER_CDP_ENDPOINT` | 非空启用；值固定 `http://172.19.0.1:9222`（VPS docker 网桥网关地址，容器内 `localhost` 指向容器自身，不可用） |
+
+**用户 PC 侧一次性准备：**
+
+1. Chrome 以独立 profile 带调试端口启动（Chrome 136+ 默认 profile 禁 CDP；无需登录任何账号）：
+   `chrome.exe --remote-debugging-port=9222 --user-data-dir="%LOCALAPPDATA%\xianyu-cdp" --no-first-run --no-default-browser-check`
+2. 反向隧道守护（断线 5 秒自动重连，独立于任何会话/工具运行）：
+   `powershell -ExecutionPolicy Bypass -File scripts\cdp_tunnel.ps1`
+   开机自启见脚本头部注释（`shell:startup` 快捷方式）。
+3. VPS sshd 需 `GatewayPorts clientspecified`——隧道只绑定 docker 网桥内网地址，**严禁 `0.0.0.0` 公网暴露无鉴权 CDP**。
+
+**行为要点**：bot 连上后注入账号会话 cookie 并打开处罚页，先自动拖（拖到终点变绿后握住停顿再松键）；拖不过会进入约 5 分钟人工等待期，期间你随时手动拖过都会被自动收割；滑块成功后若 aiohttp 重试 token 仍被惩罚，token 请求自动改从浏览器内发出。CDP 端点不可达时快速失败并提示运行隧道脚本。
+
 ### Cookie 登录与滑块（推荐大众路径）
 
 开源默认路径对齐 GuDong 思路：**Cookie 登录为主**，自动滑块（严格要求拿到 `x5sec`）失败后再人工收口，而不是默认暴露 Chrome/VNC。

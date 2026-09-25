@@ -6,10 +6,13 @@
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import os
 import requests
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple, Union
+
+from loguru import logger
 
 
 DEFAULT_SLIDER_ENGINE = "playwright"
@@ -306,6 +309,28 @@ def cdp_endpoint_from_env() -> str:
     return _cdp_endpoint_from_env()
 
 
+async def cdp_endpoint_reachable(endpoint: str, timeout: float = 3.0) -> bool:
+    """快速 TCP 探测 CDP 端点（反向隧道是否在线），解析失败视为可达（不拦截）。"""
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(endpoint if "//" in endpoint else f"http://{endpoint}")
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 80
+    except Exception:
+        return True
+    try:
+        _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
 async def _invoke_slider_async(slider: Any, url: str, **kwargs: Any) -> Tuple[bool, Optional[Dict[str, Any]]]:
     """兼容 slider.async_run / slider.solve 异步入口。
 
@@ -316,6 +341,14 @@ async def _invoke_slider_async(slider: Any, url: str, **kwargs: Any) -> Tuple[bo
     在 CDP 连接后注入，外部浏览器只出设备指纹与家宽出口。"""
     cdp = _cdp_endpoint_from_env()
     if cdp and hasattr(slider, "solve_on_existing_page"):
+        # 预检：隧道不在线时 connect_over_cdp 会挂满 180s 超时，快速失败并给
+        # 出可操作提示，把周期还给 fallback 链路。
+        if not await cdp_endpoint_reachable(cdp):
+            logger.warning(
+                f"CDP 端点 {cdp} 不可达——用户 PC 上的反向隧道未在线。"
+                f"请在用户 PC 运行仓库 scripts/cdp_tunnel.ps1（并确认 Chrome 调试端口已启动）"
+            )
+            return False, None
         return await slider.solve_on_existing_page(cdp, url)
     if hasattr(slider, "async_run") and callable(getattr(slider, "async_run")):
         return await slider.async_run(url, **kwargs)
