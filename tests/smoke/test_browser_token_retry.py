@@ -233,3 +233,25 @@ async def test_browser_retry_closes_opened_page_on_failure(monkeypatch):
     assert len(context.created_pages) == 1
     assert context.created_pages[0].closed is True
     m._persist_runtime_cookie_state.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_browser_retry_does_not_log_access_token(monkeypatch):
+    """响应体携带 accessToken：日志只允许出现 ret，不允许出现 token 本体。"""
+    from loguru import logger as loguru_logger
+
+    page = _FakePage("https://h5api.m.goofish.com/", _SUCCESS_TEXT)
+    context = _FakeContext(_jar(), [page])
+    m = _make_mixin()
+    _happy_mocks(m, context)
+    monkeypatch.setenv("XY_SLIDER_CDP_ENDPOINT", "http://172.19.0.1:9222")
+
+    records = []
+    handler_id = loguru_logger.add(lambda msg: records.append(str(msg)), level="INFO")
+    try:
+        token = await m._try_browser_token_retry()
+    finally:
+        loguru_logger.remove(handler_id)
+
+    assert token == "NEW_TOKEN"
+    assert not any("NEW_TOKEN" in record for record in records)

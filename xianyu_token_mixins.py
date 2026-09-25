@@ -247,29 +247,8 @@ class TokenMixin:
                                     await self._apply_response_cookie_updates(response.headers, "token_refresh")
                                     logger.warning(f"【{self.cookie_id}】Token刷新成功后已更新Cookie到数据库")
 
-                                new_token = res_json['data']['accessToken']
-                                self.current_token = new_token
-                                self.last_token_refresh_time = time.time()
-
-                                # 【消息接收时间重置】Token刷新成功后重置消息接收标志，与 cookie_refresh_loop 保持一致
-                                self.last_message_received_time = 0
                                 logger.warning(f"【{self.cookie_id}】Token刷新成功，已重置消息接收时间标识")
-                                self._clear_qr_login_grace_period()
-                                self.clear_init_auth_failure_state(self.cookie_id)
-                                self.last_init_failure_reason = None
-                                self.last_init_failure_type = None
-                                self.init_auth_failures = 0
-
-                                logger.info(f"【{self.cookie_id}】Token刷新成功")
-                                # 标记为成功
-                                self.last_token_refresh_status = "success"
-                                self.last_token_refresh_error_message = None
-                                if self._consume_pending_slider_success_notice():
-                                    await self.send_token_refresh_notification(
-                                        "滑块验证通过，账号会话已恢复",
-                                        "slider_recovered_success"
-                                    )
-                                return new_token
+                                return await self._finalize_token_success(res_json['data']['accessToken'])
 
                     # 检查是否需要滑块验证
                     if self._need_captcha_verification(res_json):
@@ -760,12 +739,38 @@ class TokenMixin:
             'log_id': '4c053da6vYwnmf',
         }
 
+    async def _finalize_token_success(self, new_token: str) -> str:
+        """Token 刷新成功收尾 —— aiohttp 与浏览器侧重试两条路径共用，防漂移。
+
+        置位成功状态、清空各类失败/退避标记、重置消息接收时间标识；若存在
+        滑块成功挂起通知则发送恢复通知。调用方自行打各自的路径日志。
+        """
+        self.current_token = new_token
+        self.last_token_refresh_time = time.time()
+        # 【消息接收时间重置】与 cookie_refresh_loop 保持一致
+        self.last_message_received_time = 0
+        self._clear_qr_login_grace_period()
+        self.clear_init_auth_failure_state(self.cookie_id)
+        self.last_init_failure_reason = None
+        self.last_init_failure_type = None
+        self.init_auth_failures = 0
+        self.last_token_refresh_status = "success"
+        self.last_token_refresh_error_message = None
+        if self._consume_pending_slider_success_notice():
+            await self.send_token_refresh_notification(
+                "滑块验证通过，账号会话已恢复",
+                "slider_recovered_success",
+            )
+        return new_token
+
     async def _connect_cdp_browser(self, cdp: str):
         """连接 CDP 浏览器，返回 (playwright 实例, browser)。测试可替换此方法。"""
         from playwright.async_api import async_playwright
 
         pw = await async_playwright().start()
-        browser = await pw.chromium.connect_over_cdp(cdp, timeout=30000)
+        # 与 slidex 共用同一旋钮：同一外部浏览器一套超时语义（冻结标签快速失败）
+        connect_timeout_s = float(os.environ.get("SLIDEX_CDP_CONNECT_TIMEOUT", "45"))
+        browser = await pw.chromium.connect_over_cdp(cdp, timeout=connect_timeout_s * 1000)
         return pw, browser
 
     async def _try_browser_token_retry(self) -> Optional[str]:
@@ -840,9 +845,10 @@ class TokenMixin:
                             await page.close()
                         except Exception:
                             pass
-                logger.info(f"【{self.cookie_id}】浏览器侧Token重试响应: {str(res_text)[:150]}")
                 res_json = json.loads(res_text)
                 ret_value = res_json.get('ret', []) if isinstance(res_json, dict) else []
+                # 只记录 ret：响应体携带 accessToken，禁止整包进日志
+                logger.info(f"【{self.cookie_id}】浏览器侧Token重试响应 ret={ret_value}")
 
                 if not any('SUCCESS::调用成功' in r for r in ret_value):
                     logger.warning(f"【{self.cookie_id}】浏览器侧Token重试未通过: {ret_value}")
@@ -860,24 +866,8 @@ class TokenMixin:
                 merged_str = "; ".join(f"{k}={v}" for k, v in merged.items())
                 await self._persist_runtime_cookie_state(cookies_str=merged_str, source="cdp_browser_token_sync")
 
-                new_token = access_token
-                self.current_token = new_token
-                self.last_token_refresh_time = time.time()
-                self.last_message_received_time = 0
-                self._clear_qr_login_grace_period()
-                self.clear_init_auth_failure_state(self.cookie_id)
-                self.last_init_failure_reason = None
-                self.last_init_failure_type = None
-                self.init_auth_failures = 0
-                self.last_token_refresh_status = "success"
-                self.last_token_refresh_error_message = None
                 logger.warning(f"【{self.cookie_id}】浏览器侧Token刷新成功")
-                if self._consume_pending_slider_success_notice():
-                    await self.send_token_refresh_notification(
-                        "滑块验证通过，账号会话已恢复",
-                        "slider_recovered_success",
-                    )
-                return new_token
+                return await self._finalize_token_success(access_token)
             finally:
                 try:
                     await pw.stop()
