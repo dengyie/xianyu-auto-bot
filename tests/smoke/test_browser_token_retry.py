@@ -20,19 +20,34 @@ class _FakePage:
         self.url = url
         self.response_text = response_text
         self.expressions = []
+        self.closed = False
+
+    async def goto(self, url, wait_until=None, timeout=None):
+        self.url = url
 
     async def evaluate(self, expression):
         self.expressions.append(expression)
         return self.response_text
 
+    async def close(self):
+        self.closed = True
+
 
 class _FakeContext:
-    def __init__(self, cookies, pages):
+    def __init__(self, cookies, pages, new_page_text=""):
         self._cookies = cookies
-        self.pages = pages
+        self.pages = list(pages)
+        self._new_page_text = new_page_text
+        self.created_pages = []
 
     async def cookies(self):
         return self._cookies
+
+    async def new_page(self):
+        page = _FakePage("about:blank", self._new_page_text)
+        self.pages.append(page)
+        self.created_pages.append(page)
+        return page
 
 
 class _FakeBrowser:
@@ -58,6 +73,7 @@ def _make_mixin():
     m.init_auth_failures = 0
     m.last_init_failure_reason = None
     m.last_init_failure_type = None
+    m._safe_str = staticmethod(lambda e: str(e))  # 真实定义在宿主类上
     return m
 
 
@@ -152,3 +168,68 @@ async def test_browser_retry_disabled_without_env(monkeypatch):
 
     assert await m._try_browser_token_retry() is None
     m._connect_cdp_browser.assert_not_called()
+
+
+_SUCCESS_TEXT = json.dumps({
+    "api": "mtop.taobao.idlemessage.pc.login.token",
+    "ret": ["SUCCESS::调用成功"],
+    "data": {"accessToken": "NEW_TOKEN"},
+})
+
+
+def _happy_mocks(m, context):
+    m._connect_cdp_browser = mock.AsyncMock(return_value=(_FakePW(), _FakeBrowser(context)))
+    m._persist_runtime_cookie_state = mock.AsyncMock(return_value=True)
+    m._clear_qr_login_grace_period = mock.MagicMock()
+    m.clear_init_auth_failure_state = mock.MagicMock()
+    m._consume_pending_slider_success_notice = mock.MagicMock(return_value=False)
+    m.send_token_refresh_notification = mock.AsyncMock()
+
+
+@pytest.mark.asyncio
+async def test_browser_retry_closes_page_it_opens(monkeypatch):
+    """无现成 h5api 页时新开标签页，用完即关（不残留用户浏览器）。"""
+    context = _FakeContext(_jar(), [], new_page_text=_SUCCESS_TEXT)
+    m = _make_mixin()
+    _happy_mocks(m, context)
+    monkeypatch.setenv("XY_SLIDER_CDP_ENDPOINT", "http://172.19.0.1:9222")
+
+    token = await m._try_browser_token_retry()
+
+    assert token == "NEW_TOKEN"
+    assert len(context.created_pages) == 1
+    assert context.created_pages[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_browser_retry_keeps_reused_page_open(monkeypatch):
+    """复用已有 h5api 页时不误关用户标签页。"""
+    page = _FakePage("https://h5api.m.goofish.com/", _SUCCESS_TEXT)
+    context = _FakeContext(_jar(), [page])
+    m = _make_mixin()
+    _happy_mocks(m, context)
+    monkeypatch.setenv("XY_SLIDER_CDP_ENDPOINT", "http://172.19.0.1:9222")
+
+    token = await m._try_browser_token_retry()
+
+    assert token == "NEW_TOKEN"
+    assert context.created_pages == []
+    assert page.closed is False
+
+
+@pytest.mark.asyncio
+async def test_browser_retry_closes_opened_page_on_failure(monkeypatch):
+    """evaluate/解析失败 → 返回 None 回退 aiohttp，且自开页仍被关闭。"""
+    context = _FakeContext(_jar(), [], new_page_text="not-json")
+    m = _make_mixin()
+    m._connect_cdp_browser = mock.AsyncMock(return_value=(_FakePW(), _FakeBrowser(context)))
+    m._persist_runtime_cookie_state = mock.AsyncMock()
+    m._safe_str = staticmethod(lambda e: str(e))
+    monkeypatch.setenv("XY_SLIDER_CDP_ENDPOINT", "http://172.19.0.1:9222")
+
+    token = await m._try_browser_token_retry()
+
+    assert token is None
+    assert len(context.created_pages) == 1
+    assert context.created_pages[0].closed is True
+    m._persist_runtime_cookie_state.assert_not_called()

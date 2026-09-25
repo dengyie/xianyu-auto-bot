@@ -814,20 +814,32 @@ class TokenMixin:
                     (p for p in context.pages if "h5api.m.goofish.com" in (p.url or "")),
                     None,
                 )
-                if page is None:
-                    page = await context.new_page()
-                    await page.goto("https://h5api.m.goofish.com/", wait_until="domcontentloaded", timeout=20000)
+                opened_page = False
+                try:
+                    if page is None:
+                        page = await context.new_page()
+                        opened_page = True
+                        await page.goto("https://h5api.m.goofish.com/", wait_until="domcontentloaded", timeout=20000)
 
-                expression = (
-                    "(async (qs, body) => {"
-                    "const r = await fetch('/h5/mtop.taobao.idlemessage.pc.login.token/1.0/?' + qs, "
-                    "{method: 'POST', headers: {'content-type': 'application/x-www-form-urlencoded'}, "
-                    "body: body, credentials: 'include', referrer: 'https://www.goofish.com/'});"
-                    "return await r.text(); })("
-                    + json.dumps(urlencode(params)) + ", "
-                    + json.dumps(urlencode({'data': data_val})) + ")"
-                )
-                res_text = await page.evaluate(expression)
+                    expression = (
+                        "(async (qs, body) => {"
+                        "const r = await fetch('/h5/mtop.taobao.idlemessage.pc.login.token/1.0/?' + qs, "
+                        "{method: 'POST', headers: {'content-type': 'application/x-www-form-urlencoded'}, "
+                        "body: body, credentials: 'include', referrer: 'https://www.goofish.com/'});"
+                        "return await r.text(); })("
+                        + json.dumps(urlencode(params)) + ", "
+                        + json.dumps(urlencode({'data': data_val})) + ")"
+                    )
+                    # evaluate 没有内建超时：复用的标签页可能被 Chrome 省内存模式
+                    # 冻结，挂死会卡住整个 token 刷新——限时后异常回退 aiohttp。
+                    res_text = await asyncio.wait_for(page.evaluate(expression), timeout=25)
+                finally:
+                    # 自开的标签页用完即关（含失败路径），不残留在用户浏览器里
+                    if opened_page:
+                        try:
+                            await page.close()
+                        except Exception:
+                            pass
                 logger.info(f"【{self.cookie_id}】浏览器侧Token重试响应: {str(res_text)[:150]}")
                 res_json = json.loads(res_text)
                 ret_value = res_json.get('ret', []) if isinstance(res_json, dict) else []
