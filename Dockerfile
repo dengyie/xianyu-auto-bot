@@ -77,11 +77,30 @@ RUN apt-get -o Acquire::Retries=5 update && \
         fluxbox \
         # OpenCV运行时依赖
         libgl1 \
+        # Mesa 软渲染（llvmpipe）：无 GPU 容器里让 WebGL 渲染串是真实 Linux 机器的
+        # 合法特征，而非基本只在自动化环境出现的 "Google SwiftShader"（slidex
+        # --use-angle=gl 配合本包生效）
+        libgl1-mesa-dri \
+        # CJK/emoji 字体：中文平台的会话里浏览器字体验不出任何中文字体是矛盾信号
+        fonts-noto-cjk \
+        fonts-noto-color-emoji \
         libglib2.0-0 \
         && apt-get clean \
         && rm -rf /var/lib/apt/lists/* \
         && rm -rf /tmp/* \
         && rm -rf /var/tmp/*
+
+# 真 Google Chrome（仅 amd64，官方无 arm64 Linux deb）：自带 Chromium 的
+# userAgentData.brands 露 "Chromium" 是强自动化信号。slidex 0.6.22 起探测到
+# google-chrome-stable 自动切 channel="chrome"（XY_SLIDER_BROWSER_CHANNEL 可覆盖）；
+# arm64 构建跳过，自动回自带 Chromium。
+ARG TARGETARCH
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+        curl -fsSL --retry 3 -o /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
+        apt-get -o Acquire::Retries=5 update && \
+        apt-get -o Acquire::Retries=5 install -y --no-install-recommends /tmp/chrome.deb && \
+        rm -f /tmp/chrome.deb && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 # 设置时区
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
@@ -94,7 +113,7 @@ ENV NODE_PATH=/usr/lib/node_modules
 COPY requirements.txt requirements.lock ./
 RUN pip install --no-cache-dir --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple&& \
     pip install --no-cache-dir --require-hashes -r requirements.lock -i https://pypi.tuna.tsinghua.edu.cn/simple && \
-    pip install --no-cache-dir --no-deps "slidex @ git+https://github.com/dengyie/slidex.git@20bb53c"
+    pip install --no-cache-dir --no-deps "slidex @ git+https://github.com/dengyie/slidex.git@6e14358"
 
 # 复制项目文件
 COPY . .
