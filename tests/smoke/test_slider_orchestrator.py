@@ -225,3 +225,67 @@ def test_cdp_preflight_reachable_calls_solve(monkeypatch):
     ok, cookies = asyncio.run(_invoke_slider_async(solver, "https://example.com/punish"))
     assert ok is True and cookies == {"x5sec": "ok"}
     assert solver.args == ("http://172.19.0.1:9222", "https://example.com/punish")
+
+
+def test_cdp_mode_skips_drissionpage_fallback_async(monkeypatch):
+    """CDP 模式下 DrissionPage 兜底默认跳过：同 cookie 同指纹必败，白耗资源。"""
+    import asyncio
+    from utils.slider_orchestrator import run_slider_async_with_fallback
+
+    class _PrimarySlider:
+        user_id = "cdp_user"
+
+        async def solve_on_existing_page(self, cdp_endpoint, page_url):
+            return False, None
+
+    class _MustNotRun:
+        def __init__(self, **kwargs):
+            raise AssertionError("DrissionPage fallback must not run in CDP mode")
+
+        def get_cookies(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError("DrissionPage fallback must not run in CDP mode")
+
+    monkeypatch.setenv("XY_SLIDER_CDP_ENDPOINT", "http://172.19.0.1:9222")
+    monkeypatch.delenv("XY_SLIDER_DRISSION_FALLBACK", raising=False)
+
+    result = asyncio.run(
+        run_slider_async_with_fallback(
+            _PrimarySlider(),
+            "https://example.com/punish?action=captcha",
+            handler_factory=_MustNotRun,
+        )
+    )
+    assert result.success is False
+
+
+def test_cdp_mode_drissionpage_fallback_env_override_async(monkeypatch):
+    """显式设 XY_SLIDER_DRISSION_FALLBACK=1 可在 CDP 模式强制开启兜底。"""
+    import asyncio
+    from utils.slider_orchestrator import run_slider_async_with_fallback
+
+    class _PrimarySlider:
+        user_id = "cdp_user"
+
+        async def solve_on_existing_page(self, cdp_endpoint, page_url):
+            return False, None
+
+    class _FallbackHandler:
+        def __init__(self, **kwargs):
+            pass
+
+        def get_cookies(self, url, existing_cookies_str=None, cookie_id="unknown"):
+            return "unb=cdp_user; x5sec=dp_ticket"
+
+    monkeypatch.setenv("XY_SLIDER_CDP_ENDPOINT", "http://172.19.0.1:9222")
+    monkeypatch.setenv("XY_SLIDER_DRISSION_FALLBACK", "1")
+
+    result = asyncio.run(
+        run_slider_async_with_fallback(
+            _PrimarySlider(),
+            "https://example.com/punish?action=captcha",
+            handler_factory=_FallbackHandler,
+        )
+    )
+    assert result.success is True
+    assert result.engine == "drissionpage"
+    assert result.x5_cookies == {"x5sec": "dp_ticket"}

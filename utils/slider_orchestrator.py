@@ -283,6 +283,20 @@ def run_slider_with_fallback(
         return primary_result
 
     enabled = _env_bool("XY_SLIDER_DRISSION_FALLBACK", True) if fallback_enabled is None else bool(fallback_enabled)
+    # CDP 模式下 DrissionPage 兜底是哑炮：容器内浏览器带同一账号 cookie，
+    # 同样指纹不匹配，永远拿不到 x5sec（视觉通过也会被严格判定拒掉），
+    # 白耗 ~30s 与内存。默认跳过；显式设 XY_SLIDER_DRISSION_FALLBACK=1 可强制开启。
+    if (
+        cdp_endpoint_from_env()
+        and fallback_enabled is None
+        and "XY_SLIDER_DRISSION_FALLBACK" not in os.environ
+    ):
+        if enabled:
+            logger.info(
+                "CDP 模式：跳过 DrissionPage 兜底（容器内浏览器同 cookie 同指纹，必然无 x5sec；"
+                "显式设 XY_SLIDER_DRISSION_FALLBACK=1 可强制开启）"
+            )
+        return primary_result
     if not enabled:
         return primary_result
 
@@ -412,6 +426,20 @@ async def run_slider_async_with_fallback(
         return primary_result
 
     enabled = _env_bool("XY_SLIDER_DRISSION_FALLBACK", True) if fallback_enabled is None else bool(fallback_enabled)
+    # CDP 模式下 DrissionPage 兜底是哑炮：容器内浏览器带同一账号 cookie，
+    # 同样指纹不匹配，永远拿不到 x5sec（视觉通过也会被严格判定拒掉），
+    # 白耗 ~30s 与内存。默认跳过；显式设 XY_SLIDER_DRISSION_FALLBACK=1 可强制开启。
+    if (
+        cdp_endpoint_from_env()
+        and fallback_enabled is None
+        and "XY_SLIDER_DRISSION_FALLBACK" not in os.environ
+    ):
+        if enabled:
+            logger.info(
+                "CDP 模式：跳过 DrissionPage 兜底（容器内浏览器同 cookie 同指纹，必然无 x5sec；"
+                "显式设 XY_SLIDER_DRISSION_FALLBACK=1 可强制开启）"
+            )
+        return primary_result
     if not enabled:
         return primary_result
 

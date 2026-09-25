@@ -242,6 +242,11 @@ async def run_human_captcha_session(
         logger.warning(f"[{cookie_id}] 自动滑块失败，已启动人工 captcha 面板")
         logger.warning(f"[{cookie_id}] session={session_id}")
         logger.warning(f"[{cookie_id}] control_url={control_url}")
+        if "localhost" in control_url or "127.0.0.1" in control_url:
+            logger.warning(
+                f"[{cookie_id}] control_url 是本机回环地址，用户设备点不开——"
+                "请配置 CAPTCHA_PUBLIC_BASE_URL（如 https://面板域名）后重建容器"
+            )
         logger.warning("=" * 60)
 
         if notification_callback is not None:

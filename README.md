@@ -164,6 +164,7 @@ xianyu-auto-bot/
 | `ADMIN_PASSWORD` | 建议显式设置 | 首次初始化管理员密码；未设置时生成随机密码并仅写入启动日志 |
 | `XIANYU_REPLY_API_KEY` | 使用自动回复回调时必需 | 保护 `/xianyu/reply`，内部调用通过 `X-Internal-API-Key` 发送 |
 | `CAPTCHA_CONTROL_API_KEY` | 使用远程验证时必需 | 保护 `/api/captcha` 管理入口；人工面板也可用会话级 `?token=` |
+| `CAPTCHA_PUBLIC_BASE_URL` | 建议显式设置 | 人工面板 control_url 的对外基址（如 `https://面板域名`）；不设则回落 `localhost:{API_PORT}`，仅本机可点开 |
 | `SEND_MESSAGE_API_KEY` | 使用消息发送 API 时必需 | 保护 `/send-message` |
 | `SECRET_ENCRYPTION_KEY` | 生产建议固定 | 加密 Cookie、密码和代理凭据；更换会导致旧数据不可解密 |
 
