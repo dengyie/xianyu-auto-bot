@@ -296,8 +296,22 @@ def run_slider_with_fallback(
     return fallback_result if fallback_result.success else primary_result
 
 
+def _cdp_endpoint_from_env() -> str:
+    """XY_SLIDER_CDP_ENDPOINT：非空时滑块走 CDP 模式（连接外部真实浏览器）。"""
+    return (os.environ.get("XY_SLIDER_CDP_ENDPOINT", "") or "").strip()
+
+
 async def _invoke_slider_async(slider: Any, url: str, **kwargs: Any) -> Tuple[bool, Optional[Dict[str, Any]]]:
-    """兼容 slider.async_run / slider.solve 异步入口。"""
+    """兼容 slider.async_run / slider.solve 异步入口。
+
+    XY_SLIDER_CDP_ENDPOINT 非空且 solver 支持时走 CDP：连接外部真实浏览器
+    （用户 PC 上的 Chrome 经 `ssh -R 9222:localhost:9222` 反向隧道）。VPS 容器内
+    headless Chromium 的设备指纹与账号历史登录设备不匹配，是 code=300 的主嫌疑
+    （重扫码后新登录态 3s 内仍被拦、真人轨迹也被拒）。会话 cookie 由 slidex
+    在 CDP 连接后注入，外部浏览器只出设备指纹与家宽出口。"""
+    cdp = _cdp_endpoint_from_env()
+    if cdp and hasattr(slider, "solve_on_existing_page"):
+        return await slider.solve_on_existing_page(cdp, url)
     if hasattr(slider, "async_run") and callable(getattr(slider, "async_run")):
         return await slider.async_run(url, **kwargs)
     if hasattr(slider, "solve") and callable(getattr(slider, "solve")):
@@ -316,6 +330,8 @@ async def run_slider_async_strict(
     **kwargs: Any,
 ) -> SliderVerificationResult:
     """调用异步 slider.async_run/solve，并进行严格 x5sec 判定。"""
+    if _cdp_endpoint_from_env() and hasattr(slider, "solve_on_existing_page"):
+        engine = "cdp"
     success, cookies = await _invoke_slider_async(slider, url, **kwargs)
     return validate_slider_result(success, cookies, engine=engine)
 

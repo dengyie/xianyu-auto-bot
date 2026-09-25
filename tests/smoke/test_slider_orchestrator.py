@@ -120,6 +120,46 @@ def test_async_solve_adapter_accepts_slider_solver_shape():
     assert result.x5_cookies == {"x5sec": "ok"}
 
 
+def test_cdp_endpoint_env_routes_to_solve_on_existing_page(monkeypatch):
+    """XY_SLIDER_CDP_ENDPOINT 非空时走 CDP 模式（外部真实浏览器），engine 标 cdp。"""
+    import asyncio
+    from utils.slider_orchestrator import run_slider_async_strict
+
+    class _Solver:
+        async def solve_on_existing_page(self, cdp_endpoint, page_url):
+            assert cdp_endpoint == "http://localhost:9222"
+            assert "punish" in page_url
+            return True, {"unb": "1", "x5sec": "cdp_ticket"}
+
+    monkeypatch.setenv("XY_SLIDER_CDP_ENDPOINT", "http://localhost:9222")
+    result = asyncio.run(
+        run_slider_async_strict(_Solver(), "https://example.com/punish", engine="playwright")
+    )
+    assert result.success is True
+    assert result.engine == "cdp"
+    assert result.x5_cookies == {"x5sec": "cdp_ticket"}
+
+
+def test_cdp_endpoint_empty_env_keeps_browser_mode(monkeypatch):
+    """开关为空时保持原浏览器模式，即使 solver 恰好带 CDP 方法。"""
+    import asyncio
+    from utils.slider_orchestrator import run_slider_async_strict
+
+    class _Solver:
+        async def solve_on_existing_page(self, cdp_endpoint, page_url):  # pragma: no cover
+            raise AssertionError("must not use CDP when endpoint empty")
+
+        async def solve(self, url, **_kwargs):
+            return True, {"x5sec": "browser_ticket"}
+
+    monkeypatch.delenv("XY_SLIDER_CDP_ENDPOINT", raising=False)
+    result = asyncio.run(
+        run_slider_async_strict(_Solver(), "https://example.com/punish", engine="playwright")
+    )
+    assert result.success is True
+    assert result.engine == "playwright"
+
+
 def test_token_refresh_path_imports_orchestrator():
     from pathlib import Path
 

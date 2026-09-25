@@ -46,6 +46,9 @@ services:
       # 滑块验证有头 + patchright 反检测栈（XY_SLIDER_HEADLESS=0 依赖上面的 Xvfb DISPLAY）
       - XY_SLIDER_HEADLESS=${XY_SLIDER_HEADLESS:-0}
       - XY_SLIDER_AUTOMATION_BACKEND=${XY_SLIDER_AUTOMATION_BACKEND:-patchright}
+      # CDP 模式：非空时滑块连接外部真实浏览器（用户 PC Chrome 经 ssh -R 反向隧道
+      # 到 VPS localhost:9222），真实设备指纹 + 家宽直连；会话 cookie 由 slidex 注入
+      - XY_SLIDER_CDP_ENDPOINT=${XY_SLIDER_CDP_ENDPOINT:-}
 
       - PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}
       - PYTHONDONTWRITEBYTECODE=${PYTHONDONTWRITEBYTECODE:-1}
