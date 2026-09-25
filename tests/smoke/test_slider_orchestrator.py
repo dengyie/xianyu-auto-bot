@@ -132,6 +132,11 @@ def test_cdp_endpoint_env_routes_to_solve_on_existing_page(monkeypatch):
             return True, {"unb": "1", "x5sec": "cdp_ticket"}
 
     monkeypatch.setenv("XY_SLIDER_CDP_ENDPOINT", "http://localhost:9222")
+    # 本测试验证 CDP 路由语义，与网络连通性无关——预检固定可达
+    async def _reachable(endpoint, timeout=3.0):
+        return True
+
+    monkeypatch.setattr("utils.slider_orchestrator.cdp_endpoint_reachable", _reachable)
     result = asyncio.run(
         run_slider_async_strict(_Solver(), "https://example.com/punish", engine="playwright")
     )
