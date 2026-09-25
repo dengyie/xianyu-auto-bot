@@ -301,6 +301,11 @@ def _cdp_endpoint_from_env() -> str:
     return (os.environ.get("XY_SLIDER_CDP_ENDPOINT", "") or "").strip()
 
 
+def cdp_endpoint_from_env() -> str:
+    """公开别名：token 浏览器侧重试等模块复用同一开关。"""
+    return _cdp_endpoint_from_env()
+
+
 async def _invoke_slider_async(slider: Any, url: str, **kwargs: Any) -> Tuple[bool, Optional[Dict[str, Any]]]:
     """兼容 slider.async_run / slider.solve 异步入口。
 

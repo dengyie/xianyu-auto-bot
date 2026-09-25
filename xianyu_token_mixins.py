@@ -439,6 +439,20 @@ class TokenMixin:
                                     f"类型: token_reentry_after_slider_success, captcha_retry_count={captcha_retry_count + 1}"
                                 )
 
+                                # CDP 模式：x5sec 绑定挣票客户端（浏览器），token 重试
+                                # 必须也在浏览器内发出 —— aiohttp 重试会被重新惩罚
+                                # （2026-09-25 生产实测）。浏览器侧失败再回退常规重试。
+                                try:
+                                    from utils.slider_orchestrator import cdp_endpoint_from_env
+                                    cdp_enabled = bool(cdp_endpoint_from_env())
+                                except Exception:
+                                    cdp_enabled = False
+                                if cdp_enabled:
+                                    browser_token = await self._try_browser_token_retry()
+                                    if browser_token:
+                                        return browser_token
+                                    logger.warning(f"【{self.cookie_id}】浏览器侧Token重试未成功，回退常规Token刷新")
+
                                 # 重新尝试刷新token（递归调用，但有深度限制）
                                 return await self._refresh_token_impl(
                                     captcha_retry_count + 1,
@@ -722,6 +736,145 @@ class TokenMixin:
             else:
                 logger.info(f"【{self.cookie_id}】已发送滑块验证相关通知，跳过Token刷新异常通知")
             return None
+
+    def _build_token_request_params(self, timestamp: str, sign: str) -> Dict[str, str]:
+        """mtop token API 查询参数 —— aiohttp 与浏览器侧 fetch 共用，防两路漂移。"""
+        return {
+            'jsv': '2.7.2',
+            'appKey': '34839810',
+            't': timestamp,
+            'sign': sign,
+            'v': '1.0',
+            'type': 'originaljson',
+            'accountSite': 'xianyu',
+            'dataType': 'json',
+            'timeout': '20000',
+            'api': 'mtop.taobao.idlemessage.pc.login.token',
+            'sessionOption': 'AutoLoginOnly',
+            'dangerouslySetWindvaneParams': '%5Bobject%20Object%5D',
+            'smToken': 'token',
+            'queryToken': 'sm',
+            'sm': 'sm',
+            'spm_cnt': 'a21ybx.im.0.0',
+            'spm_pre': 'a21ybx.home.sidebar.1.4c053da6vYwnmf',
+            'log_id': '4c053da6vYwnmf',
+        }
+
+    async def _connect_cdp_browser(self, cdp: str):
+        """连接 CDP 浏览器，返回 (playwright 实例, browser)。测试可替换此方法。"""
+        from playwright.async_api import async_playwright
+
+        pw = await async_playwright().start()
+        browser = await pw.chromium.connect_over_cdp(cdp, timeout=30000)
+        return pw, browser
+
+    async def _try_browser_token_retry(self) -> Optional[str]:
+        """CDP 模式专用：滑块成功后的第一次 token 重试在用户真实浏览器内发出。
+
+        x5sec 票据绑定"挣得票据的客户端"：浏览器里拖过滑块后，bot 侧 aiohttp
+        重试（不同 UA/TLS/出口）仍被 FAIL_SYS_USER_VALIDATE 重新惩罚（2026-09-25
+        生产实测），而浏览器内同源请求可过 baxia 层（同日实测：错 sign 请求返回
+        FAIL_SYS_TOKEN_EMPTY 而非 USER_VALIDATE）。因此：
+        - 签名用浏览器 jar 当前的 _m_h5_tk（页面 mtop 调用会滚动该 cookie，
+          bot 侧副本已漂移，用 bot 侧值会 sign 失配）；
+        - 请求完成后把浏览器 jar 里的 goofish/taobao cookie 同步回 bot 会话；
+        - 任何异常返回 None，调用方回退常规 aiohttp 重试，不影响原流程。
+        """
+        try:
+            from utils.slider_orchestrator import cdp_endpoint_from_env
+            cdp = cdp_endpoint_from_env()
+            if not cdp:
+                return None
+            from urllib.parse import urlencode
+
+            def _goofish_cookies(all_cookies):
+                return {
+                    c["name"]: c["value"]
+                    for c in (all_cookies or [])
+                    if isinstance(c, dict)
+                    and ("goofish.com" in (c.get("domain") or "") or "taobao" in (c.get("domain") or ""))
+                }
+
+            pw, browser = await self._connect_cdp_browser(cdp)
+            try:
+                context = browser.contexts[0] if browser.contexts else None
+                if context is None:
+                    logger.warning(f"【{self.cookie_id}】CDP 浏览器无可用 context，跳过浏览器侧Token重试")
+                    return None
+
+                jar = _goofish_cookies(await context.cookies())
+                h5_tk = jar.get("_m_h5_tk", "")
+                sign_token = h5_tk.split("_")[0] if h5_tk else ""
+                timestamp = str(int(time.time() * 1000))
+                data_val = '{"appKey":"444e9908a51d1cb236a27862abc769c9","deviceId":"' + self.device_id + '"}'
+                sign = _host.generate_sign(timestamp, sign_token, data_val)
+                params = self._build_token_request_params(timestamp, sign)
+
+                page = next(
+                    (p for p in context.pages if "h5api.m.goofish.com" in (p.url or "")),
+                    None,
+                )
+                if page is None:
+                    page = await context.new_page()
+                    await page.goto("https://h5api.m.goofish.com/", wait_until="domcontentloaded", timeout=20000)
+
+                expression = (
+                    "(async (qs, body) => {"
+                    "const r = await fetch('/h5/mtop.taobao.idlemessage.pc.login.token/1.0/?' + qs, "
+                    "{method: 'POST', headers: {'content-type': 'application/x-www-form-urlencoded'}, "
+                    "body: body, credentials: 'include', referrer: 'https://www.goofish.com/'});"
+                    "return await r.text(); })("
+                    + json.dumps(urlencode(params)) + ", "
+                    + json.dumps(urlencode({'data': data_val})) + ")"
+                )
+                res_text = await page.evaluate(expression)
+                logger.info(f"【{self.cookie_id}】浏览器侧Token重试响应: {str(res_text)[:150]}")
+                res_json = json.loads(res_text)
+                ret_value = res_json.get('ret', []) if isinstance(res_json, dict) else []
+
+                if not any('SUCCESS::调用成功' in r for r in ret_value):
+                    logger.warning(f"【{self.cookie_id}】浏览器侧Token重试未通过: {ret_value}")
+                    return None
+
+                access_token = (res_json.get('data') or {}).get('accessToken')
+                if not access_token:
+                    logger.warning(f"【{self.cookie_id}】浏览器侧Token重试响应缺 accessToken")
+                    return None
+
+                # 浏览器 jar 同步回会话（mtop 响应会滚动 _m_h5_tk，x5sec 也只在 jar 里）
+                fresh = _goofish_cookies(await context.cookies())
+                merged = dict(_host.trans_cookies(self.cookies_str))
+                merged.update(fresh)
+                merged_str = "; ".join(f"{k}={v}" for k, v in merged.items())
+                await self._persist_runtime_cookie_state(cookies_str=merged_str, source="cdp_browser_token_sync")
+
+                new_token = access_token
+                self.current_token = new_token
+                self.last_token_refresh_time = time.time()
+                self.last_message_received_time = 0
+                self._clear_qr_login_grace_period()
+                self.clear_init_auth_failure_state(self.cookie_id)
+                self.last_init_failure_reason = None
+                self.last_init_failure_type = None
+                self.init_auth_failures = 0
+                self.last_token_refresh_status = "success"
+                self.last_token_refresh_error_message = None
+                logger.warning(f"【{self.cookie_id}】浏览器侧Token刷新成功")
+                if self._consume_pending_slider_success_notice():
+                    await self.send_token_refresh_notification(
+                        "滑块验证通过，账号会话已恢复",
+                        "slider_recovered_success",
+                    )
+                return new_token
+            finally:
+                try:
+                    await pw.stop()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"【{self.cookie_id}】浏览器侧Token重试异常，回退常规刷新: {self._safe_str(e)}")
+            return None
+
     def _is_normal_token_expiry(self, error_message: str) -> bool:
         """检查是否是正常的令牌过期或其他不需要通知的情况"""
         # 不需要发送通知的关键词
