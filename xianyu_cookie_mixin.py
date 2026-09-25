@@ -1097,7 +1097,7 @@ class CookieMixin:
                     logger.warning(f"【{target_cookie_id}】页面访问超时，尝试降级策略...")
                     try:
                         # 降级策略：只等待基本加载
-                        await page.goto(target_url, wait_until='load', timeout=20000)
+                        await page.goto(target_url, wait_until='commit', timeout=20000)
                         logger.info(f"【{target_cookie_id}】页面访问成功（降级策略）")
                     except Exception as e2:
                         logger.warning(f"【{target_cookie_id}】降级策略也失败，尝试最基本访问...")
@@ -1122,7 +1122,7 @@ class CookieMixin:
                     logger.warning(f"【{target_cookie_id}】页面刷新被中断，继续直接读取当前上下文Cookie: {self._safe_str(e)}")
                 elif 'timeout' in error_text:
                     logger.warning(f"【{target_cookie_id}】页面刷新超时，使用降级策略...")
-                    await page.reload(wait_until='load', timeout=15000)
+                    await page.reload(wait_until='commit', timeout=15000)
                     logger.info(f"【{target_cookie_id}】页面刷新成功（降级策略）")
                 else:
                     raise e
@@ -1476,7 +1476,7 @@ class CookieMixin:
                     logger.warning(f"【{self.cookie_id}】页面访问超时，尝试降级策略...")
                     try:
                         # 降级策略：只等待基本加载
-                        await page.goto(target_url, wait_until='load', timeout=20000)
+                        await page.goto(target_url, wait_until='commit', timeout=20000)
                         logger.info(f"【{self.cookie_id}】页面访问成功（降级策略）")
                     except Exception as e2:
                         logger.warning(f"【{self.cookie_id}】降级策略也失败，尝试最基本访问...")
@@ -1498,7 +1498,7 @@ class CookieMixin:
             except Exception as e:
                 if 'timeout' in str(e).lower():
                     logger.warning(f"【{self.cookie_id}】页面刷新超时，使用降级策略...")
-                    await page.reload(wait_until='load', timeout=15000)
+                    await page.reload(wait_until='commit', timeout=15000)
                     logger.info(f"【{self.cookie_id}】页面刷新成功（降级策略）")
                 else:
                     raise e
@@ -1766,7 +1766,7 @@ class CookieMixin:
                     logger.warning(f"【{self.cookie_id}】页面访问超时，尝试降级策略...")
                     try:
                         # 降级策略：只等待基本加载
-                        await page.goto(target_url, wait_until='load', timeout=20000)
+                        await page.goto(target_url, wait_until='commit', timeout=20000)
                         logger.info(f"【{self.cookie_id}】页面访问成功（降级策略）")
                     except Exception as e2:
                         logger.warning(f"【{self.cookie_id}】降级策略也失败，尝试最基本访问...")
@@ -1788,7 +1788,7 @@ class CookieMixin:
             except Exception as e:
                 if 'timeout' in str(e).lower():
                     logger.warning(f"【{self.cookie_id}】第一次刷新超时，使用降级策略...")
-                    await page.reload(wait_until='load', timeout=15000)
+                    await page.reload(wait_until='commit', timeout=15000)
                     logger.info(f"【{self.cookie_id}】第一次刷新成功（降级策略）")
                 else:
                     raise e
@@ -1802,7 +1802,7 @@ class CookieMixin:
             except Exception as e:
                 if 'timeout' in str(e).lower():
                     logger.warning(f"【{self.cookie_id}】第二次刷新超时，使用降级策略...")
-                    await page.reload(wait_until='load', timeout=15000)
+                    await page.reload(wait_until='commit', timeout=15000)
                     logger.info(f"【{self.cookie_id}】第二次刷新成功（降级策略）")
                 else:
                     raise e
@@ -1811,9 +1811,12 @@ class CookieMixin:
             # Cookie刷新模式：正常更新Cookie
             logger.info(f"【{self.cookie_id}】获取更新后的Cookie...")
             updated_cookies = await context.cookies()
-            
-            # 获取并打印当前页面标题
-            page_title = await page.title()
+
+            # 获取并打印当前页面标题（预算化：死页面上 title() 无内建超时，曾借此挂死整轮）
+            try:
+                page_title = await asyncio.wait_for(page.title(), timeout=5.0)
+            except Exception:
+                page_title = "(unavailable)"
             logger.info(f"【{self.cookie_id}】当前页面标题: {page_title}")
 
             # 构造新的Cookie字典
