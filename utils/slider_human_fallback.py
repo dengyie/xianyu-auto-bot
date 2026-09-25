@@ -105,16 +105,11 @@ def _human_enabled() -> bool:
 
 
 async def _load_slider_solver_class():
-    """优先与 token 刷新相同的 slidex 运行时。"""
-    try:
-        from slidex import SlidexConfig
-        from slidex.solver import SliderSolver
+    """slidex 运行时（唯一运行时；legacy 求解器已随硬依赖化删除）。"""
+    from slidex import SlidexConfig
+    from slidex.solver import SliderSolver
 
-        return SlidexConfig, SliderSolver, "slidex"
-    except Exception:
-        from utils.slider_solver import SliderSolver  # type: ignore
-
-        return None, SliderSolver, "legacy"
+    return SlidexConfig, SliderSolver, "slidex"
 
 
 async def run_human_captcha_session(
@@ -178,29 +173,9 @@ async def run_human_captcha_session(
             "headless": headless,
             "proxy": dict(proxy or {}),
             "provider": "auto",
+            "config": SlidexConfig(),
         }
-        if SlidexConfig is not None:
-            try:
-                kwargs["config"] = SlidexConfig()
-            except Exception:
-                pass
-
-        try:
-            solver = SliderSolver(**kwargs)
-        except TypeError:
-            kwargs.pop("config", None)
-            try:
-                solver = SliderSolver(**kwargs)
-            except TypeError:
-                kwargs.pop("provider", None)
-                try:
-                    solver = SliderSolver(**kwargs)
-                except TypeError:
-                    solver = SliderSolver(
-                        cookie_id=cookie_id,
-                        cookies_str=cookies_str or "",
-                        headless=headless,
-                    )
+        solver = SliderSolver(**kwargs)
 
         logger.info(f"[{cookie_id}] human captcha bootstrap via {runtime}")
         await solver._init_browser()  # noqa: SLF001 — 产品路径需要 live page

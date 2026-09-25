@@ -8,6 +8,13 @@ import XianyuAutoAsync
 from XianyuAutoAsync import XianyuLive, ConnectionState
 
 
+class _FakeConfig:
+    """替换已删除的 _LegacySliderConfig：仅承载 kwargs 的哑配置。"""
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+
 class _FakeTokenRefreshResponse:
     def __init__(self):
         self.status = 200
@@ -67,69 +74,6 @@ class TestXianyuTokenRefreshRequest:
         assert slider_cls is FakeSliderSolver
         assert runtime_name == "slidex"
 
-    def test_token_refresh_slider_runtime_falls_back_only_when_slidex_missing(self, monkeypatch):
-        monkeypatch.delitem(sys.modules, "slidex", raising=False)
-        fake_legacy_module = types.ModuleType("utils.slider_solver")
-
-        class FakeLegacySliderSolver:
-            pass
-
-        fake_legacy_module.SliderSolver = FakeLegacySliderSolver
-        monkeypatch.setitem(sys.modules, "utils.slider_solver", fake_legacy_module)
-
-        real_import = __import__
-
-        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-            if name == "slidex":
-                raise ModuleNotFoundError("No module named 'slidex'", name="slidex")
-            return real_import(name, globals, locals, fromlist, level)
-
-        monkeypatch.setattr("builtins.__import__", fake_import)
-
-        config_cls, slider_cls, runtime_name = XianyuAutoAsync._load_token_refresh_slider_runtime()
-
-        assert config_cls is XianyuAutoAsync._LegacySliderConfig
-        assert slider_cls is FakeLegacySliderSolver
-        assert runtime_name == "legacy"
-
-    def test_create_token_refresh_slider_passes_provider_auto(self):
-        captured = {}
-
-        class FakeSlider:
-            def __init__(self, **kwargs):
-                captured.update(kwargs)
-
-        XianyuAutoAsync._create_token_refresh_slider(
-            FakeSlider,
-            cookie_id="u1",
-            cookies_str="c=1",
-            headless=True,
-            proxy={},
-            config=object(),
-            provider="auto",
-        )
-        assert captured["provider"] == "auto"
-        assert captured["cookie_id"] == "u1"
-
-    def test_create_token_refresh_slider_pops_provider_for_legacy(self):
-        class LegacySlider:
-            def __init__(self, cookie_id="default", cookies_str="", headless=True, proxy=None):
-                self.cookie_id = cookie_id
-                self.cookies_str = cookies_str
-
-        solver = XianyuAutoAsync._create_token_refresh_slider(
-            LegacySlider,
-            cookie_id="u2",
-            cookies_str="c=2",
-            headless=True,
-            proxy={},
-            config=object(),
-            provider="auto",
-        )
-        assert solver.cookie_id == "u2"
-        assert solver.cookies_str == "c=2"
-
-    @pytest.mark.asyncio
     async def test_refresh_token_reuses_session_and_passes_proxy(self):
         fake_response = _FakeTokenRefreshResponse()
         fake_session = _FakeSession(fake_response)
@@ -253,7 +197,7 @@ class TestXianyuTokenRefreshRequest:
              mock.patch.object(
                  XianyuAutoAsync,
                  "_load_token_refresh_slider_runtime",
-                 return_value=(XianyuAutoAsync._LegacySliderConfig, _FakeSlider, "test"),
+                 return_value=(_FakeConfig, _FakeSlider, "test"),
              ), \
              mock.patch(
                  "utils.slider_orchestrator.run_slider_async_with_fallback",
@@ -359,7 +303,7 @@ class TestXianyuTokenRefreshRequest:
              mock.patch.object(
                  XianyuAutoAsync,
                  "_load_token_refresh_slider_runtime",
-                 return_value=(XianyuAutoAsync._LegacySliderConfig, _FakeSlider, "test"),
+                 return_value=(_FakeConfig, _FakeSlider, "test"),
              ), \
              mock.patch(
                  "utils.slider_orchestrator.run_slider_async_with_fallback",

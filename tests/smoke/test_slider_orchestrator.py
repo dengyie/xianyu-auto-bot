@@ -5,7 +5,6 @@ from unittest import mock
 from utils.slider_orchestrator import (
     extract_x5_cookies,
     has_x5_cookie,
-    run_slider_with_fallback,
     validate_slider_result,
 )
 
@@ -41,12 +40,17 @@ def test_success_requires_x5_cookie():
 
 
 def test_remote_solver_runs_before_local_slider_when_configured():
+    """远程求解优先于本地滑块；远程成功即短路（异步生产入口）。"""
+    import asyncio
+
+    from utils.slider_orchestrator import run_slider_async_with_fallback
+
     class _PrimarySlider:
         user_id = "remote_user"
         initial_cookies = "unb=remote_user; cookie2=old"
         headless = True
 
-        def run(self, *_args, **_kwargs):
+        async def solve(self, *_args, **_kwargs):
             raise AssertionError("remote success should short-circuit local slider")
 
     class _FakeResponse:
@@ -60,11 +64,13 @@ def test_remote_solver_runs_before_local_slider_when_configured():
             }
 
     with mock.patch("utils.slider_orchestrator.requests.post", return_value=_FakeResponse()) as post_mock:
-        result = run_slider_with_fallback(
-            _PrimarySlider(),
-            "https://example.com/punish?action=captcha",
-            remote_enabled=True,
-            remote_config=("https://remote.example/api/captcha/slider-solve", "secret"),
+        result = asyncio.run(
+            run_slider_async_with_fallback(
+                _PrimarySlider(),
+                "https://example.com/punish?action=captcha",
+                remote_enabled=True,
+                remote_config=("https://remote.example/api/captcha/slider-solve", "secret"),
+            )
         )
 
     assert result.success is True
@@ -74,12 +80,17 @@ def test_remote_solver_runs_before_local_slider_when_configured():
 
 
 def test_drissionpage_fallback_can_recover_primary_failure():
+    """主求解视觉通过但无 x5sec（严格判定拒）→ DrissionPage 兜底可翻盘。"""
+    import asyncio
+
+    from utils.slider_orchestrator import run_slider_async_with_fallback
+
     class _PrimarySlider:
         user_id = "fallback_user"
         initial_cookies = "unb=fallback_user; cookie2=old"
         headless = True
 
-        def run(self, *_args, **_kwargs):
+        async def solve(self, *_args, **_kwargs):
             return True, {"unb": "fallback_user"}
 
     class _FallbackHandler:
@@ -92,11 +103,13 @@ def test_drissionpage_fallback_can_recover_primary_failure():
             self.cookie_id = cookie_id
             return "unb=fallback_user; x5sec=fallback_ticket"
 
-    result = run_slider_with_fallback(
-        _PrimarySlider(),
-        "https://example.com/punish?action=captcha",
-        fallback_enabled=True,
-        handler_factory=_FallbackHandler,
+    result = asyncio.run(
+        run_slider_async_with_fallback(
+            _PrimarySlider(),
+            "https://example.com/punish?action=captcha",
+            fallback_enabled=True,
+            handler_factory=_FallbackHandler,
+        )
     )
 
     assert result.success is True

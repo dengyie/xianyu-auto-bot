@@ -56,37 +56,16 @@ from utils.notification_dispatcher import (
 )
 
 
-class _LegacySliderConfig:
-    def __init__(self, **kwargs):
-        self.__dict__.update(kwargs)
-
-
 def _load_token_refresh_slider_runtime():
-    try:
-        from slidex import SlidexConfig, SliderSolver
-        return SlidexConfig, SliderSolver, 'slidex'
-    except ModuleNotFoundError as exc:
-        if exc.name != 'slidex':
-            raise
-        from utils.slider_solver import SliderSolver
-        return _LegacySliderConfig, SliderSolver, 'legacy'
+    """slidex 是 requirements/Dockerfile 双重硬钉的死依赖，无 legacy 回退。"""
+    from slidex import SlidexConfig, SliderSolver
+
+    return SlidexConfig, SliderSolver, 'slidex'
 
 
 def _slider_headless_from_env() -> bool:
     """XY_SLIDER_HEADLESS 默认 1（无头）；设 0/false/off/no 时以有头模式运行（容器内需 USE_XVFB=true 提供 DISPLAY）。"""
     return os.environ.get("XY_SLIDER_HEADLESS", "1").strip().lower() not in {"0", "false", "off", "no"}
-
-
-def _create_token_refresh_slider(slider_cls, **kwargs):
-    try:
-        return slider_cls(**kwargs)
-    except TypeError:
-        kwargs.pop('config', None)
-        try:
-            return slider_cls(**kwargs)
-        except TypeError:
-            kwargs.pop('provider', None)
-            return slider_cls(**kwargs)
 
 
 PROTECTED_SESSION_COOKIE_FIELDS = (
@@ -2539,8 +2518,7 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
                     max_concurrent=SLIDER_VERIFICATION.get('max_concurrent', 3),
                     wait_timeout=SLIDER_VERIFICATION.get('wait_timeout', 60),
                 )
-                solver = _create_token_refresh_slider(
-                    SliderSolver,
+                solver = SliderSolver(
                     cookie_id=self.cookie_id,
                     cookies_str=self.cookies_str,
                     headless=_slider_headless_from_env(),
