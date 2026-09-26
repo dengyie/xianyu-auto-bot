@@ -1709,6 +1709,24 @@ class MessagePipelineMixin:
                 logger.debug(f"【{self.cookie_id}】[{msg_id}] ⏹️ 非同步包消息，处理结束")
                 return
 
+            # 多消息同步帧拆分：积压/重连场景下一帧可携带多条 data。旧实现只取
+            # data[0]，其余消息（常含真实买家文本）被静默丢弃——2026-09-26 用户
+            # 测试消息丢失的根因（假在线重连后的积压帧里 data[0] 是系统引导消息，
+            # 整帧被当作引导消息收口）。逐条拆为单 item 帧递归走完整管线；ack 已
+            # 对原帧发送，synthetic 帧同 mid 的重复 ack 由服务端按 mid 去重。
+            _sync_data_list = message_data["body"]["syncPushPackage"].get("data") or []
+            if len(_sync_data_list) > 1:
+                logger.info(
+                    f"【{self.cookie_id}】[{msg_id}] 📦 同步帧含 {len(_sync_data_list)} 条消息，拆帧逐条处理"
+                )
+                for _item in _sync_data_list:
+                    _single_frame = {
+                        "headers": message_data.get("headers", {}),
+                        "body": {"syncPushPackage": {"data": [_item]}},
+                    }
+                    await self.handle_message(_single_frame, websocket, msg_id)
+                return
+
             # 获取并解密数据
             sync_data = message_data["body"]["syncPushPackage"]["data"][0]
 
