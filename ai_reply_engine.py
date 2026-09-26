@@ -9,6 +9,7 @@ AI回复引擎模块 - 统一意图识别与回复生成
 """
 
 import asyncio
+import os
 import json
 import time
 import requests
@@ -16,6 +17,10 @@ import threading
 from typing import List, Dict, Optional
 from loguru import logger
 from db_manager import db_manager
+
+# AI 供应商请求超时（秒）：上游抽风时空回复/挂起场景下，30s 默认值会把一次重试链拖到 40s+。
+# flash 档模型正常生成 1-6s，15s 足够宽裕；可用环境变量 AI_PROVIDER_TIMEOUT 覆盖。
+AI_PROVIDER_TIMEOUT = float(os.environ.get("AI_PROVIDER_TIMEOUT", "15"))
 
 
 class ProviderClientError(Exception):
@@ -162,7 +167,7 @@ class AIReplyEngine:
         logger.info(f"发送的prompt: {prompt[:100]}...") # 避免 prompt 过长
         logger.debug(f"请求数据: {json.dumps(data, ensure_ascii=False)}")
 
-        response = requests.post(url, headers=headers, json=data, timeout=30)
+        response = requests.post(url, headers=headers, json=data, timeout=AI_PROVIDER_TIMEOUT)
 
         if response.status_code != 200:
             logger.error(f"DashScope API请求失败: {response.status_code} - {response.text}")
@@ -229,7 +234,7 @@ class AIReplyEngine:
         logger.info(f"Calling Gemini REST API: {url.split('?')[0]}")
         logger.debug(f"Gemini Payload: {json.dumps(payload, ensure_ascii=False)}")
         
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response = requests.post(url, headers=headers, json=payload, timeout=AI_PROVIDER_TIMEOUT)
 
         if response.status_code != 200:
             logger.error(f"Gemini API 请求失败: {response.status_code} - {response.text}")
@@ -265,7 +270,7 @@ class AIReplyEngine:
         }
 
         logger.info(f"OpenAI Chat API请求: {url}")
-        response = requests.post(url, headers=headers, json=data, timeout=30)
+        response = requests.post(url, headers=headers, json=data, timeout=AI_PROVIDER_TIMEOUT)
 
         if response.status_code != 200:
             logger.error(f"OpenAI Chat API请求失败: {response.status_code} - {response.text}")
@@ -303,7 +308,7 @@ class AIReplyEngine:
         }
 
         logger.info(f"OpenAI Responses API请求: {url}")
-        response = requests.post(url, headers=headers, json=data, timeout=30)
+        response = requests.post(url, headers=headers, json=data, timeout=AI_PROVIDER_TIMEOUT)
 
         if response.status_code != 200:
             logger.error(f"OpenAI Responses API请求失败: {response.status_code} - {response.text}")
@@ -354,7 +359,7 @@ class AIReplyEngine:
             data["system"] = system_content
 
         logger.info(f"Anthropic API请求: {url}")
-        response = requests.post(url, headers=headers, json=data, timeout=30)
+        response = requests.post(url, headers=headers, json=data, timeout=AI_PROVIDER_TIMEOUT)
 
         if response.status_code != 200:
             logger.error(f"Anthropic API请求失败: {response.status_code} - {response.text}")
@@ -388,7 +393,7 @@ class AIReplyEngine:
         }
 
         logger.info(f"Azure OpenAI API请求: {url.split('?')[0]}")
-        response = requests.post(url, headers=headers, json=data, timeout=30)
+        response = requests.post(url, headers=headers, json=data, timeout=AI_PROVIDER_TIMEOUT)
 
         if response.status_code != 200:
             logger.error(f"Azure OpenAI API请求失败: {response.status_code} - {response.text}")
