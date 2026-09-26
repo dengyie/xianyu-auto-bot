@@ -1004,9 +1004,18 @@ class MessagePipelineMixin:
                     try:
                         sync_data = body["syncPushPackage"].get("data", [])
                         if sync_data and isinstance(sync_data, list) and len(sync_data) > 0:
-                            first_data = sync_data[0]
-                            # 检查是否包含订单相关关键词
-                            data_str = str(first_data).lower()
+                            # 扫描全部 item 并解 base64：item 字面量是 base64 乱码，
+                            # 不解码则关键词永远匹配不到真实载荷（分类常年轻度失效）
+                            parts = []
+                            for _entry in sync_data:
+                                parts.append(str(_entry))
+                                _payload = _entry.get("data") if isinstance(_entry, dict) else None
+                                if isinstance(_payload, str):
+                                    try:
+                                        parts.append(base64.b64decode(_payload).decode("utf-8", "ignore"))
+                                    except Exception:
+                                        pass
+                            data_str = " ".join(parts).lower()
                             if any(kw in data_str for kw in ['orderid', 'order_id', 'bizorderid', 'paysucc', 'paid']):
                                 return 1  # 订单消息 - 高优先级
                             if 'message' in data_str or 'chat' in data_str:
@@ -1715,6 +1724,9 @@ class MessagePipelineMixin:
             # 整帧被当作引导消息收口）。逐条拆为单 item 帧递归走完整管线；ack 已
             # 对原帧发送，synthetic 帧同 mid 的重复 ack 由服务端按 mid 去重。
             _sync_data_list = message_data["body"]["syncPushPackage"].get("data") or []
+            if not _sync_data_list:
+                logger.info(f"【{self.cookie_id}】[{msg_id}] ⏹️ 空同步包，处理结束")
+                return
             if len(_sync_data_list) > 1:
                 logger.info(
                     f"【{self.cookie_id}】[{msg_id}] 📦 同步帧含 {len(_sync_data_list)} 条消息，拆帧逐条处理"
