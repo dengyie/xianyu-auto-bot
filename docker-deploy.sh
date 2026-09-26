@@ -338,8 +338,21 @@ backup_data() {
         cp .env "$backup_dir/"
     fi
     cp global_config.yml "$backup_dir/" 2>/dev/null || true
-    
+
     print_success "数据备份完成: $backup_dir"
+
+    # 备份轮转：只保留最新 N 个（默认 3；1GB/62G 机每次发版备份 ~113M，
+    # 不轮转数日即涨回 500M+；BACKUP_KEEP 环境变量可覆盖）
+    rotate_backups
+}
+
+# 备份轮转（按目录名时间戳倒序，保留最新 BACKUP_KEEP 个）
+rotate_backups() {
+    local keep="${BACKUP_KEEP:-3}"
+    local old
+    for old in $(ls -1dt backups/2* 2>/dev/null | tail -n +$((keep + 1))); do
+        rm -rf "$old" && print_info "轮转清理旧备份: $old"
+    done
 }
 
 # 更新部署（GHCR pull + recreate，绝不本地 build）
