@@ -58,6 +58,8 @@ async def test_multi_item_sync_frame_is_split_and_fully_processed():
     # 三个 item 各自走完整管线（旧实现只处理 data[0]，后两条静默丢失）
     detected = [r for r in records if "检测到chatType消息" in r]
     assert len(detected) == 3
+    # 原帧统一 ack 一次；synthetic 帧带 _slidex_no_ack 不重复 ack
+    assert ws.send.await_count == 1
 
 
 @pytest.mark.asyncio

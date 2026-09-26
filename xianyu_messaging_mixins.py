@@ -1693,23 +1693,26 @@ class MessagePipelineMixin:
                 logger.warning(f"【{self.cookie_id}】[{msg_id}] ⏹️ 账号已禁用，消息处理结束")
                 return
 
-            # 发送确认消息
+            # 发送确认消息（拆帧产生的 synthetic 帧带 _slidex_no_ack 内部标记：
+            # 原帧已 ack，同 mid 重复 ack 无意义；标记本身不在 ack 白名单字段里，
+            # 不会发往服务端）
             try:
                 message = message_data
-                ack = {
-                    "code": 200,
-                    "headers": {
-                        "mid": message["headers"]["mid"] if "mid" in message["headers"] else _host.generate_mid(),
-                        "sid": message["headers"]["sid"] if "sid" in message["headers"] else '',
+                if not message["headers"].get("_slidex_no_ack"):
+                    ack = {
+                        "code": 200,
+                        "headers": {
+                            "mid": message["headers"]["mid"] if "mid" in message["headers"] else _host.generate_mid(),
+                            "sid": message["headers"]["sid"] if "sid" in message["headers"] else '',
+                        }
                     }
-                }
-                if 'app-key' in message["headers"]:
-                    ack["headers"]["app-key"] = message["headers"]["app-key"]
-                if 'ua' in message["headers"]:
-                    ack["headers"]["ua"] = message["headers"]["ua"]
-                if 'dt' in message["headers"]:
-                    ack["headers"]["dt"] = message["headers"]["dt"]
-                await websocket.send(json.dumps(ack))
+                    if 'app-key' in message["headers"]:
+                        ack["headers"]["app-key"] = message["headers"]["app-key"]
+                    if 'ua' in message["headers"]:
+                        ack["headers"]["ua"] = message["headers"]["ua"]
+                    if 'dt' in message["headers"]:
+                        ack["headers"]["dt"] = message["headers"]["dt"]
+                    await websocket.send(json.dumps(ack))
             except Exception as e:
                 logger.debug(f"【{self.cookie_id}】[{msg_id}] 发送ACK失败: {e}")
 
@@ -1733,7 +1736,7 @@ class MessagePipelineMixin:
                 )
                 for _item in _sync_data_list:
                     _single_frame = {
-                        "headers": message_data.get("headers", {}),
+                        "headers": {**message_data.get("headers", {}), "_slidex_no_ack": "1"},
                         "body": {"syncPushPackage": {"data": [_item]}},
                     }
                     await self.handle_message(_single_frame, websocket, msg_id)
