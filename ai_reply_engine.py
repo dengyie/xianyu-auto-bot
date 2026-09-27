@@ -12,6 +12,7 @@ import asyncio
 import os
 import json
 import time
+import uuid
 import requests
 import threading
 from typing import List, Dict, Optional
@@ -21,6 +22,9 @@ from db_manager import db_manager
 # AI 供应商请求超时（秒）：上游抽风时空回复/挂起场景下，30s 默认值会把一次重试链拖到 40s+。
 # flash 档模型正常生成 1-6s，15s 足够宽裕；可用环境变量 AI_PROVIDER_TIMEOUT 覆盖。
 AI_PROVIDER_TIMEOUT = float(os.environ.get("AI_PROVIDER_TIMEOUT", "15"))
+
+# 网关路由会话 ID：随进程生成，进程生命周期内稳定（会话语义）
+_GATEWAY_SESSION_ID = uuid.uuid4().hex
 
 
 class ProviderClientError(Exception):
@@ -191,6 +195,10 @@ class AIReplyEngine:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
 
         headers = {"Content-Type": "application/json"}
+        # 网关路由会话头：api.mangoqwq.com 等网关要求 x-opencode-session 才路由
+        # （缺失时 400 MissingSession）。随进程生成稳定值；标准 OpenAI 兼容端点
+        # 忽略未知头，无副作用。
+        headers["x-opencode-session"] = _GATEWAY_SESSION_ID
 
         # --- 转换消息格式 (修复 P1-3: 增强健壮性) ---
         system_instruction = ""
@@ -258,6 +266,10 @@ class AIReplyEngine:
         url = f"{base_url}/chat/completions"
 
         headers = {"Content-Type": "application/json"}
+        # 网关路由会话头：api.mangoqwq.com 等网关要求 x-opencode-session 才路由
+        # （缺失时 400 MissingSession）。随进程生成稳定值；标准 OpenAI 兼容端点
+        # 忽略未知头，无副作用。
+        headers["x-opencode-session"] = _GATEWAY_SESSION_ID
         api_key = settings.get('api_key', '')
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
