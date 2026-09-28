@@ -753,15 +753,18 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
 
         # WebSocket意外断开 - 短延迟
         if "no close frame received or sent" in error_msg:
-            return min(3 * self.connection_failures, 15)
-        
+            # 下限护栏：connection_failures 从 0 起算，3*0=0 曾导致 0 秒重试——
+            # init 内 WS 掉线 + 滑块周期组合成 15s/圈的自锤循环（2026-09-28 实测
+            # 单晚 21 次 0 秒重试，持续消耗风控惩罚资源）
+            return max(5, min(3 * self.connection_failures, 15))
+
         # 网络连接问题 - 长延迟
         elif "Connection refused" in error_msg or "timeout" in error_msg.lower():
-            return min(10 * self.connection_failures, 60)
-        
+            return max(10, min(10 * self.connection_failures, 60))
+
         # 其他未知错误 - 中等延迟
         else:
-            return min(5 * self.connection_failures, 30)
+            return max(10, min(5 * self.connection_failures, 30))
 
     def _cleanup_instance_caches(self):
         """清理实例级别的缓存，防止内存泄漏"""
