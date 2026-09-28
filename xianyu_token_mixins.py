@@ -361,7 +361,7 @@ class TokenMixin:
                                 f"【{self.cookie_id}】滑块求解预算耗尽（剩余 {_budget_remaining}s 冷却），"
                                 "跳过本次求解防止持续触发风控"
                             )
-                            raise InitAuthError("Token获取失败(status=slider_budget_cooldown)")
+                            raise _host.InitAuthError("Token获取失败(status=slider_budget_cooldown)")
 
                         # 记录滑块验证检测到日志文件
                         verification_url = res_json.get('data', {}).get('url', 'Token刷新时检测')
