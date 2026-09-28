@@ -9,6 +9,7 @@ import base64
 import json
 import os
 import re
+import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -44,6 +45,12 @@ def _db_host():
 
     return XianyuAutoAsync.db_manager
 
+
+# 滑块求解预算门控状态（进程级，扛 _restart_instance 的实例计数清零；容器重启重置）：
+# token 刷新链每次被挑战都消耗一次风控惩罚额度，无预算时上游抽风/风控分差会整夜锤
+# （2026-09-28 实测单晚 11+ 次求解）。预算耗尽 → 冷却拒绝求解，窗口过后自动放行探测周期。
+_slider_budget_state = {}
+_slider_budget_lock = threading.Lock()
 
 class TokenMixin:
     """mtop token 刷新循环/预检/错误分类。"""
@@ -343,6 +350,18 @@ class TokenMixin:
                             return None
 
                         logger.warning(f"【{self.cookie_id}】检测到需要滑块验证，开始处理...")
+
+                        # 求解预算门控：预算耗尽时不再消耗风控资源（每次被挑战都
+                        # 会消耗一次惩罚额度），进入冷却等窗口过后自动放行探测周期
+                        _budget_exhausted, _budget_remaining = self._slider_budget_gate()
+                        if _budget_exhausted:
+                            self.last_token_refresh_status = 'slider_budget_cooldown'
+                            self.last_init_failure_reason = 'slider_budget_cooldown'
+                            logger.warning(
+                                f"【{self.cookie_id}】滑块求解预算耗尽（剩余 {_budget_remaining}s 冷却），"
+                                "跳过本次求解防止持续触发风控"
+                            )
+                            raise InitAuthError("Token获取失败(status=slider_budget_cooldown)")
 
                         # 记录滑块验证检测到日志文件
                         verification_url = res_json.get('data', {}).get('url', 'Token刷新时检测')
@@ -739,6 +758,37 @@ class TokenMixin:
             'log_id': '4c053da6vYwnmf',
         }
 
+
+    # ═══ 滑块求解预算门控 ═══
+
+    def _slider_budget_gate(self) -> Tuple[bool, int]:
+        """挑战入口调用：预算耗尽返回 (True, 冷却剩余秒数)；否则扣减一次预算并返回 (False, 0)。"""
+        budget = max(1, int(os.environ.get('XY_SLIDER_SOLVE_BUDGET', '6') or 6))
+        cooldown = max(60, int(os.environ.get('XY_SLIDER_SOLVE_COOLDOWN', '1800') or 1800))
+        now = time.time()
+        with _slider_budget_lock:
+            state = _slider_budget_state.setdefault(self.cookie_id, {'solves': 0, 'cooldown_until': 0})
+            if state.get('cooldown_until', 0) and now < state['cooldown_until']:
+                return True, int(state['cooldown_until'] - now)
+            if state.get('cooldown_until', 0) and now >= state['cooldown_until']:
+                state['solves'] = 0
+                state['cooldown_until'] = 0
+            state['solves'] = int(state.get('solves', 0)) + 1
+            if state['solves'] > budget:
+                state['cooldown_until'] = now + cooldown
+                return True, cooldown
+            return False, 0
+
+    def _slider_budget_reset(self):
+        """Token 成功后清空预算（正常节奏下一次自然到期只消耗 1 次预算）。"""
+        with _slider_budget_lock:
+            _slider_budget_state.pop(self.cookie_id, None)
+
+    def _slider_budget_cooldown_remaining(self) -> int:
+        state = _slider_budget_state.get(self.cookie_id) or {}
+        remaining = int(float(state.get('cooldown_until', 0)) - time.time())
+        return max(300, remaining) if remaining > 0 else 300
+
     async def _finalize_token_success(self, new_token: str) -> str:
         """Token 刷新成功收尾 —— aiohttp 与浏览器侧重试两条路径共用，防漂移。
 
@@ -756,6 +806,8 @@ class TokenMixin:
         self.init_auth_failures = 0
         self.last_token_refresh_status = "success"
         self.last_token_refresh_error_message = None
+        # Token 成功 → 滑块求解预算清零（正常节奏下一次自然到期只消耗 1 次）
+        self._slider_budget_reset()
         if self._consume_pending_slider_success_notice():
             await self.send_token_refresh_notification(
                 "滑块验证通过，账号会话已恢复",

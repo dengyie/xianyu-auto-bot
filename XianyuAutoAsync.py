@@ -323,6 +323,8 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
     _init_auth_failure_threshold = 3
     _init_auth_cooldown = 60
 
+
+
     # 扫码登录后的短期缓冲状态：首轮 token 刷新命中风控时，先做浏览器侧稳定化再决定是否上滑块
     _qr_login_grace_state = {}  # {cookie_id: {'timestamp': float, 'captcha_buffer_used': bool, 'browser_stabilized': bool}}
     _qr_login_grace_ttl = max(300, int(RISK_CONTROL.get('qr_login_grace_minutes', 15) or 15) * 60)
@@ -742,6 +744,10 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
     def _calculate_retry_delay(self, error_msg: str) -> int:
         """根据错误类型和失败次数计算重试延迟"""
         current_time = time.time()
+        if getattr(self, 'last_token_refresh_status', None) == 'slider_budget_cooldown':
+            # 滑块预算冷却：等窗口过后再允许一个探测周期，防止持续消耗风控资源
+            return max(300, self._slider_budget_cooldown_remaining())
+
         if self._is_account_pause_status(getattr(self, 'last_token_refresh_status', None)):
             return max(300, self._compute_token_retry_wait_seconds(current_time))
 
@@ -765,6 +771,7 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
         # 其他未知错误 - 中等延迟
         else:
             return max(10, min(5 * self.connection_failures, 30))
+
 
     def _cleanup_instance_caches(self):
         """清理实例级别的缓存，防止内存泄漏"""
