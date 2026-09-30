@@ -66,6 +66,27 @@ async def test_keepalive_set_cookie_is_applied_without_phantom_attr():
 
 
 @pytest.mark.asyncio
+async def test_blank_protected_set_cookie_does_not_erase_existing_session():
+    """空 unb Set-Cookie 不能抹掉已有 UNB，否则下次扫码认不出原账号。"""
+    host = _Host()
+    headers = _FakeHeaders([
+        ("Set-Cookie", "unb=; Path=/; Max-Age=0"),
+        ("Set-Cookie", "cna=; Path=/"),
+        ("Set-Cookie", "t=rotated-token; Path=/"),
+    ])
+
+    changed = await host._apply_response_cookie_updates(headers, "session_keepalive")
+
+    assert changed is True
+    assert host.cookies["unb"] == "123456"
+    assert host.cookies["cna"] == ""
+    assert host.cookies["t"] == "rotated-token"
+    assert "unb=123456" in host.cookies_str
+    assert not any(part.strip() == "cna=" for part in host.cookies_str.split(";"))
+    assert host.config_updates == 1
+
+
+@pytest.mark.asyncio
 async def test_keepalive_without_set_cookie_is_a_noop():
     """无 Set-Cookie 时提前返回，不写库（这就是此前保活偶尔显示"成功"的原因）。"""
     host = _Host()

@@ -583,6 +583,138 @@ class TestAccounts:
         assert "任务" in state["error_message"]
 
     @pytest.mark.asyncio
+    async def test_qr_login_reuses_account_when_stored_unb_was_blanked(self, user_auth, monkeypatch):
+        """旧 Cookie 被写成 unb= 后，再次扫同一 UNB 必须更新原账号，不能新建 _1。"""
+        account_id = "1926782908"
+
+        class FakeXianyuLive:
+            def __init__(self, *args, **kwargs):
+                self.cookies_str = "unb=1926782908; cna=real-cna; _m_h5_tk=real-token"
+
+            async def refresh_cookies_from_qr_login(self, qr_cookies_str, cookie_id=None, user_id=None):
+                reply_server.db_manager.update_cookie_account_info(
+                    cookie_id,
+                    cookie_value=self.cookies_str,
+                    user_id=user_id,
+                )
+                return True
+
+            @classmethod
+            def mark_qr_login_grace(cls, *args, **kwargs):
+                return None
+
+            @classmethod
+            def clear_qr_login_grace(cls, *args, **kwargs):
+                return None
+
+            @classmethod
+            def clear_password_login_failure_backoff(cls, *args, **kwargs):
+                return None
+
+        class FakeManager:
+            def __init__(self):
+                self.updated = []
+
+            def update_cookie(self, cookie_id, new_value, save_to_db=True):
+                self.updated.append(cookie_id)
+                future = concurrent.futures.Future()
+                future.set_result(None)
+                return future
+
+            def add_cookie(self, *args, **kwargs):
+                raise AssertionError("blank-unb account must not be treated as new")
+
+        import XianyuAutoAsync
+
+        reply_server.db_manager.save_cookie(account_id, "unb=; cookie2=old; cna=old-cna", user_id=2)
+        fake_manager = FakeManager()
+        monkeypatch.setattr(XianyuAutoAsync, "XianyuLive", FakeXianyuLive)
+        monkeypatch.setattr(reply_server.cookie_manager, "manager", fake_manager)
+
+        result = await reply_server.process_qr_login_cookies(
+            "unb=1926782908; cookie2=qr",
+            "1926782908",
+            {"user_id": 2, "username": "user"},
+        )
+
+        assert result["account_id"] == account_id
+        assert result["is_new_account"] is False
+        assert result["task_restarted"] is True
+        assert fake_manager.updated == [account_id]
+        assert "1926782908_1" not in reply_server.db_manager.get_all_cookies(2)
+        saved = reply_server.db_manager.get_cookie_details(account_id)
+        assert "cna=real-cna" in (saved.get("value") or "")
+
+    @pytest.mark.asyncio
+    async def test_incomplete_qr_login_does_not_create_account(self, user_auth, monkeypatch):
+        """真实 Cookie 缺少核心字段时，不能把原始扫码 Cookie 降级存成新账号。"""
+
+        class FakeXianyuLive:
+            def __init__(self, *args, **kwargs):
+                self.cookies_str = ""
+
+            async def refresh_cookies_from_qr_login(self, qr_cookies_str, cookie_id=None, user_id=None):
+                return False
+
+        class FakeManager:
+            def add_cookie(self, *args, **kwargs):
+                raise AssertionError("incomplete QR cookie must not start a new account")
+
+        import XianyuAutoAsync
+
+        monkeypatch.setattr(XianyuAutoAsync, "XianyuLive", FakeXianyuLive)
+        monkeypatch.setattr(reply_server.cookie_manager, "manager", FakeManager())
+
+        result = await reply_server.process_qr_login_cookies(
+            "unb=fresh-user; cookie2=qr",
+            "fresh-user",
+            {"user_id": 2, "username": "user"},
+        )
+
+        assert result["account_id"] == "fresh-user"
+        assert result["is_new_account"] is True
+        assert result["real_cookie_refreshed"] is False
+        assert result["task_restarted"] is False
+        assert "fresh-user" not in reply_server.db_manager.get_all_cookies(2)
+
+    @pytest.mark.asyncio
+    async def test_incomplete_qr_login_does_not_overwrite_existing_account(self, user_auth, monkeypatch):
+        """真实 Cookie 刷新失败时，不能用缺令牌的扫码 Cookie 覆盖已有账号。"""
+        account_id = "keep-existing"
+
+        class FakeXianyuLive:
+            def __init__(self, *args, **kwargs):
+                self.cookies_str = ""
+
+            async def refresh_cookies_from_qr_login(self, qr_cookies_str, cookie_id=None, user_id=None):
+                return False
+
+        class FakeManager:
+            def update_cookie(self, *args, **kwargs):
+                raise AssertionError("incomplete QR cookie must not replace the stored session")
+
+        import XianyuAutoAsync
+
+        reply_server.db_manager.save_cookie(account_id, "unb=keep-existing; cookie2=old; _m_h5_tk=old-token", user_id=2)
+        monkeypatch.setattr(XianyuAutoAsync, "XianyuLive", FakeXianyuLive)
+        monkeypatch.setattr(reply_server.cookie_manager, "manager", FakeManager())
+
+        result = await reply_server.process_qr_login_cookies(
+            "unb=keep-existing; cookie2=qr",
+            "keep-existing",
+            {"user_id": 2, "username": "user"},
+        )
+
+        assert result["account_id"] == account_id
+        assert result["is_new_account"] is False
+        assert result["real_cookie_refreshed"] is False
+        assert result["task_restarted"] is False
+        saved = reply_server.db_manager.get_cookie_details(account_id)
+        assert "_m_h5_tk=old-token" in (saved.get("value") or "")
+        assert "cookie2=qr" not in (saved.get("value") or "")
+
+
+    @pytest.mark.asyncio
     async def test_qr_login_process_waits_for_async_runtime_handoff(self, user_auth, monkeypatch):
         class FakeXianyuLive:
             def __init__(self, *args, **kwargs):

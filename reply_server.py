@@ -3505,32 +3505,49 @@ async def _run_qr_login_lite(session_id: str, current_user: Dict[str, Any]):
         state['finished_at'] = time.time()
 
 
+def _match_existing_qr_account(existing_cookies: Dict[str, str], unb: str):
+    """按有效 UNB 匹配；UNB 被空值抹掉时，回退到与 UNB 相同的账号 ID。"""
+    blank_unb_account_id = None
+    blank_unb_cookie_value = None
+    for account_id, cookie_value in existing_cookies.items():
+        try:
+            existing_cookie_dict = trans_cookies(cookie_value)
+        except Exception:
+            existing_cookie_dict = {}
+        if existing_cookie_dict.get('unb') == unb:
+            return account_id, cookie_value, 'unb'
+        if account_id == unb and not existing_cookie_dict.get('unb') and blank_unb_account_id is None:
+            blank_unb_account_id = account_id
+            blank_unb_cookie_value = cookie_value
+    if blank_unb_account_id:
+        return blank_unb_account_id, blank_unb_cookie_value, 'account_id'
+    return None, None, None
+
+
 async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[str, Any]) -> Dict[str, Any]:
     """处理扫码登录获取的Cookie - 先获取真实cookie再保存到数据库"""
     try:
         user_id = current_user['user_id']
+        unb = str(unb or '').strip()
+        if not unb:
+            raise ValueError("扫码登录缺少有效 UNB，拒绝创建账号")
 
         # 检查是否已存在相同unb的账号
         existing_cookies = db_manager.get_all_cookies(user_id)
-        existing_account_id = None
-        previous_cookie_value = None
-
-        for account_id, cookie_value in existing_cookies.items():
-            try:
-                # 解析现有Cookie中的unb
-                existing_cookie_dict = trans_cookies(cookie_value)
-                if existing_cookie_dict.get('unb') == unb:
-                    existing_account_id = account_id
-                    previous_cookie_value = cookie_value
-                    break
-            except:
-                continue
+        existing_account_id, previous_cookie_value, match_reason = _match_existing_qr_account(
+            existing_cookies,
+            unb,
+        )
 
         # 确定账号ID
         if existing_account_id:
             account_id = existing_account_id
             is_new_account = False
-            log_with_user('info', f"扫码登录找到现有账号: {account_id}, UNB: {unb}", current_user)
+            log_with_user(
+                'info',
+                f"扫码登录找到现有账号: {account_id}, UNB: {unb}, 匹配方式: {match_reason}",
+                current_user,
+            )
         else:
             # 创建新账号，使用unb作为账号ID
             account_id = unb
@@ -3817,37 +3834,39 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
 
 
 async def _fallback_save_qr_cookie(account_id: str, cookies: str, user_id: int, is_new_account: bool, current_user: Dict[str, Any], error_reason: str) -> Dict[str, Any]:
-    """降级处理：当无法获取真实cookie时，保存原始扫码cookie"""
+    """降级处理：真实 Cookie 不完整时，只保留已有账号的旧会话。"""
     try:
-        log_with_user('warning', f"降级处理 - 保存原始扫码cookie: {account_id}, 原因: {error_reason}", current_user)
-
-        # 保存原始扫码cookie到数据库
         if is_new_account:
-            db_manager.save_cookie(account_id, cookies, user_id)
-            log_with_user('info', f"降级处理 - 新账号原始cookie已保存: {account_id}", current_user)
-        else:
-            # 现有账号使用 update_cookie_account_info 避免覆盖其他字段
-            db_manager.update_cookie_account_info(account_id, cookie_value=cookies)
-            log_with_user('info', f"降级处理 - 现有账号原始cookie已更新: {account_id}", current_user)
+            # 原始扫码 Cookie 缺少 _m_h5_tk/cna，保存后必然令牌为空，不能当成新账号启动。
+            log_with_user(
+                'warning',
+                f"扫码登录未获取完整真实Cookie，放弃创建新账号: {account_id}, 原因: {error_reason}",
+                current_user,
+            )
+            return {
+                'account_id': account_id,
+                'is_new_account': True,
+                'real_cookie_refreshed': False,
+                'task_restarted': False,
+                'fallback_reason': error_reason,
+                'warning_message': f"扫码登录未获取完整Cookie，未创建账号: {error_reason}",
+                'cookie_length': len(cookies),
+            }
 
-        # 添加到或更新cookie_manager
-        if cookie_manager.manager:
-            if is_new_account:
-                handoff_result = cookie_manager.manager.add_cookie(account_id, cookies, user_id=user_id)
-                _consume_cookie_manager_handoff(handoff_result)
-                log_with_user('info', f"降级处理 - 已将原始cookie添加到cookie_manager: {account_id}", current_user)
-            else:
-                # update_cookie_account_info 已经保存到数据库了，这里不需要再保存
-                handoff_result = cookie_manager.manager.update_cookie(account_id, cookies, save_to_db=False)
-                _consume_cookie_manager_handoff(handoff_result)
-                log_with_user('info', f"降级处理 - 已更新cookie_manager中的原始cookie: {account_id}", current_user)
-
+        # 原始扫码 Cookie 同样缺少令牌。覆盖已有账号会把可用会话换成必然失败的会话。
+        log_with_user(
+            'warning',
+            f"扫码登录未获取完整真实Cookie，保留现有账号会话不覆盖: {account_id}, 原因: {error_reason}",
+            current_user,
+        )
         return {
             'account_id': account_id,
-            'is_new_account': is_new_account,
+            'is_new_account': False,
             'real_cookie_refreshed': False,
+            'task_restarted': False,
             'fallback_reason': error_reason,
-            'cookie_length': len(cookies)
+            'warning_message': f"扫码登录未获取完整Cookie，已保留原账号会话: {error_reason}",
+            'cookie_length': len(cookies),
         }
 
     except Exception as fallback_e:

@@ -70,7 +70,14 @@ def trans_cookies(cookies_str: str) -> dict:
         cookie = cookie.strip()
         if "=" in cookie:
             key, value = cookie.split("=", 1)
-            cookies[key.strip()] = value.strip()
+            key = key.strip()
+            value = value.strip()
+            if not key:
+                continue
+            # 空值视为缺失，避免空 unb 等字段污染后续保护性合并
+            if not value:
+                continue
+            cookies[key] = value
     return cookies
 
 

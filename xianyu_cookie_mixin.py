@@ -72,7 +72,10 @@ class CookieMixin:
         return False
     def _serialize_cookies(self, cookies_dict: Optional[Dict[str, Any]] = None) -> str:
         cookies = cookies_dict or self.cookies
-        return '; '.join([f"{k}={v}" for k, v in cookies.items() if k])
+        return '; '.join([
+            f"{k}={v}" for k, v in cookies.items()
+            if k and str(v or '').strip()
+        ])
     def _sync_session_cookie_header(self):
         if self.session and not self.session.closed:
             self.session.headers['cookie'] = self.cookies_str
@@ -139,10 +142,38 @@ class CookieMixin:
             if '=' not in cookie:
                 continue
             name, value = cookie.split(';')[0].split('=', 1)
-            updates[name.strip()] = value.strip()
+            name = name.strip()
+            if not name:
+                continue
+            updates[name] = value.strip()
         return updates
+    def _drop_blank_protected_cookie_overwrites(self, updates: Dict[str, str]) -> Dict[str, str]:
+        """响应头里的空关键字段是删除/占位，不是新的会话值。
+
+        闲鱼会下发 `unb=` 这类空 Set-Cookie。直接合并后序列化仍保留
+        `unb=`，但解析器会丢弃空值，于是账号 ID 对应的 UNB 从库里消失，
+        下次扫码无法识别原账号。已有非空值时忽略这种覆盖。
+        """
+        if not updates:
+            return {}
+        protected = set(getattr(_host, 'PROTECTED_SESSION_COOKIE_FIELDS', ()) or ())
+        existing = self.cookies if isinstance(self.cookies, dict) else {}
+        kept = {}
+        dropped = []
+        for key, value in updates.items():
+            if key in protected and not str(value or '').strip() and str(existing.get(key) or '').strip():
+                dropped.append(key)
+                continue
+            kept[key] = value
+        if dropped:
+            logger.warning(
+                f"【{self.cookie_id}】忽略响应中的空关键Cookie字段，保留现有会话值: {', '.join(dropped)}"
+            )
+        return kept
     async def _apply_response_cookie_updates(self, response_headers, source: str) -> bool:
-        updates = self._extract_set_cookie_updates(response_headers)
+        updates = self._drop_blank_protected_cookie_overwrites(
+            self._extract_set_cookie_updates(response_headers)
+        )
         if not updates:
             return False
 
@@ -188,21 +219,31 @@ class CookieMixin:
         incoming = dict(incoming_cookies_dict or {})
         existing_count = len(existing)
         incoming_count = len(incoming)
-        existing_unb = str(existing.get('unb') or '').strip()
-        incoming_unb = str(incoming.get('unb') or '').strip()
+        # 空字符串视作缺失（生产中空 unb 会覆盖现会话）
+        def _norm(v):
+            return str(v or '').strip()
+        existing_unb = _norm(existing.get('unb'))
+        incoming_unb = _norm(incoming.get('unb'))
         account_switched = bool(existing_unb and incoming_unb and existing_unb != incoming_unb)
 
+        skipped_empty_fields = []
         if account_switched:
             merged = incoming.copy()
         else:
             merged = existing.copy()
             for key, value in incoming.items():
+                # 空字符串不覆盖已有会话字段（生产：滑块 jar 里的空 unb 把现会话打残）
+                if not _norm(value) and _norm(merged.get(key)):
+                    skipped_empty_fields.append(key)
+                    continue
                 merged[key] = value
 
         updated_fields = []
         changed_fields = []
         new_fields = []
         for key, value in incoming.items():
+            if key in skipped_empty_fields:
+                continue
             old_value = existing.get(key)
             if old_value is None:
                 updated_fields.append(f"{key}(新增)")
@@ -226,19 +267,19 @@ class CookieMixin:
 
         missing_protected_fields = [
             key for key in _host.PROTECTED_SESSION_COOKIE_FIELDS
-            if not merged.get(key)
+            if not _norm(merged.get(key))
         ]
         missing_required_fields = [
             key for key in _host.REQUIRED_SESSION_COOKIE_FIELDS
-            if not merged.get(key)
+            if not _norm(merged.get(key))
         ]
         incoming_missing_protected_fields = [
             key for key in _host.PROTECTED_SESSION_COOKIE_FIELDS
-            if not incoming.get(key)
+            if not _norm(incoming.get(key))
         ]
         incoming_missing_required_fields = [
             key for key in _host.REQUIRED_SESSION_COOKIE_FIELDS
-            if not incoming.get(key)
+            if not _norm(incoming.get(key))
         ]
 
         return {
