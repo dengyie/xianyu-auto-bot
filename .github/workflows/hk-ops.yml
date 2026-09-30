@@ -36,7 +36,7 @@ jobs:
           # 经 stdin + bash -s 执行：input 不再嵌入 ssh 参数，双引号/引号配对不再影响
           # 解析。定界符不加引号 = 与旧双引号包裹一致的 runner 侧 $VAR 展开语义
           # （HOME_NODE_MIHOMO_CONFIG_B64 在 runner 展开）。命令体请勿读 stdin。
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" 'bash -s' <<TENCENT_OPS_SCRIPT
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o User=root "$SSH_HOST" 'bash -s' <<TENCENT_OPS_SCRIPT
           ${{ inputs.command }}
           TENCENT_OPS_SCRIPT
 

@@ -21,7 +21,7 @@ jobs:
       cancel-in-progress: false
     env:
       SSH_HOST: ${{ secrets.XIANYU_DEPLOY_HOST }}
-      SSH_CMD: ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no
+      SSH_CMD: ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o User=root
     steps:
       - name: Setup deploy key
         run: |

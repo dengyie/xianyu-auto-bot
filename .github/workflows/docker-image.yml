@@ -152,12 +152,12 @@ jobs:
 
       - name: Pull image on tencent
         run: |
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o User=root "$SSH_HOST" \
             'sudo docker compose -f /opt/xianyu-auto-bot/docker-compose.yml pull'
 
       - name: Recreate container on tencent
         run: |
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o User=root "$SSH_HOST" \
             'sudo docker compose -f /opt/xianyu-auto-bot/docker-compose.yml up -d --no-build --force-recreate'
 
       - name: Health check
@@ -166,7 +166,7 @@ jobs:
         # -f：HTTP >=4xx 视为失败；grep：必须含 "status":"healthy"，防 5xx/降级响应误判
         run: |
           for i in $(seq 1 30); do
-            if ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
+            if ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o User=root "$SSH_HOST" \
               'curl -fsS --noproxy "*" -m 5 http://127.0.0.1:9000/health' | grep -q '"status":"healthy"'; then
               echo "healthy after attempt $i"
               exit 0
