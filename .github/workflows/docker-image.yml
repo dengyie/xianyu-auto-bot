@@ -130,15 +130,15 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  deploy-to-hk:
-    # 镜像构建成功后自动部署到 hk 生产（仅 push to main 触发）
+  deploy-to-tencent:
+    # 镜像构建成功后自动部署到腾讯轻量云生产（仅 push to main 触发）
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build-and-push
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # 与 cleanup.yml 共用串行组：prune 与 pull 并发会撞 containerd ingest（2026-09-05 踩过）
     concurrency:
-      group: hk-docker-serial
+      group: tencent-docker-serial
       cancel-in-progress: false
     env:
       SSH_HOST: ${{ secrets.XIANYU_DEPLOY_HOST }}
@@ -150,18 +150,18 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Pull image on hk
+      - name: Pull image on tencent
         run: |
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
-            'sudo docker compose -f /home/mango/xianyu-auto-bot/docker-compose.yml pull'
+            'sudo docker compose -f /opt/xianyu-auto-bot/docker-compose.yml pull'
 
-      - name: Recreate container on hk
+      - name: Recreate container on tencent
         run: |
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" \
-            'sudo docker compose -f /home/mango/xianyu-auto-bot/docker-compose.yml up -d --no-build --force-recreate'
+            'sudo docker compose -f /opt/xianyu-auto-bot/docker-compose.yml up -d --no-build --force-recreate'
 
       - name: Health check
-        # 1GB 机冷启动可能 3-5 分钟才 healthy（vault 记录），单次 sleep+curl 会误报红；
+        # 冷启动可能数分钟才 healthy，单次 sleep+curl 会误报红；
         # 循环探测至 healthy，5 分钟仍失败才判红。
         # -f：HTTP >=4xx 视为失败；grep：必须含 "status":"healthy"，防 5xx/降级响应误判
         run: |

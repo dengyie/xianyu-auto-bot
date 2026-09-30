@@ -1,17 +1,17 @@
-name: HK Ops (manual SSH command)
+name: Tencent Ops (manual SSH command)
 
-# hk VPS 的日常运维通道：本机 SSH 直连被 TUN 掐断，主机操作统一走 CI。
+# 腾讯轻量云生产的手动运维通道，与部署任务共用 deploy key。
 # 与 docker-image.yml 的 deploy job 共用同一 deploy key；只应在需要时手动触发。
 on:
   workflow_dispatch:
     inputs:
       command:
-        description: '要在 hk 上执行的 shell 命令（可用 sudo）'
+        description: '要在腾讯轻量云生产机上执行的 shell 命令'
         required: true
         type: string
 
 concurrency:
-  group: hk-docker-serial
+  group: tencent-docker-serial
   cancel-in-progress: false
 
 jobs:
@@ -27,7 +27,7 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Run command on hk
+      - name: Run command on tencent
         env:
           # 供命令经 $HOME_NODE_MIHOMO_CONFIG_B64 引用节点配置（公开仓库：凭据只在
           # secret 里，严禁写进 dispatch input——input 在 run 页面原文可见，2026-09-13 踩过）
@@ -36,9 +36,9 @@ jobs:
           # 经 stdin + bash -s 执行：input 不再嵌入 ssh 参数，双引号/引号配对不再影响
           # 解析。定界符不加引号 = 与旧双引号包裹一致的 runner 侧 $VAR 展开语义
           # （HOME_NODE_MIHOMO_CONFIG_B64 在 runner 展开）。命令体请勿读 stdin。
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" 'bash -s' <<HK_OPS_SCRIPT
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no "$SSH_HOST" 'bash -s' <<TENCENT_OPS_SCRIPT
           ${{ inputs.command }}
-          HK_OPS_SCRIPT
+          TENCENT_OPS_SCRIPT
 
       - name: Cleanup key
         if: always()

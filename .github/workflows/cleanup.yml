@@ -1,26 +1,23 @@
-name: HK Docker Cleanup
+name: Tencent Docker Cleanup
 
-# 悬空镜像清理（发版后旧 latest 变 dangling，1GB 级 VPS 需定期回收）。
-# 机制：deploy key SSH → `sudo -S`（HK_SUDO_PASSWORD 经 stdin，不落日志/参数）；
-# 首次运行会 bootstrap /etc/sudoers.d/xianyu-image-prune（放行本机真实 docker
-# 路径下的 `image prune -f`），此后走 `sudo -n` 无需密码。
-# 2026-09-05 PROBE 实测：hk sudoers 仅精确放行 deploy 的 pull/up 两条。
+# 悬空镜像清理（发版后旧 latest 变 dangling）。
+# 生产已在腾讯轻量云，deploy key 以 root 登录，直接清理无需 sudo 密码。
 on:
   workflow_dispatch:
   schedule:
     - cron: "0 21 * * 1" # UTC 周一 21:00 = 北京时间周二 05:00
 
 concurrency:
-  group: hk-cleanup
+  group: tencent-cleanup
   cancel-in-progress: false
 
 jobs:
   prune-dangling-images:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # 与 deploy-to-hk 共用串行组：prune 与 pull 并发会撞 containerd ingest
+    # 与 deploy-to-tencent 共用串行组：prune 与 pull 并发会撞 containerd ingest
     concurrency:
-      group: hk-docker-serial
+      group: tencent-docker-serial
       cancel-in-progress: false
     env:
       SSH_HOST: ${{ secrets.XIANYU_DEPLOY_HOST }}
@@ -38,13 +35,7 @@ jobs:
           set -o pipefail
           DOCKER_BIN=$($SSH_CMD "$SSH_HOST" 'command -v docker')
           echo "remote docker at: $DOCKER_BIN"
-          if $SSH_CMD "$SSH_HOST" "sudo -n $DOCKER_BIN image prune -f" 2>/dev/null; then
-            echo "pruned via sudoers NOPASSWD"
-          else
-            printf '%s\n' "${{ secrets.HK_SUDO_PASSWORD }}" | $SSH_CMD "$SSH_HOST" 'sudo -S docker image prune -f'
-            printf '%s\n' "${{ secrets.HK_SUDO_PASSWORD }}" | $SSH_CMD "$SSH_HOST" "sudo -S sh -c 'echo \"mango ALL=(root) NOPASSWD: $DOCKER_BIN image prune -f\" > /etc/sudoers.d/xianyu-image-prune && chmod 440 /etc/sudoers.d/xianyu-image-prune && visudo -c'"
-            $SSH_CMD "$SSH_HOST" "sudo -n $DOCKER_BIN image prune -f" && echo "sudoers NOPASSWD verified"
-          fi
+          $SSH_CMD "$SSH_HOST" "$DOCKER_BIN image prune -f"
 
       - name: Report
         run: |
