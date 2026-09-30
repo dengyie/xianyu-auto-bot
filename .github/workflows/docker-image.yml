@@ -153,12 +153,12 @@ jobs:
       - name: Pull image on tencent
         run: |
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o User=root "$SSH_HOST" \
-            'sudo docker compose -f /opt/xianyu-auto-bot/docker-compose.yml pull'
+            'sudo docker compose -f /opt/xianyu-auto-bot/docker-compose.yml pull xianyu-app'
 
       - name: Recreate container on tencent
         run: |
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o User=root "$SSH_HOST" \
-            'sudo docker compose -f /opt/xianyu-auto-bot/docker-compose.yml up -d --no-build --force-recreate'
+            'sudo docker compose -f /opt/xianyu-auto-bot/docker-compose.yml up -d --no-build --no-deps --force-recreate xianyu-app'
 
       - name: Health check
         # 冷启动可能数分钟才 healthy，单次 sleep+curl 会误报红；
