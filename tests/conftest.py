@@ -14,6 +14,14 @@ os.environ.setdefault("SQL_LOG_ENABLED", "false")
 os.environ.setdefault("XY_SLIDER_DRISSION_FALLBACK", "false")
 os.environ.setdefault("XY_SLIDER_REMOTE_ENABLED", "false")
 
+# 让 noVNC 的 /websockify 端点（及其会话鉴权门）在测试环境也注册：
+# 生产里 /usr/share/novnc 存在、该块会执行；Windows 本地测试环境该目录不存在，
+# 整块被跳过，导致鉴权门的运行时行为无法被行为测试覆盖。这里指向一个空的临时
+# 目录——只注册 /websockify，不注册 noVNC 静态页面/挂载（子目录与页面文件都不存在）。
+import tempfile as _tempfile
+_novnc_test_root = _tempfile.mkdtemp(prefix="novnc-test-root-")
+os.environ["NOVNC_WEB_ROOT"] = _novnc_test_root
+
 import reply_server
 
 

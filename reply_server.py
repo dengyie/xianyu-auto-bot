@@ -1062,9 +1062,37 @@ if os.path.isdir(_NOVNC_WEB_ROOT):
             return False
         return user is not None
 
+    def _websockify_origin_allowed(client_ws: WebSocket) -> bool:
+        """跨站 WebSocket 劫持（CSWSH）防御：浏览器握手必带 Origin，须与 Host 同源。
+
+        仅凭 Cookie 的 SameSite=Lax 在部分浏览器/版本下对 WebSocket 握手不生效，
+        这里显式比对 Origin 与 Host 的主机名，跨站页面连上来的 Origin 会被拒绝。
+        非浏览器客户端（curl/脚本）通常不带 Origin，仍放行——它们已持有有效会话
+        Cookie 才能通过上面的会话校验，等价于同源信任。
+        """
+        from urllib.parse import urlsplit
+
+        origin = (client_ws.headers.get('origin') or '').strip()
+        if not origin:
+            return True
+        try:
+            origin_host = urlsplit(origin).hostname
+        except ValueError:
+            return False
+        if not origin_host:
+            return False
+        host = (client_ws.headers.get('host') or '').strip()
+        if not host:
+            return False
+        try:
+            host_name = urlsplit('//' + host).hostname
+        except ValueError:
+            return False
+        return bool(host_name) and origin_host.lower() == host_name.lower()
+
     @app.websocket('/websockify')
     async def _novnc_websockify_proxy(client_ws: WebSocket):
-        if not _websockify_session_authed(client_ws):
+        if not _websockify_session_authed(client_ws) or not _websockify_origin_allowed(client_ws):
             await client_ws.close(code=4401)
             return
         await _proxy_websocket_bidirectional(client_ws, _NOVNC_BACKEND_WS)

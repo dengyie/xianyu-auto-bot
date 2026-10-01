@@ -12,7 +12,7 @@ services:
     ports:
       # 与主 compose 一致：默认仅 loopback
       - "127.0.0.1:8000:8090"
-      # Enable only for trusted local debugging, with VNC_PASSWORD set.
+      # 仅建议本机回环暴露；VNC 鉴权已收口到 /websockify 会话校验，无需 VNC_PASSWORD。
       # - "127.0.0.1:5900:5900"
       # noVNC Web 端口（浏览器手动接管滑块/风控）；同样仅建议本机回环暴露
       # - "127.0.0.1:6080:6080"
@@ -34,7 +34,6 @@ services:
       # - USE_XVFB=true           # 启用 Xvfb 虚拟显示
       # - ENABLE_HEADFUL=true     # 启用有头模式
       - ENABLE_VNC=${ENABLE_VNC:-false}
-      - VNC_PASSWORD=${VNC_PASSWORD:-}
       # - DISPLAY=:99             # 虚拟显示编号
       
       - PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}

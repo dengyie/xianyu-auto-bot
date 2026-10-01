@@ -4,6 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from starlette.websockets import WebSocketDisconnect
+
 import reply_server
 
 
@@ -174,3 +176,42 @@ def test_novnc_public_proxy_contract():
     assert 'max_size=None' in runtime
     assert 'NOVNC_WEB_ROOT' in runtime
     assert 'NOVNC_BACKEND_WS' in runtime
+
+
+def _ws_handshake_outcome(client, headers=None) -> str:
+    """Attempt a /websockify handshake and report 'accepted' vs 'rejected'."""
+    try:
+        with client.websocket_connect('/websockify', headers=headers or {}) as ws:
+            return 'accepted'
+    except WebSocketDisconnect:
+        return 'rejected'
+
+
+def test_websockify_rejects_without_session(client):
+    """未登录（无 auth_token Cookie）必须拒绝，不能把 VNC 流暴露给公网。"""
+    assert _ws_handshake_outcome(client) == 'rejected'
+
+
+def test_websockify_rejects_cross_origin(client, admin_token):
+    """即使带有效会话，跨站 Origin 也必须拒绝（CSWSH 防御）。"""
+    assert _ws_handshake_outcome(client, headers={
+        'cookie': f'auth_token={admin_token}',
+        'origin': 'http://evil.example',
+    }) == 'rejected'
+
+
+def test_websockify_accepts_authenticated_same_origin(client, admin_token):
+    """有效会话 + 同源 Origin 应放行并进入 noVNC 反向代理。"""
+    calls = []
+
+    async def _fake_proxy(client_ws, backend_url):
+        await client_ws.accept()
+        calls.append(backend_url)
+
+    with mock.patch.object(reply_server, '_proxy_websocket_bidirectional', _fake_proxy):
+        assert _ws_handshake_outcome(client, headers={
+            'cookie': f'auth_token={admin_token}',
+            'origin': 'http://testserver',
+        }) == 'accepted'
+
+    assert calls == [reply_server._NOVNC_BACKEND_WS]
