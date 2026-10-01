@@ -978,8 +978,9 @@ if not os.path.exists(uploads_dir):
 # 容器内 websockify 同时在 6080 端口提供 noVNC 静态页 + VNC(5900) 的 WebSocket 代理，
 # 但 6080 未发布到宿主机、也未接入公网隧道，公网域名只到本 FastAPI(8090)。
 # 这里由 FastAPI 承接 noVNC 的静态资源 + /websockify 反向代理，让面板的
-# https://<origin>/vnc.html?autoconnect=1&resize=scale 能直接打开远程桌面；
-# 密码校验仍由 VNC 服务端（x0vncserver 的 VncAuth）承担，不在应用层重复实现。
+# https://<origin>/vnc.html?autoconnect=1&resize=scale 能直接打开远程桌面。
+# VNC 服务端用 -SecurityTypes None（5900/6080 均不发布到宿主机），鉴权统一收口到
+# /websockify 的会话校验（auth_token Cookie），与应用其余路由保持一致。
 _NOVNC_WEB_ROOT = os.environ.get('NOVNC_WEB_ROOT', '/usr/share/novnc')
 _NOVNC_BACKEND_WS = os.environ.get('NOVNC_BACKEND_WS', 'ws://127.0.0.1:6080/websockify')
 
@@ -1045,8 +1046,27 @@ if os.path.isdir(_NOVNC_WEB_ROOT):
         if os.path.isdir(_sub_dir):
             app.mount(f'/{_sub}', StaticFiles(directory=_sub_dir), name=f'novnc_{_sub}')
 
+    def _websockify_session_authed(client_ws: WebSocket) -> bool:
+        """校验 /websockify 的会话（auth_token Cookie），失败返回 False。
+
+        远程桌面的唯一公网入口是本 WebSocket；VNC 服务端已改用 -SecurityTypes None，
+        故这里必须复用与应用其余路由一致的会话校验，避免 VNC 流对公网裸奔。
+        """
+        token = (client_ws.cookies.get('auth_token') or '').strip()
+        if not token:
+            return False
+        try:
+            user = session_service.verify(token, db_manager.get_user_by_id)
+        except Exception as exc:
+            logger.debug(f"/websockify 会话校验异常: {exc}")
+            return False
+        return user is not None
+
     @app.websocket('/websockify')
     async def _novnc_websockify_proxy(client_ws: WebSocket):
+        if not _websockify_session_authed(client_ws):
+            await client_ws.close(code=4401)
+            return
         await _proxy_websocket_bidirectional(client_ws, _NOVNC_BACKEND_WS)
 
 # 健康检查端点

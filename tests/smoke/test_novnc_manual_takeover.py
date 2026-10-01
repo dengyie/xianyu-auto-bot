@@ -105,8 +105,11 @@ def test_novnc_source_contract():
     # VNC 服务端必须用 TigerVNC x0vncserver（x11vnc 0.9.16 + libvncserver 0.9.14
     # 在 Debian 12 上 accept 挂起，连接后不发送 RFB 握手，导致 noVNC 黑屏）
     assert 'x0vncserver' in entry
-    assert 'VncAuth' in entry
-    assert 'vncpasswd' in entry
+    # 5900/6080 均不发布到宿主机，唯一公网入口是 /websockify（应用层会话鉴权），
+    # 故 VNC 服务端用 -SecurityTypes None，不再依赖 VncAuth/vncpasswd 密码文件。
+    assert '-SecurityTypes None' in entry
+    assert '-SecurityTypes VncAuth' not in entry
+    assert 'vncpasswd' not in entry
     # 确保没有残留 x11vnc 的启动命令（注释里说明迁移原因的 "x11vnc" 除外）
     assert 'x11vnc -display' not in entry
 
@@ -163,6 +166,11 @@ def test_novnc_public_proxy_contract():
     assert 'vnc_auto.html' in runtime
     assert "'/websockify'" in runtime
     assert '_proxy_websocket_bidirectional' in runtime
+    # /websockify 是唯一公网入口，必须做会话鉴权（auth_token Cookie），
+    # 否则 -SecurityTypes None 的 VNC 流会对公网裸奔。
+    assert '_websockify_session_authed' in runtime
+    assert "cookies.get('auth_token')" in runtime
+    assert 'session_service.verify' in runtime
     assert 'max_size=None' in runtime
     assert 'NOVNC_WEB_ROOT' in runtime
     assert 'NOVNC_BACKEND_WS' in runtime

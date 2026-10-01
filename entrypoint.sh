@@ -147,18 +147,13 @@ if [ "${USE_XVFB}" = "true" ] || [ "${ENABLE_HEADFUL}" = "true" ]; then
 
         # 可选：启动 VNC 服务器用于远程查看（如果需要）
         if [ "${ENABLE_VNC}" = "true" ]; then
-            if [ -z "${VNC_PASSWORD}" ]; then
-                echo "⚠ VNC_PASSWORD 未设置，拒绝启动 VNC 服务"
-                ENABLE_VNC=false
-            else
             echo "启动 VNC 服务器..."
             # 用 TigerVNC x0vncserver 替代 x11vnc：x11vnc 0.9.16 与 Debian 12 的
             # libvncserver 0.9.14 存在 accept 挂起 bug（端口 LISTEN 但连接后不发送
-            # RFB 握手），导致 noVNC 永远黑屏。x0vncserver 经 vncpasswd 生成 VncAuth
-            # 密码文件，保留原有的密码鉴权语义。
-            VNC_PASSFILE="$(mktemp /tmp/x0vnc-passwd.XXXXXX)"
-            printf '%s\n' "$VNC_PASSWORD" | vncpasswd -f > "$VNC_PASSFILE" 2>/dev/null
-            HOME=/tmp x0vncserver -display $DISPLAY -rfbport 5900 -SecurityTypes VncAuth -PasswordFile "$VNC_PASSFILE" > /tmp/x0vnc.log 2>&1 &
+            # RFB 握手），导致 noVNC 永远黑屏。5900/6080 均不发布到宿主机，唯一公网
+            # 入口是 FastAPI 的 /websockify（已做会话鉴权），因此 VNC 服务端用
+            # -SecurityTypes None，鉴权统一收口到应用层，不再使用 VncAuth/密码文件。
+            HOME=/tmp x0vncserver -display $DISPLAY -rfbport 5900 -SecurityTypes None > /tmp/x0vnc.log 2>&1 &
             VNC_PID=$!
             sleep 1
 
@@ -183,7 +178,6 @@ if [ "${USE_XVFB}" = "true" ] || [ "${ENABLE_HEADFUL}" = "true" ]; then
                 fi
             else
                 echo "⚠ noVNC 未安装，跳过 Web VNC 代理"
-            fi
             fi
         fi
     else
