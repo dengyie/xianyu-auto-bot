@@ -53,11 +53,11 @@ echo ""
 
 # 5. 检查 VNC 进程
 echo "5. 检查 VNC 进程："
-if pgrep -x "x11vnc" > /dev/null; then
-    echo "✓ x11vnc 进程正在运行"
-    ps aux | grep x11vnc | grep -v grep
+if pgrep -x "X0tigervnc" > /dev/null; then
+    echo "✓ VNC 服务器 (x0vncserver/X0tigervnc) 正在运行"
+    ps aux | grep -E "X0tigervnc|x0vncserver" | grep -v grep
 else
-    echo "✗ x11vnc 进程未运行"
+    echo "✗ VNC 服务器未运行"
 fi
 echo ""
 
@@ -81,9 +81,9 @@ else
 fi
 echo ""
 
-if [ -f "/tmp/x11vnc.log" ]; then
-    echo "--- VNC 日志 (/tmp/x11vnc.log) ---"
-    tail -20 /tmp/x11vnc.log
+if [ -f "/tmp/x0vnc.log" ]; then
+    echo "--- VNC 日志 (/tmp/x0vnc.log) ---"
+    tail -20 /tmp/x0vnc.log
 else
     echo "✗ VNC 日志文件不存在"
 fi
@@ -116,7 +116,7 @@ echo "如果 Xvfb 启动失败，请尝试："
 echo ""
 echo "1. 清理旧进程和锁文件："
 echo "   pkill -9 Xvfb"
-echo "   pkill -9 x11vnc"
+echo "   pkill -9 X0tigervnc x0vncserver"
 echo "   rm -f /tmp/.X*-lock"
 echo "   rm -f /tmp/.X11-unix/X*"
 echo ""
@@ -128,7 +128,7 @@ echo "3. 测试显示："
 echo "   xdpyinfo"
 echo ""
 echo "4. 启动 VNC（可选）："
-echo "   x11vnc -display :99 -forever -shared -rfbport 5900 -nopw &"
+echo "   HOME=/tmp x0vncserver -display :99 -rfbport 5900 -SecurityTypes None &"
 echo ""
 echo "5. 重启容器："
 echo "   docker-compose restart"

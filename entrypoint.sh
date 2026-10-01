@@ -90,7 +90,8 @@ if [ "${USE_XVFB}" = "true" ] || [ "${ENABLE_HEADFUL}" = "true" ]; then
     
     # 查找并杀死旧的 Xvfb 进程
     pkill -9 Xvfb 2>/dev/null || true
-    pkill -9 x11vnc 2>/dev/null || true
+    pkill -9 X0tigervnc 2>/dev/null || true
+    pkill -9 x0vncserver 2>/dev/null || true
     
     # 清理锁文件
     rm -f /tmp/.X*-lock 2>/dev/null || true
@@ -151,7 +152,13 @@ if [ "${USE_XVFB}" = "true" ] || [ "${ENABLE_HEADFUL}" = "true" ]; then
                 ENABLE_VNC=false
             else
             echo "启动 VNC 服务器..."
-            x11vnc -display $DISPLAY -forever -shared -rfbport 5900 -passwd "$VNC_PASSWORD" > /tmp/x11vnc.log 2>&1 &
+            # 用 TigerVNC x0vncserver 替代 x11vnc：x11vnc 0.9.16 与 Debian 12 的
+            # libvncserver 0.9.14 存在 accept 挂起 bug（端口 LISTEN 但连接后不发送
+            # RFB 握手），导致 noVNC 永远黑屏。x0vncserver 经 vncpasswd 生成 VncAuth
+            # 密码文件，保留原有的密码鉴权语义。
+            VNC_PASSFILE="$(mktemp /tmp/x0vnc-passwd.XXXXXX)"
+            printf '%s\n' "$VNC_PASSWORD" | vncpasswd -f > "$VNC_PASSFILE" 2>/dev/null
+            HOME=/tmp x0vncserver -display $DISPLAY -rfbport 5900 -SecurityTypes VncAuth -PasswordFile "$VNC_PASSFILE" > /tmp/x0vnc.log 2>&1 &
             VNC_PID=$!
             sleep 1
 
@@ -159,7 +166,7 @@ if [ "${USE_XVFB}" = "true" ] || [ "${ENABLE_HEADFUL}" = "true" ]; then
                 echo "✓ VNC 服务器启动成功 (PID: $VNC_PID, 端口: 5900)"
                 echo "  可以通过 VNC 客户端连接到 <容器IP>:5900 查看浏览器界面"
             else
-                echo "⚠ VNC 服务器启动失败，查看日志: /tmp/x11vnc.log"
+                echo "⚠ VNC 服务器启动失败，查看日志: /tmp/x0vnc.log"
             fi
 
             if command -v websockify >/dev/null 2>&1 && [ -d "/usr/share/novnc" ]; then

@@ -71,7 +71,7 @@ RUN apt-get -o Acquire::Retries=5 update && \
         libxfixes3 \
         xdg-utils \
         xvfb \
-        x11vnc \
+        tigervnc-scraping-server \
         novnc \
         websockify \
         fluxbox \

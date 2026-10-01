@@ -979,7 +979,7 @@ if not os.path.exists(uploads_dir):
 # 但 6080 未发布到宿主机、也未接入公网隧道，公网域名只到本 FastAPI(8090)。
 # 这里由 FastAPI 承接 noVNC 的静态资源 + /websockify 反向代理，让面板的
 # https://<origin>/vnc.html?autoconnect=1&resize=scale 能直接打开远程桌面；
-# 密码校验仍由 x11vnc 的 -passwd 承担，不在应用层重复实现。
+# 密码校验仍由 VNC 服务端（x0vncserver 的 VncAuth）承担，不在应用层重复实现。
 _NOVNC_WEB_ROOT = os.environ.get('NOVNC_WEB_ROOT', '/usr/share/novnc')
 _NOVNC_BACKEND_WS = os.environ.get('NOVNC_BACKEND_WS', 'ws://127.0.0.1:6080/websockify')
 

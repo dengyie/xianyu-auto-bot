@@ -71,7 +71,7 @@ RUN apt-get update && \
         xdg-utils \
         chromium \
         xvfb \
-        x11vnc \
+        tigervnc-scraping-server \
         novnc \
         websockify \
         fluxbox \

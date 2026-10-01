@@ -102,11 +102,20 @@ def test_novnc_source_contract():
     entry = Path('entrypoint.sh').read_text(encoding='utf-8')
     assert 'websockify --web=/usr/share/novnc 6080 localhost:5900' in entry
     assert 'fluxbox' in entry
+    # VNC 服务端必须用 TigerVNC x0vncserver（x11vnc 0.9.16 + libvncserver 0.9.14
+    # 在 Debian 12 上 accept 挂起，连接后不发送 RFB 握手，导致 noVNC 黑屏）
+    assert 'x0vncserver' in entry
+    assert 'VncAuth' in entry
+    assert 'vncpasswd' in entry
+    # 确保没有残留 x11vnc 的启动命令（注释里说明迁移原因的 "x11vnc" 除外）
+    assert 'x11vnc -display' not in entry
 
     dockerfile = Path('Dockerfile').read_text(encoding='utf-8')
     assert 'novnc' in dockerfile
     assert 'websockify' in dockerfile
     assert 'EXPOSE 6080' in dockerfile
+    assert 'tigervnc-scraping-server' in dockerfile
+    assert 'x11vnc' not in dockerfile
 
     compose = Path('docker-compose.yml').read_text(encoding='utf-8')
     assert '6080:6080' in compose
@@ -116,6 +125,8 @@ def test_novnc_source_contract():
     assert 'websockify' in dockerfile_cn
     assert 'fluxbox' in dockerfile_cn
     assert 'EXPOSE 6080' in dockerfile_cn
+    assert 'tigervnc-scraping-server' in dockerfile_cn
+    assert 'x11vnc' not in dockerfile_cn
 
     compose_cn = Path('docker-compose-cn.yml').read_text(encoding='utf-8')
     assert '6080:6080' in compose_cn
