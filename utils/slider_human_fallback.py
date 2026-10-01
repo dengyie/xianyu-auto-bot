@@ -263,11 +263,26 @@ async def run_human_captcha_session(
                         except Exception:
                             cookies = {}
 
+                    # 录制本次人工拖拽轨迹并落盘到 slidex 轨迹池：
+                    # solver 下次自动求解会优先回放（load_best_trajectory 按
+                    # pure_user_id + 距离匹配），实现“记录好我的操作”并复现。
                     try:
                         if hasattr(captcha_controller, "finish_recording"):
-                            captcha_controller.finish_recording(session_id)
-                    except Exception:
-                        pass
+                            recording = captcha_controller.finish_recording(session_id)
+                            if isinstance(recording, dict) and recording.get("points"):
+                                pool = getattr(solver, "_trajectory_pool", None)
+                                if pool is not None and hasattr(pool, "save_trajectory"):
+                                    uid = getattr(solver, "pure_user_id", "") or cookie_id
+                                    pool.save_trajectory(
+                                        recording["points"],
+                                        uid,
+                                        float(recording.get("distance") or 0),
+                                        True,
+                                        verification_url,
+                                        float(recording.get("duration_ms") or 0),
+                                    )
+                    except Exception as rec_e:
+                        logger.debug(f"[{cookie_id}] save human trajectory failed: {rec_e}")
                     try:
                         await captcha_controller.close_session(session_id)
                     except Exception:

@@ -292,6 +292,15 @@ async def run_slider_async_strict(
     **kwargs: Any,
 ) -> SliderVerificationResult:
     """调用异步 slider.async_run/solve，并进行严格 x5sec 判定。"""
+    # 求解前注入人类化轨迹补丁（幂等）：legacy 与 provider 两条合成轨迹链路都换成
+    # 带 X 噪声 + 过冲回拉的真人风格轨迹，见 utils/slidex_patch。slidex 缺失时静默跳过。
+    try:
+        from utils.slidex_patch import apply_slidex_patch
+
+        apply_slidex_patch()
+    except Exception as patch_e:  # pragma: no cover - 兜底，绝不让补丁影响求解
+        logger.debug(f"slidex patch apply failed: {patch_e}")
+
     if _cdp_endpoint_from_env() and hasattr(slider, "solve_on_existing_page"):
         engine = "cdp"
     success, cookies = await _invoke_slider_async(slider, url, **kwargs)
