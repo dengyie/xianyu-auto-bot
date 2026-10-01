@@ -524,6 +524,30 @@ class TestAccounts:
         assert data["status"] == "error"
         assert "任务" in data["message"]
 
+    def test_incomplete_qr_cookie_is_reported_as_error(self, client, user_auth):
+        """真实 Cookie 没落库时，轮询必须是失败，不能因为有 fallback_reason 报成功。"""
+        session_id = "qr_login_incomplete_cookie_failed"
+        reply_server.qr_check_processed[session_id] = {
+            "processed": True,
+            "processing": False,
+            "timestamp": 9999999999,
+            "account_info": {
+                "account_id": "1926782908",
+                "is_new_account": False,
+                "real_cookie_refreshed": False,
+                "task_restarted": False,
+                "fallback_reason": "真实cookie获取失败",
+                "warning_message": "扫码登录未获取完整Cookie，已保留原账号会话: 真实cookie获取失败",
+            },
+        }
+
+        resp = client.get(f"/qr-login/check/{session_id}", headers=user_auth)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "error"
+        assert "未获取完整Cookie" in data["message"]
+
     def test_qr_login_processed_manual_disabled_is_success_not_error(self, client, user_auth):
         """手动禁用账号扫码成功：真 Cookie 已更新，轮询必须报 success 而非 error。"""
         session_id = "qr_login_manual_disabled_success"
@@ -712,6 +736,73 @@ class TestAccounts:
         saved = reply_server.db_manager.get_cookie_details(account_id)
         assert "_m_h5_tk=old-token" in (saved.get("value") or "")
         assert "cookie2=qr" not in (saved.get("value") or "")
+
+    @pytest.mark.asyncio
+    async def test_qr_login_prefers_complete_account_over_partial_unb_duplicate(self, user_auth, monkeypatch):
+        """原账号 UNB 被抹空后，残缺的 UNB_1 不能凭非空 UNB 抢走这次扫码。"""
+        original_id = "1926782908"
+        partial_id = "1926782908_1"
+
+        class FakeXianyuLive:
+            def __init__(self, *args, **kwargs):
+                self.cookies_str = "unb=1926782908; cna=real-cna; _m_h5_tk=real-token"
+
+            async def refresh_cookies_from_qr_login(self, qr_cookies_str, cookie_id=None, user_id=None):
+                assert cookie_id == original_id
+                reply_server.db_manager.update_cookie_account_info(
+                    cookie_id,
+                    cookie_value=self.cookies_str,
+                    user_id=user_id,
+                )
+                return True
+
+            @classmethod
+            def mark_qr_login_grace(cls, *args, **kwargs):
+                return None
+
+            @classmethod
+            def clear_qr_login_grace(cls, *args, **kwargs):
+                return None
+
+            @classmethod
+            def clear_password_login_failure_backoff(cls, *args, **kwargs):
+                return None
+
+        class FakeManager:
+            def __init__(self):
+                self.updated = []
+
+            def update_cookie(self, cookie_id, new_value, save_to_db=True):
+                self.updated.append(cookie_id)
+                future = concurrent.futures.Future()
+                future.set_result(None)
+                return future
+
+        import XianyuAutoAsync
+
+        reply_server.db_manager.save_cookie(
+            original_id,
+            "cookie2=old; _m_h5_tk=old-token; cna=old-cna",
+            user_id=2,
+        )
+        reply_server.db_manager.save_cookie(partial_id, "unb=1926782908; cookie2=partial", user_id=2)
+        fake_manager = FakeManager()
+        monkeypatch.setattr(XianyuAutoAsync, "XianyuLive", FakeXianyuLive)
+        monkeypatch.setattr(reply_server.cookie_manager, "manager", fake_manager)
+
+        result = await reply_server.process_qr_login_cookies(
+            "unb=1926782908; cookie2=qr",
+            "1926782908",
+            {"user_id": 2, "username": "user"},
+        )
+
+        assert result["account_id"] == original_id
+        assert result["is_new_account"] is False
+        assert fake_manager.updated == [original_id]
+        original = reply_server.db_manager.get_cookie_details(original_id)
+        partial = reply_server.db_manager.get_cookie_details(partial_id)
+        assert "cna=real-cna" in (original.get("value") or "")
+        assert "cookie2=partial" in (partial.get("value") or "")
 
 
     @pytest.mark.asyncio

@@ -1887,7 +1887,6 @@ function handleQRCodeSuccess(data) {
         account_id,
         is_new_account,
         real_cookie_refreshed,
-        fallback_reason,
         cookie_length,
         token_prewarmed,
         task_restarted,
@@ -1941,12 +1940,10 @@ function handleQRCodeSuccess(data) {
             showToast(successMessage, 'success');
         }
     } else if (real_cookie_refreshed === false) {
-        successMessage += '\n⚠️ 真实Cookie获取失败，已保存原始扫码Cookie';
-        if (fallback_reason) {
-            successMessage += `\n原因: ${fallback_reason}`;
-        }
-        document.getElementById('statusText').textContent = '登录成功，但使用原始Cookie';
-        showToast(successMessage, 'warning');
+        const failureMessage = warning_message || '真实Cookie获取失败，原始扫码Cookie未保存';
+        document.getElementById('statusText').textContent = '登录失败，账号未更新';
+        showToast(failureMessage, 'danger');
+        return;
     } else {
         // 兼容旧版本，没有真实cookie刷新信息
         document.getElementById('statusText').textContent = '登录成功！';

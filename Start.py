@@ -470,7 +470,11 @@ def _start_api_server():
     try:
         # access_log 关闭：请求日志由 loguru 中间件统一接管（正常 DEBUG/慢 INFO/错 WARNING），
         # 否则 uvicorn access logger 会让探活等逐请求行继续刷 docker logs
-        config = uvicorn.Config("reply_server:app", host=host, port=port, log_level="info", access_log=False)
+        config = uvicorn.Config(
+            "reply_server:app", host=host, port=port, log_level="info", access_log=False,
+            # VNC 全屏帧（1920x1080 原始帧 ~8MB）经 /websockify 透传，需放宽默认 16MB 上限
+            ws_max_size=64 * 1024 * 1024,
+        )
         server = uvicorn.Server(config)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)

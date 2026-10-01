@@ -140,3 +140,18 @@ def test_novnc_source_contract():
     css = Path('static/css/accounts.css').read_text(encoding='utf-8')
     assert '.manual-intervention-alert' in css
     assert '.account-diagnostics-vnc-panel' in css
+
+
+def test_novnc_public_proxy_contract():
+    """reply_server 在公网下能承接 /vnc.html、noVNC 静态资源与 /websockify 代理。"""
+    runtime = Path('reply_server.py').read_text(encoding='utf-8')
+    assert '_NOVNC_WEB_ROOT' in runtime
+    assert '_NOVNC_BACKEND_WS' in runtime
+    assert 'vnc.html' in runtime
+    assert 'vnc_lite.html' in runtime
+    assert 'vnc_auto.html' in runtime
+    assert "'/websockify'" in runtime
+    assert '_proxy_websocket_bidirectional' in runtime
+    assert 'max_size=None' in runtime
+    assert 'NOVNC_WEB_ROOT' in runtime
+    assert 'NOVNC_BACKEND_WS' in runtime

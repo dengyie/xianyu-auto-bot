@@ -1,6 +1,6 @@
-from fastapi import FastAPI, HTTPException, Depends, Request, Header
+from fastapi import FastAPI, HTTPException, Depends, Request, Header, WebSocket
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import List, Tuple, Optional, Dict, Any, Callable, Awaitable
@@ -523,6 +523,14 @@ def _qr_runtime_handoff_error(account_info: Optional[Dict[str, Any]]) -> Optiona
     if account_info.get('manual_disabled_skip_restart'):
         return None
 
+    # 真实 Cookie 未落库时，fallback_reason 只是失败原因，不是可接受的降级成功。
+    if account_info.get('real_cookie_refreshed') is False:
+        return (
+            account_info.get('warning_message')
+            or account_info.get('fallback_reason')
+            or '扫码登录未获取完整Cookie，账号未更新'
+        )
+
     if account_info.get('task_restarted') is False and not account_info.get('fallback_reason'):
         return (
             account_info.get('warning_message')
@@ -965,6 +973,81 @@ uploads_dir = os.path.join(static_dir, 'uploads', 'images')
 if not os.path.exists(uploads_dir):
     os.makedirs(uploads_dir, exist_ok=True)
     logger.info(f"创建图片上传目录: {uploads_dir}")
+
+# ==================== noVNC 远程桌面（公网直连） ====================
+# 容器内 websockify 同时在 6080 端口提供 noVNC 静态页 + VNC(5900) 的 WebSocket 代理，
+# 但 6080 未发布到宿主机、也未接入公网隧道，公网域名只到本 FastAPI(8090)。
+# 这里由 FastAPI 承接 noVNC 的静态资源 + /websockify 反向代理，让面板的
+# https://<origin>/vnc.html?autoconnect=1&resize=scale 能直接打开远程桌面；
+# 密码校验仍由 x11vnc 的 -passwd 承担，不在应用层重复实现。
+_NOVNC_WEB_ROOT = os.environ.get('NOVNC_WEB_ROOT', '/usr/share/novnc')
+_NOVNC_BACKEND_WS = os.environ.get('NOVNC_BACKEND_WS', 'ws://127.0.0.1:6080/websockify')
+
+
+async def _proxy_websocket_bidirectional(client_ws: WebSocket, backend_url: str) -> None:
+    """把浏览器 WebSocket 双向透传到 noVNC 后端（websockify → VNC）。"""
+    import websockets
+
+    requested = client_ws.headers.get('sec-websocket-protocol', '')
+    subprotocol = 'binary' if 'binary' in requested.split(',') else None
+    await client_ws.accept(subprotocol=subprotocol)
+    try:
+        async with websockets.connect(backend_url, subprotocols=['binary'], max_size=None) as backend_ws:
+            async def _client_to_backend():
+                try:
+                    while True:
+                        message = await client_ws.receive()
+                        if message.get('type') == 'websocket.disconnect':
+                            break
+                        payload = message.get('bytes') or message.get('text')
+                        if payload is not None:
+                            await backend_ws.send(payload)
+                except Exception:
+                    pass
+
+            async def _backend_to_client():
+                try:
+                    async for message in backend_ws:
+                        if isinstance(message, bytes):
+                            await client_ws.send_bytes(message)
+                        else:
+                            await client_ws.send_text(message)
+                except Exception:
+                    pass
+
+            t_client = asyncio.create_task(_client_to_backend())
+            t_backend = asyncio.create_task(_backend_to_client())
+            _done, pending = await asyncio.wait(
+                {t_client, t_backend}, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            for task in pending:
+                with suppress(Exception):
+                    await task
+    except Exception as exc:
+        logger.debug(f"noVNC WebSocket 代理异常: {exc}")
+
+
+if os.path.isdir(_NOVNC_WEB_ROOT):
+    def _make_novnc_page_handler(full_path: str):
+        async def _handler():
+            return FileResponse(full_path)
+        return _handler
+
+    # noVNC 页面用相对路径引用 app/core/vendor 等子目录，所以子目录挂到根路径下同名前缀。
+    for _page in ('vnc.html', 'vnc_lite.html', 'vnc_auto.html'):
+        _full_path = os.path.join(_NOVNC_WEB_ROOT, _page)
+        if os.path.isfile(_full_path):
+            app.get(f'/{_page}', include_in_schema=False)(_make_novnc_page_handler(_full_path))
+
+    for _sub in ('app', 'core', 'vendor', 'include', 'utils'):
+        _sub_dir = os.path.join(_NOVNC_WEB_ROOT, _sub)
+        if os.path.isdir(_sub_dir):
+            app.mount(f'/{_sub}', StaticFiles(directory=_sub_dir), name=f'novnc_{_sub}')
+
+    @app.websocket('/websockify')
+    async def _novnc_websockify_proxy(client_ws: WebSocket):
+        await _proxy_websocket_bidirectional(client_ws, _NOVNC_BACKEND_WS)
 
 # 健康检查端点
 @app.get('/health/live')
@@ -3505,22 +3588,45 @@ async def _run_qr_login_lite(session_id: str, current_user: Dict[str, Any]):
         state['finished_at'] = time.time()
 
 
+def _qr_cookie_session_rank(cookie_dict: Dict[str, Any]) -> tuple:
+    """完整会话优先于只带 UNB、缺令牌的残缺扫码 Cookie。"""
+    required = ('unb', '_m_h5_tk', '_m_h5_tk_enc', 'cookie2', 'sgcookie', 't', 'cna')
+    present = sum(1 for key in required if str(cookie_dict.get(key) or '').strip())
+    has_token = bool(str(cookie_dict.get('_m_h5_tk') or '').strip())
+    has_cna = bool(str(cookie_dict.get('cna') or '').strip())
+    return (int(has_token and has_cna), present, len(cookie_dict))
+
+
 def _match_existing_qr_account(existing_cookies: Dict[str, str], unb: str):
-    """按有效 UNB 匹配；UNB 被空值抹掉时，回退到与 UNB 相同的账号 ID。"""
+    """按有效 UNB 匹配；同 UNB 有多条时选完整会话。
+
+    UNB 被空值抹掉时，回退到与 UNB 相同的账号 ID。残缺的 `UNB_1`
+    不能因为自己带着非空 UNB 而抢走原账号。
+    """
+    unb_matches = []
     blank_unb_account_id = None
     blank_unb_cookie_value = None
+    blank_unb_rank = None
     for account_id, cookie_value in existing_cookies.items():
         try:
             existing_cookie_dict = trans_cookies(cookie_value)
         except Exception:
             existing_cookie_dict = {}
+        rank = _qr_cookie_session_rank(existing_cookie_dict)
         if existing_cookie_dict.get('unb') == unb:
-            return account_id, cookie_value, 'unb'
-        if account_id == unb and not existing_cookie_dict.get('unb') and blank_unb_account_id is None:
-            blank_unb_account_id = account_id
-            blank_unb_cookie_value = cookie_value
-    if blank_unb_account_id:
-        return blank_unb_account_id, blank_unb_cookie_value, 'account_id'
+            unb_matches.append((rank, account_id, cookie_value))
+        if account_id == unb and not existing_cookie_dict.get('unb'):
+            if blank_unb_rank is None or rank > blank_unb_rank:
+                blank_unb_rank = rank
+                blank_unb_account_id = account_id
+                blank_unb_cookie_value = cookie_value
+    if unb_matches or blank_unb_account_id:
+        candidates = list(unb_matches)
+        if blank_unb_account_id:
+            candidates.append((blank_unb_rank, blank_unb_account_id, blank_unb_cookie_value))
+        _rank, account_id, cookie_value = max(candidates, key=lambda item: item[0])
+        reason = 'unb' if any(item[1] == account_id for item in unb_matches) else 'account_id'
+        return account_id, cookie_value, reason
     return None, None, None
 
 
@@ -3850,6 +3956,7 @@ async def _fallback_save_qr_cookie(account_id: str, cookies: str, user_id: int, 
                 'task_restarted': False,
                 'fallback_reason': error_reason,
                 'warning_message': f"扫码登录未获取完整Cookie，未创建账号: {error_reason}",
+                'error_message': f"扫码登录未获取完整Cookie，未创建账号: {error_reason}",
                 'cookie_length': len(cookies),
             }
 
@@ -3866,6 +3973,7 @@ async def _fallback_save_qr_cookie(account_id: str, cookies: str, user_id: int, 
             'task_restarted': False,
             'fallback_reason': error_reason,
             'warning_message': f"扫码登录未获取完整Cookie，已保留原账号会话: {error_reason}",
+            'error_message': f"扫码登录未获取完整Cookie，已保留原账号会话: {error_reason}",
             'cookie_length': len(cookies),
         }
 
