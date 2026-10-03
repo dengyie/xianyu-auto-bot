@@ -858,12 +858,95 @@ class NotificationMixin:
 class MessagePipelineMixin:
     """消息队列/去重/回复状态机/看门狗/handle_message 热路径。"""
 
+    def _resolve_message_stream_watchdog_settings(self) -> Dict[str, Any]:
+        """解析业务流看门狗参数：env > DB system_setting > RISK_CONTROL > 默认值。
+
+        仅在实例初始化与每次看门狗开火后调用，避免 15 秒轮询里反复读 DB。
+        """
+        def _env_int(env_name: str, minimum: int) -> Optional[int]:
+            raw = os.environ.get(env_name)
+            if raw is None or str(raw).strip() == '':
+                return None
+            try:
+                return max(minimum, int(float(str(raw).strip())))
+            except (TypeError, ValueError):
+                return None
+
+        def _db_int(system_key: str, minimum: int) -> Optional[int]:
+            try:
+                raw = _db_package().get_system_setting(system_key)
+            except Exception:
+                return None
+            if raw is None or str(raw).strip() == '':
+                return None
+            try:
+                return max(minimum, int(float(str(raw).strip())))
+            except (TypeError, ValueError):
+                return None
+
+        risk_control = getattr(_host, 'RISK_CONTROL', None) or {}
+        numeric_specs = (
+            ('timeout_seconds', 'XY_MESSAGE_STREAM_WATCHDOG_TIMEOUT', 1800, 300),
+            ('max_backoff_multiplier', 'XY_MESSAGE_STREAM_WATCHDOG_MAX_MULTIPLIER', 4, 1),
+            ('justify_window_seconds', 'XY_MESSAGE_STREAM_WATCHDOG_JUSTIFY_WINDOW', 90, 10),
+        )
+        settings: Dict[str, Any] = {'notify_on_idle': False}
+        for field, env_name, default, minimum in numeric_specs:
+            value = _env_int(env_name, minimum)
+            if value is None:
+                value = _db_int(f'risk_control_message_stream_watchdog_{field}', minimum)
+            if value is None:
+                try:
+                    value = max(minimum, int(float(str(risk_control.get(f'message_stream_watchdog_{field}', default)))))
+                except (TypeError, ValueError):
+                    value = default
+            settings[field] = value
+
+        notify_raw = os.environ.get('XY_MESSAGE_STREAM_WATCHDOG_NOTIFY_ON_IDLE')
+        if notify_raw is None or str(notify_raw).strip() == '':
+            notify_raw = None
+            try:
+                db_raw = _db_package().get_system_setting('risk_control_message_stream_watchdog_notify_on_idle')
+                if db_raw is not None and str(db_raw).strip() != '':
+                    notify_raw = db_raw
+            except Exception:
+                pass
+        if notify_raw is not None:
+            settings['notify_on_idle'] = str(notify_raw).strip().lower() in {'1', 'true', 'yes', 'on'}
+        else:
+            settings['notify_on_idle'] = bool(risk_control.get('message_stream_watchdog_notify_on_idle', False))
+        return settings
+
+    @staticmethod
+    def _stream_watchdog_effective_timeout(settings: Optional[Dict[str, Any]], idle_streak: int) -> int:
+        """空闲自适应检测阈值：基准超时 × min(1+空闲退避级数, 上限倍数)。"""
+        base = max(1, int((settings or {}).get('timeout_seconds', 1800) or 1800))
+        cap = max(1, int((settings or {}).get('max_backoff_multiplier', 4) or 4))
+        return base * min(1 + max(0, int(idle_streak or 0)), cap)
+
+    def _stream_watchdog_settle_previous_fire(self, now: float) -> int:
+        """结算上一次开火：举证窗口过期仍无业务帧 → 判定为空闲误判，退避 +1。"""
+        deadline = getattr(self, 'stream_watchdog_pending_justify_deadline', 0) or 0
+        if deadline and now > deadline:
+            self.stream_watchdog_idle_streak = max(
+                0, int(getattr(self, 'stream_watchdog_idle_streak', 0) or 0)
+            ) + 1
+            self.stream_watchdog_pending_justify_deadline = 0
+        return max(0, int(getattr(self, 'stream_watchdog_idle_streak', 0) or 0))
+
     def _mark_non_heartbeat_message(self, received_at: Optional[float] = None, *, is_sync_package: bool = False):
-        """记录最近一次非心跳业务包时间。"""
+        """记录最近一次非心跳业务包时间。
+
+        任一业务帧到达都证明链路正在投递，故空闲退避立即复位（否则账号转活跃后仍会停在
+        最大退避档位）；重连后的举证窗口仅用于决定何时结算"空闲误判"，见
+        _stream_watchdog_settle_previous_fire。
+        """
         now = received_at or time.time()
         self.last_non_heartbeat_message_time = now
         if is_sync_package:
             self.last_sync_package_time = now
+        self.stream_watchdog_idle_streak = 0
+        self.stream_watchdog_pending_justify_deadline = 0
         if self.stream_watchdog_trigger_times:
             self.stream_watchdog_trigger_times.clear()
     def _record_message_stream_watchdog_trigger(self, occurred_at: Optional[float] = None) -> int:
@@ -875,9 +958,15 @@ class MessagePipelineMixin:
         self.stream_watchdog_trigger_times.append(now)
         return len(self.stream_watchdog_trigger_times)
     async def _maybe_notify_message_stream_stale(self, occurred_at: float, connected_for: float, business_idle: float):
-        """仅在短时间重复触发时发送业务流假在线通知，避免单次波动刷屏。"""
+        """仅在短时间重复触发时发送业务流假在线通知，并对已判定空闲的账号降噪。"""
         trigger_count = self._record_message_stream_watchdog_trigger(occurred_at)
         if trigger_count < 2:
+            return
+
+        settings = getattr(self, '_stream_watchdog_settings', None) or {}
+        idle_streak = max(0, int(getattr(self, 'stream_watchdog_idle_streak', 0) or 0))
+        if idle_streak >= 1 and not settings.get('notify_on_idle', False):
+            # 已确认是长期无业务流量的空闲账号，重连属正常退避，不再告警刷屏
             return
 
         window_minutes = max(1, int(self.message_stream_notification_window // 60))
@@ -898,7 +987,12 @@ class MessagePipelineMixin:
         )
         await self.send_token_refresh_notification(notification_message, "message_stream_stale")
     async def message_stream_watchdog_loop(self):
-        """检测“只有心跳、没有业务包”的假在线状态。"""
+        """检测“只有心跳、没有业务包”的假在线状态。
+
+        空闲账号（本就无业务流量）与半死连接无法从单一信号区分，故采用事后举证：
+        重连后 justify 窗口内若到达业务帧，说明确实丢过数据，退避复位；若窗口内仍无任何
+        业务帧，则判为空闲误判，逐次拉长检测阈值，避免对空闲号无谓地周期性重连。
+        """
         heartbeat_stale_timeout = max(self.heartbeat_timeout * 2, self.heartbeat_interval * 3)
         try:
             while True:
@@ -922,6 +1016,11 @@ class MessagePipelineMixin:
                     if connected_for < self.stream_watchdog_grace_period:
                         continue
 
+                    # 结算上一次开火：举证窗口内无业务帧则视为空闲误判并拉长退避
+                    idle_streak = self._stream_watchdog_settle_previous_fire(now)
+                    settings = getattr(self, '_stream_watchdog_settings', None) or {}
+                    effective_timeout = self._stream_watchdog_effective_timeout(settings, idle_streak)
+
                     if not self.last_heartbeat_response:
                         continue
 
@@ -931,16 +1030,21 @@ class MessagePipelineMixin:
 
                     last_business_at = self.last_non_heartbeat_message_time or self.last_successful_connection
                     business_idle = now - last_business_at
-                    if business_idle < self.message_stream_watchdog_timeout:
+                    if business_idle < effective_timeout:
                         continue
 
                     if (
                         self.last_stream_watchdog_reconnect_time
-                        and now - self.last_stream_watchdog_reconnect_time < self.message_stream_watchdog_timeout / 2
+                        and now - self.last_stream_watchdog_reconnect_time < effective_timeout / 2
                     ):
                         continue
 
                     self.last_stream_watchdog_reconnect_time = now
+                    # 记下本次重连的举证截止时间：到期仍无任何业务帧 → 判定空闲误判并 +1（有帧则已复位）
+                    justify_window = max(10, int(settings.get('justify_window_seconds', 90) or 90))
+                    self.stream_watchdog_pending_justify_deadline = now + justify_window
+                    # 参数可能被 DB/环境在运行期调整，开火时重新解析（每窗口最多一次）
+                    self._stream_watchdog_settings = self._resolve_message_stream_watchdog_settings()
                     if self.last_sync_package_time:
                         sync_status = f"最近同步包距今{(now - self.last_sync_package_time):.0f}秒"
                     else:
@@ -953,6 +1057,7 @@ class MessagePipelineMixin:
                     logger.warning(
                         f"【{self.cookie_id}】检测到业务流疑似假在线: "
                         f"已连接{connected_for:.0f}秒，最近非心跳业务包距今{business_idle:.0f}秒，{sync_status}{user_chat_status}"
+                        f"（空闲退避档位 {idle_streak}，当前判定阈值 {effective_timeout}秒）"
                     )
                     await self._force_websocket_reconnect("业务消息流长时间只有心跳，疑似假在线")
                     await self._maybe_notify_message_stream_stale(now, connected_for, business_idle)

@@ -1974,6 +1974,9 @@ def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
         'message_stream_ready': False,
         'message_stream_status': 'not_running',
         'message_stream_note': None,
+        'message_stream_watchdog_timeout_seconds': None,
+        'message_stream_watchdog_idle_streak': 0,
+        'message_stream_idle_backoff': False,
         'token_refresh_status': None,
         'token_refresh_error_message': None,
         'token_last_refreshed_at': None,
@@ -2079,6 +2082,13 @@ def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
     session_keepalive_retry_interval = max(30, int(getattr(live_instance, 'session_keepalive_retry_interval', 180) or 180))
     stream_watchdog_grace_period = max(30, int(getattr(live_instance, 'stream_watchdog_grace_period', heartbeat_interval * 4) or heartbeat_interval * 4))
     message_stream_watchdog_timeout = max(60, int(getattr(live_instance, 'message_stream_watchdog_timeout', session_keepalive_interval * 3) or session_keepalive_interval * 3))
+    stream_watchdog_idle_streak = max(0, int(getattr(live_instance, 'stream_watchdog_idle_streak', 0) or 0))
+    stream_watchdog_settings = getattr(live_instance, '_stream_watchdog_settings', None) or {}
+    try:
+        stream_watchdog_backoff_cap = max(1, int(stream_watchdog_settings.get('max_backoff_multiplier', 4) or 4))
+    except (TypeError, ValueError):
+        stream_watchdog_backoff_cap = 4
+    message_stream_watchdog_effective_timeout = message_stream_watchdog_timeout * min(1 + stream_watchdog_idle_streak, stream_watchdog_backoff_cap)
 
     ws_ready_window = max(heartbeat_timeout * 2, heartbeat_interval * 3, 45)
     recent_connection_window = max(heartbeat_interval + 5, 20)
@@ -2155,7 +2165,7 @@ def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
 
     recent_watchdog_reconnect = _is_runtime_timestamp_recent(
         last_stream_watchdog_reconnect_at,
-        message_stream_watchdog_timeout,
+        message_stream_watchdog_effective_timeout,
     )
     stream_stale_now = bool(
         ws_ready
@@ -2163,7 +2173,7 @@ def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
         and connected_for_seconds is not None
         and connected_for_seconds >= stream_watchdog_grace_period
         and business_idle_seconds is not None
-        and business_idle_seconds >= message_stream_watchdog_timeout
+        and business_idle_seconds >= message_stream_watchdog_effective_timeout
     )
 
     if connection_state_value in {'connecting', 'reconnecting'}:
@@ -2217,6 +2227,10 @@ def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
             message_stream_note_parts.append(sync_note)
     else:
         message_stream_note_parts.append(sync_note)
+    if stream_watchdog_idle_streak >= 1:
+        message_stream_note_parts.append(
+            f"业务流空闲，假在线检测已放宽至{max(1, int(message_stream_watchdog_effective_timeout // 60))}分钟"
+        )
     message_stream_note = ' · '.join(message_stream_note_parts)
 
     manual_browser_status = None
@@ -2260,6 +2274,9 @@ def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
         'message_stream_ready': message_stream_ready,
         'message_stream_status': message_stream_status,
         'message_stream_note': message_stream_note,
+        'message_stream_watchdog_timeout_seconds': int(message_stream_watchdog_effective_timeout),
+        'message_stream_watchdog_idle_streak': stream_watchdog_idle_streak,
+        'message_stream_idle_backoff': stream_watchdog_idle_streak >= 1,
         'token_cached': token_cached,
         'token_refresh_status': token_refresh_status,
         'token_refresh_error_message': getattr(live_instance, 'last_token_refresh_error_message', None),
