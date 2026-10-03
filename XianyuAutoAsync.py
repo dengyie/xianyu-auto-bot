@@ -999,7 +999,11 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
         self.stream_watchdog_task = None
         self.stream_watchdog_check_interval = max(self.heartbeat_interval, 15)
         self.stream_watchdog_grace_period = max(self.heartbeat_interval * 4, 120)
-        self.message_stream_watchdog_timeout = max(self.session_keepalive_interval * 3, 1800)
+        # 业务流看门狗的空闲自适应退避状态（跨重连存活，见 MessagePipelineMixin）
+        self.stream_watchdog_idle_streak = 0
+        self.stream_watchdog_pending_justify_deadline = 0
+        self._stream_watchdog_settings = self._resolve_message_stream_watchdog_settings()
+        self.message_stream_watchdog_timeout = self._stream_watchdog_settings['timeout_seconds']
         self.stream_watchdog_trigger_times = deque(maxlen=8)
         self.message_stream_notification_window = max(self.message_stream_watchdog_timeout * 2, 3600)
         self.message_stream_notification_cooldown = max(self.message_stream_watchdog_timeout, 1800)
@@ -2431,11 +2435,17 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
         x5sec_cookies = dict(human_result.x5_cookies or {})
         merge_result = self.protected_merge_cookie_dicts(current_cookies_dict, cookies)
         updated_cookies = merge_result["merged_cookies_dict"]
+        for x5_key, x5_value in x5sec_cookies.items():
+            if str(x5_value or "").strip():
+                updated_cookies[x5_key] = x5_value
         updated_fields = merge_result["updated_fields"]
         changed_fields = merge_result["changed_fields"]
         new_fields = merge_result["new_fields"]
         preserved_protected_fields = merge_result["preserved_protected_fields"]
-        missing_required_fields = merge_result["missing_required_fields"]
+        missing_required_fields = [
+            key for key in REQUIRED_SESSION_COOKIE_FIELDS
+            if not str(updated_cookies.get(key) or "").strip()
+        ]
         cookies_str = "; ".join([f"{k}={v}" for k, v in updated_cookies.items()])
 
         self._log_cookie_merge_summary(
@@ -2447,14 +2457,20 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
             preserved_protected_fields=preserved_protected_fields,
         )
         if missing_required_fields:
-            logger.error(f"[{self.cookie_id}] cookie missing required fields after human captcha")
-            log_captcha_event(
-                self.cookie_id,
-                "slider_human_missing_fields",
-                False,
-                f"missing={missing_required_fields}",
-            )
-            return None
+            if str(updated_cookies.get("x5sec") or "").strip():
+                logger.warning(
+                    f"[{self.cookie_id}] cookie missing required fields after human captcha "
+                    f"({missing_required_fields}), but x5sec is present — keep ticket"
+                )
+            else:
+                logger.error(f"[{self.cookie_id}] cookie missing required fields after human captcha")
+                log_captcha_event(
+                    self.cookie_id,
+                    "slider_human_missing_fields",
+                    False,
+                    f"missing={missing_required_fields}",
+                )
+                return None
 
         try:
             old_cookies_str = self.cookies_str
@@ -2569,11 +2585,17 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
 
                     merge_result = self.protected_merge_cookie_dicts(current_cookies_dict, cookies)
                     updated_cookies = merge_result["merged_cookies_dict"]
+                    for x5_key, x5_value in x5sec_cookies.items():
+                        if str(x5_value or "").strip():
+                            updated_cookies[x5_key] = x5_value
                     updated_fields = merge_result["updated_fields"]
                     changed_fields = merge_result["changed_fields"]
                     new_fields = merge_result["new_fields"]
                     preserved_protected_fields = merge_result["preserved_protected_fields"]
-                    missing_required_fields = merge_result["missing_required_fields"]
+                    missing_required_fields = [
+                        key for key in REQUIRED_SESSION_COOKIE_FIELDS
+                        if not str(updated_cookies.get(key) or "").strip()
+                    ]
                     cookies_str = "; ".join([f"{k}={v}" for k, v in updated_cookies.items()])
 
                     self._log_cookie_merge_summary(
@@ -2583,8 +2605,14 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
                     )
 
                     if missing_required_fields:
-                        logger.error(f"[{self.cookie_id}] cookie missing required fields after slider")
-                        return None
+                        if str(updated_cookies.get("x5sec") or "").strip():
+                            logger.warning(
+                                f"[{self.cookie_id}] cookie missing required fields after slider "
+                                f"({missing_required_fields}), but x5sec is present — keep ticket"
+                            )
+                        else:
+                            logger.error(f"[{self.cookie_id}] cookie missing required fields after slider")
+                            return None
 
                     try:
                         old_cookies_str = self.cookies_str
