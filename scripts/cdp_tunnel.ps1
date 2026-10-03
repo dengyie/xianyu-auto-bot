@@ -19,7 +19,7 @@
 #      powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File "<仓库路径>\scripts\cdp_tunnel.ps1"
 
 param(
-    [string]$SshHost = "hk",
+    [string]$SshHost = "tencent-lh",
     [int]$LocalPort = 9222,
     # 只绑定 VPS 的 docker 网桥内网地址：容器可达、公网不可达（无鉴权 CDP 严禁 0.0.0.0 暴露）
     [string]$RemoteBind = "172.19.0.1:9222"
