@@ -158,6 +158,62 @@ function formatGraceRemainingText(seconds) {
     return minutes > 0 ? `${minutes}分${secs}秒` : `${secs}秒`;
 }
 
+// 稳定期倒计时的客户端心跳。
+// 服务端每次请求都按 qr_grace_until（绝对截止时间）现算剩余秒数，但账号管理列表只在
+// 手动操作时 loadCookies()，不会自动重拉——徽章会一直停在最后一次渲染的秒数。
+// 这里用绝对截止时间在本地每秒重算，不依赖列表刷新，倒计时即可正常下降。
+let qrGraceCountdownTimer = null;
+
+function getQrGraceUntil(runtimeStatus) {
+    const until = Number(runtimeStatus?.qr_grace_until);
+    return Number.isFinite(until) && until > 0 ? until : 0;
+}
+
+function getQrGraceRemainingSeconds(untilEpoch) {
+    const until = Number(untilEpoch);
+    if (!Number.isFinite(until) || until <= 0) {
+        return 0;
+    }
+    return Math.max(0, Math.floor(until - Date.now() / 1000));
+}
+
+function refreshQrGraceCountdowns() {
+    const nodes = document.querySelectorAll('[data-qr-grace-until]');
+    if (!nodes.length) {
+        if (qrGraceCountdownTimer) {
+            clearInterval(qrGraceCountdownTimer);
+            qrGraceCountdownTimer = null;
+        }
+        return;
+    }
+    let expired = false;
+    nodes.forEach((node) => {
+        const remaining = getQrGraceRemainingSeconds(node.getAttribute('data-qr-grace-until'));
+        const text = remaining > 0 ? formatGraceRemainingText(remaining) : '即将恢复连接';
+        if (node.tagName === 'OPTION') {
+            const prefix = node.getAttribute('data-qr-grace-prefix') || '';
+            node.textContent = `${prefix}稳定期保护中（剩余 ${text}）`;
+        } else {
+            const target = node.querySelector('.qr-grace-remaining') || node;
+            target.textContent = text;
+        }
+        if (remaining <= 0) {
+            expired = true;
+            node.removeAttribute('data-qr-grace-until');
+        }
+    });
+    if (expired && document.getElementById('accounts-section')?.classList.contains('active')) {
+        loadCookies();
+    }
+}
+
+function startQrGraceCountdownTicker() {
+    if (qrGraceCountdownTimer) {
+        return;
+    }
+    qrGraceCountdownTimer = setInterval(refreshQrGraceCountdowns, 1000);
+}
+
 function getAccountRuntimeBadge(runtimeStatus) {
     const status = runtimeStatus || {};
     const tokenStatus = String(status.risk_control_status || status.token_refresh_status || '').trim();
@@ -212,6 +268,13 @@ function getAccountRuntimeBadge(runtimeStatus) {
 
 function renderAccountRuntimeBadge(runtimeStatus) {
     const badge = getAccountRuntimeBadge(runtimeStatus);
+    const graceUntil = getQrGraceUntil(runtimeStatus);
+    if (graceUntil) {
+        // 徽章自带截止时间，本地每秒重算，避免列表不刷新时倒计时卡死
+        const remainingText = formatGraceRemainingText(getQrGraceRemainingSeconds(graceUntil));
+        startQrGraceCountdownTicker();
+        return `<span class="badge ${badge.className}" data-qr-grace-until="${graceUntil}" title="${escapeHtmlAttribute(badge.title || '')}">稳定期保护中（剩余 <span class="qr-grace-remaining">${escapeHtml(remainingText)}</span>）</span>`;
+    }
     return `<span class="badge ${badge.className}" title="${escapeHtmlAttribute(badge.title || '')}">${escapeHtml(badge.label)}</span>`;
 }
 
@@ -617,6 +680,12 @@ function populateAboutAccountOptions(accounts) {
         <option value="">请选择账号</option>
         ${accounts.map(account => {
             const runtimeLabel = getAccountRuntimeBadge(account.runtime_status).label;
+            const graceUntil = getQrGraceUntil(account.runtime_status);
+            if (graceUntil) {
+                const remainingText = formatGraceRemainingText(getQrGraceRemainingSeconds(graceUntil));
+                startQrGraceCountdownTicker();
+                return `<option value="${escapeHtml(account.id)}" data-qr-grace-until="${graceUntil}" data-qr-grace-prefix="${escapeHtmlAttribute(`${account.id} · `)}">${escapeHtml(`${account.id} · 稳定期保护中（剩余 ${remainingText}）`)}</option>`;
+            }
             return `<option value="${escapeHtml(account.id)}">${escapeHtml(`${account.id} · ${runtimeLabel}`)}</option>`;
         }).join('')}
     `;
