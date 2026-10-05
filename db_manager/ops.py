@@ -1168,8 +1168,8 @@ Cookie数量: {cookie_count}
                 cursor.execute('''
                     INSERT INTO slider_success_records
                     (run_id, cookie_id, outcome, final_outcome, fingerprint, mode, backend,
-                     channel, slidex_version, duration_ms, bot_context, record_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     channel, egress_ip, slidex_version, duration_ms, bot_context, record_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(run_id) DO UPDATE SET
                         final_outcome = excluded.final_outcome,
                         bot_context = excluded.bot_context,
@@ -1184,6 +1184,7 @@ Cookie数量: {cookie_count}
                     env.get('mode'),
                     env.get('backend'),
                     env.get('channel'),
+                    env.get('egress_ip'),
                     env.get('slidex_version'),
                     duration_ms,
                     bot_context_json,

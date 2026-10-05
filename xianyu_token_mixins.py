@@ -844,6 +844,14 @@ class TokenMixin:
         if not isinstance(record, dict) or not record:
             return
         self._pending_slider_success_record = None
+        # 时效守卫：stash 超过 2 小时视为陈旧——期间会话可能经扫码等无关途径
+        # 恢复，把结局绑定到旧票据上会让"票据→token 成功"归因失真
+        try:
+            if time.time() - float(record.get('ts') or 0) > 7200:
+                logger.debug(f"【{self.cookie_id}】成功链路记录已陈旧（>2h），跳过结局绑定")
+                return
+        except (TypeError, ValueError):
+            pass
         try:
             payload = dict(record)
             payload['bot_context'] = {

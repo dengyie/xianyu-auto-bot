@@ -133,11 +133,12 @@ def _sample_record(run_id="run-test-1"):
         "run_id": run_id,
         "cookie_id": "1926782908",
         "outcome": "voucher_harvest",
+        "ts": time.time(),
         "duration_s": 12.34,
         "voucher": {"bx_voucher_present": True, "x5sec_len": 198, "settle_source": "bx_header"},
         "fingerprint": {"ua": "UA-X", "glRenderer": "ANGLE (Mesa)"},
         "environment": {"mode": "cdp", "backend": "playwright", "channel": None,
-                        "slidex_version": "0.6.29"},
+                        "slidex_version": "0.6.30"},
     }
 
 
@@ -176,6 +177,57 @@ def test_upsert_requires_run_id():
     assert db_manager.upsert_slider_success_record("not-a-dict") is None
 
 
+def test_upsert_writes_egress_ip():
+    from db_manager import db_manager
+    rec = _sample_record("run-egress-1")
+    rec["environment"]["egress_ip"] = "183.193.162.101"
+    try:
+        db_manager.upsert_slider_success_record(rec)
+        rows = db_manager.get_slider_success_records(cookie_id="1926782908")
+        row = next(r for r in rows if r["run_id"] == "run-egress-1")
+        assert row["egress_ip"] == "183.193.162.101"
+    finally:
+        db_manager._execute_sql(
+            db_manager.conn.cursor(), "DELETE FROM slider_success_records WHERE run_id = 'run-egress-1'"
+        )
+        db_manager.conn.commit()
+
+
+def test_finalize_skips_stale_record():
+    """stash 超过 2 小时不绑定结局：会话可能经无关途径恢复，归因会失真。"""
+    from db_manager import db_manager
+    m = _make_live()
+    rec = _sample_record("run-stale-1")
+    rec["ts"] = time.time() - 3 * 3600
+    m.proxy_config = None
+
+    async def _noop(*a, **k):
+        return None
+
+    m._clear_qr_login_grace_period = _noop
+    m.clear_init_auth_failure_state = lambda cid: None
+    m._slider_budget_reset = lambda: None
+    m._consume_pending_slider_success_notice = lambda: False
+    m.send_token_refresh_notification = _noop
+
+    try:
+        payload = dict(rec)
+        payload["bot_context"] = {"final_outcome": "slider_pass"}
+        db_manager.upsert_slider_success_record(payload)
+        m._pending_slider_success_record = rec
+
+        asyncio.run(m._finalize_token_success("token-x", token_path="aiohttp"))
+        assert m._pending_slider_success_record is None  # 消费即清
+        rows = db_manager.get_slider_success_records(cookie_id="1926782908")
+        row = next(r for r in rows if r["run_id"] == "run-stale-1")
+        assert row["final_outcome"] == "slider_pass"  # 结局未被陈旧绑定改写
+    finally:
+        db_manager._execute_sql(
+            db_manager.conn.cursor(), "DELETE FROM slider_success_records WHERE run_id = 'run-stale-1'"
+        )
+        db_manager.conn.commit()
+
+
 def test_capture_slider_success_record_writes_and_stashes():
     from db_manager import db_manager
     m = _make_live()
@@ -192,6 +244,19 @@ def test_capture_slider_success_record_writes_and_stashes():
             db_manager.conn.cursor(), "DELETE FROM slider_success_records WHERE run_id = 'run-capture-1'"
         )
         db_manager.conn.commit()
+
+
+def test_human_panel_path_records_success():
+    """P2-1 回归：人工 captcha 面板成功必须显式组装 success_record——
+    该路径的 solver 手工驱动、不走 solve 入口，0.6.29 曾因此漏记。"""
+    import inspect
+    from utils.slider_human_fallback import run_human_captcha_session
+
+    src = inspect.getsource(run_human_captcha_session)
+    assert '_success_outcome = "human_panel"' in src
+    assert "_maybe_record_success" in src
+    # 组装必须在读取 success_record 之前
+    assert src.find('_success_outcome = "human_panel"') < src.find('getattr(solver, "success_record"')
 
 
 def test_finalize_persists_token_outcome():

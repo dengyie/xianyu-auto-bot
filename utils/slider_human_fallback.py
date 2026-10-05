@@ -291,7 +291,15 @@ async def run_human_captcha_session(
                     session_id = ""
 
                     result = validate_slider_result(True, cookies, engine=HUMAN_ENGINE)
-                    # slidex 0.6.29 成功链路记录：人工路径同样带给宿主入库
+                    if result.success:
+                        # 人工路径的 solver 是手工驱动的（不走 solve 入口），
+                        # success_record 必须在此显式组装——否则人工面板拖过的
+                        # 成功永远不会被记录（review P2-1，0.6.29 的死代码根因）
+                        solver._success_outcome = "human_panel"  # noqa: SLF001
+                        try:
+                            await solver._maybe_record_success(True, cookies)  # noqa: SLF001
+                        except Exception as rec_e:
+                            logger.debug(f"[{cookie_id}] human success record build failed: {rec_e}")
                     record = getattr(solver, "success_record", None)
                     if isinstance(record, dict) and record:
                         result = replace(result, success_record=record)
