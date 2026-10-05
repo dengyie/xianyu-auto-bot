@@ -14,6 +14,7 @@ import asyncio
 import os
 import socket
 import time
+from dataclasses import replace
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
 
 from loguru import logger
@@ -290,6 +291,10 @@ async def run_human_captcha_session(
                     session_id = ""
 
                     result = validate_slider_result(True, cookies, engine=HUMAN_ENGINE)
+                    # slidex 0.6.29 成功链路记录：人工路径同样带给宿主入库
+                    record = getattr(solver, "success_record", None)
+                    if isinstance(record, dict) and record:
+                        result = replace(result, success_record=record)
                     if result.success:
                         logger.success(f"[{cookie_id}] human captcha 通过且含 x5sec")
                     else:

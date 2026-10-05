@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import os
 import requests
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple, Union
@@ -30,6 +30,8 @@ class SliderVerificationResult:
     engine: str
     x5_cookies: Dict[str, Any]
     message: str
+    # slidex 0.6.29 成功链路记录（指纹链路 + 环境快照），随结果带给宿主入库
+    success_record: Optional[Dict[str, Any]] = None
 
     def as_legacy_tuple(self) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """兼容旧调用方的 ``(success, cookies)`` 返回格式。"""
@@ -304,7 +306,12 @@ async def run_slider_async_strict(
     if _cdp_endpoint_from_env() and hasattr(slider, "solve_on_existing_page"):
         engine = "cdp"
     success, cookies = await _invoke_slider_async(slider, url, **kwargs)
-    return validate_slider_result(success, cookies, engine=engine)
+    result = validate_slider_result(success, cookies, engine=engine)
+    # slidex 0.6.29 成功链路记录：随结果带给宿主（无记录/旧版 slidex 时为 None）
+    record = getattr(slider, "success_record", None)
+    if isinstance(record, dict) and record:
+        result = replace(result, success_record=record)
+    return result
 
 
 async def run_slider_async_with_fallback(

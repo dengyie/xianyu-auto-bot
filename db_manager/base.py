@@ -938,6 +938,32 @@ class DBBase:
             )
             ''')
 
+            # 创建滑块成功链路记录表（slidex 0.6.29 success_record schema v1）
+            # 每次"成功过风控"的指纹链路快照：指纹 × 执行环境 × 滑块/票据细节，
+            # final_outcome 从 slider_pass 在 token 刷新成功后更新为 token_success
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS slider_success_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL UNIQUE,
+                cookie_id TEXT,
+                outcome TEXT,
+                final_outcome TEXT DEFAULT 'slider_pass',
+                fingerprint TEXT,
+                mode TEXT,
+                backend TEXT,
+                channel TEXT,
+                egress_ip TEXT,
+                slidex_version TEXT,
+                duration_ms INTEGER,
+                bot_context TEXT,
+                record_json TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            ''')
+            self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_slider_success_records_cookie ON slider_success_records(cookie_id, created_at DESC)")
+            self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_slider_success_records_outcome ON slider_success_records(outcome, final_outcome, created_at DESC)")
+
             # 创建通知模板表
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS notification_templates (

@@ -73,8 +73,9 @@ RISK_CONTROL:
   night_mode_enabled: false
   night_start_hour: 1
   qr_login_grace_minutes: 15
-  post_slider_retry_delay_max: 10.0
-  post_slider_retry_delay_min: 5.0
+  # 滑块成功后的稳定窗口(秒):baxia 会话再评估需分钟级沉淀,拖完即重试会烧掉刚挣到的票据
+  post_slider_retry_delay_max: 75.0
+  post_slider_retry_delay_min: 45.0
   token_refresh_dedup_window_seconds: 60
   token_retry_min_wait_seconds: 180
   # 业务流"假在线"看门狗:空闲自适应退避

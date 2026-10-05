@@ -1137,6 +1137,110 @@ Cookie数量: {cookie_count}
         except Exception as e:
             logger.error(f"添加风控日志失败: {e}")
             return None
+
+    def upsert_slider_success_record(self, record: Any) -> Optional[int]:
+        """按 run_id upsert 滑块成功链路记录（slidex 0.6.29 success_record schema v1）。
+
+        两阶段写入：滑块成功合并 Cookie 时首写（final_outcome='slider_pass'，
+        宿主 ``_capture_slider_success_record``）；token 刷新成功后二次 upsert
+        更新结局（final_outcome='token_success' + token_path，宿主
+        ``_persist_slider_success_record``）。缺 run_id 或异常返回 None。
+        """
+        if not isinstance(record, dict) or not record:
+            return None
+        run_id = str(record.get('run_id') or '').strip()
+        if not run_id:
+            return None
+        env = record.get('environment') if isinstance(record.get('environment'), dict) else {}
+        fingerprint = record.get('fingerprint')
+        bot_context = record.get('bot_context') if isinstance(record.get('bot_context'), dict) else {}
+        duration_s = record.get('duration_s')
+        try:
+            duration_ms = int(float(duration_s) * 1000) if duration_s is not None else None
+        except (TypeError, ValueError):
+            duration_ms = None
+        try:
+            record_json = json.dumps(record, ensure_ascii=False, default=str)
+            fingerprint_json = json.dumps(fingerprint, ensure_ascii=False, default=str) if fingerprint else None
+            bot_context_json = json.dumps(bot_context, ensure_ascii=False, default=str) if bot_context else None
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    INSERT INTO slider_success_records
+                    (run_id, cookie_id, outcome, final_outcome, fingerprint, mode, backend,
+                     channel, slidex_version, duration_ms, bot_context, record_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(run_id) DO UPDATE SET
+                        final_outcome = excluded.final_outcome,
+                        bot_context = excluded.bot_context,
+                        record_json = excluded.record_json,
+                        updated_at = CURRENT_TIMESTAMP
+                ''', (
+                    run_id,
+                    record.get('cookie_id'),
+                    record.get('outcome'),
+                    str(bot_context.get('final_outcome') or 'slider_pass'),
+                    fingerprint_json,
+                    env.get('mode'),
+                    env.get('backend'),
+                    env.get('channel'),
+                    env.get('slidex_version'),
+                    duration_ms,
+                    bot_context_json,
+                    record_json,
+                ))
+                self.conn.commit()
+                if cursor.lastrowid:
+                    return cursor.lastrowid
+                row = cursor.execute(
+                    "SELECT id FROM slider_success_records WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                return row[0] if row else None
+        except Exception as e:
+            logger.error(f"写入滑块成功链路记录失败: {e}")
+            return None
+
+    def get_slider_success_records(self, cookie_id: str = None, limit: int = 50) -> List[Dict[str, Any]]:
+        """查询滑块成功链路记录（新→旧），供面板/分析使用。"""
+        try:
+            limit = max(1, min(int(limit or 50), 500))
+            with self.lock:
+                cursor = self.conn.cursor()
+                if cookie_id:
+                    cursor.execute('''
+                        SELECT id, run_id, cookie_id, outcome, final_outcome, mode, backend,
+                               channel, egress_ip, slidex_version, duration_ms, bot_context,
+                               record_json, created_at
+                        FROM slider_success_records WHERE cookie_id = ?
+                        ORDER BY created_at DESC LIMIT ?
+                    ''', (cookie_id, limit))
+                else:
+                    cursor.execute('''
+                        SELECT id, run_id, cookie_id, outcome, final_outcome, mode, backend,
+                               channel, egress_ip, slidex_version, duration_ms, bot_context,
+                               record_json, created_at
+                        FROM slider_success_records
+                        ORDER BY created_at DESC LIMIT ?
+                    ''', (limit,))
+                rows = cursor.fetchall()
+            result = []
+            for row in rows:
+                item = dict(zip([
+                    'id', 'run_id', 'cookie_id', 'outcome', 'final_outcome', 'mode', 'backend',
+                    'channel', 'egress_ip', 'slidex_version', 'duration_ms', 'bot_context',
+                    'record_json', 'created_at',
+                ], row))
+                for key in ('bot_context', 'record_json'):
+                    try:
+                        item[key] = json.loads(item[key]) if item.get(key) else None
+                    except (TypeError, ValueError):
+                        pass
+                result.append(item)
+            return result
+        except Exception as e:
+            logger.error(f"查询滑块成功链路记录失败: {e}")
+            return []
+
     def update_risk_control_log(self, log_id: int, event_description: str = None,
                               processing_result: str = None, processing_status: str = None,
                               error_message: str = None, session_id: str = None,

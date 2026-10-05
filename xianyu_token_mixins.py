@@ -255,7 +255,7 @@ class TokenMixin:
                                     logger.warning(f"【{self.cookie_id}】Token刷新成功后已更新Cookie到数据库")
 
                                 logger.warning(f"【{self.cookie_id}】Token刷新成功，已重置消息接收时间标识")
-                                return await self._finalize_token_success(res_json['data']['accessToken'])
+                                return await self._finalize_token_success(res_json['data']['accessToken'], token_path='aiohttp')
 
                     # 检查是否需要滑块验证
                     if self._need_captcha_verification(res_json):
@@ -351,6 +351,22 @@ class TokenMixin:
 
                         logger.warning(f"【{self.cookie_id}】检测到需要滑块验证，开始处理...")
 
+                        # 票据沉淀期：刚合并的 x5sec 需要时间被服务端接受。合并后
+                        # 立刻又被重判，说明 baxia 对会话风险分的再评估仍未放行——
+                        # 此时马上发起新求解只会把刚挣到的票据烧成新的风控消耗
+                        # （2026-10-05 生产实锤：拖过后 13s 内两次重试被拒 → 预算
+                        # 烧光 → 整晚 10s 自锤）。安静等完沉淀期再单次重探。
+                        _settle_remaining = self._x5sec_settle_remaining()
+                        if _settle_remaining > 0:
+                            self.last_token_refresh_status = 'x5sec_settling'
+                            self.last_init_failure_reason = 'x5sec_settling'
+                            logger.warning(
+                                f"【{self.cookie_id}】票据已到手但被服务端重判，进入票据沉淀期"
+                                f"（剩余 {_settle_remaining}s）——不发起新求解，避免把刚挣到的"
+                                "x5sec 立刻烧掉；到期后单次重探"
+                            )
+                            raise _host.InitAuthError("Token获取失败(status=x5sec_settling)")
+
                         # 求解预算门控：预算耗尽时不再消耗风控资源（每次被挑战都
                         # 会消耗一次惩罚额度），进入冷却等窗口过后自动放行探测周期
                         _budget_exhausted, _budget_remaining = self._slider_budget_gate()
@@ -399,6 +415,8 @@ class TokenMixin:
 
                             if new_cookies_str:
                                 logger.info(f"【{self.cookie_id}】滑块验证成功，准备重启实例...")
+                                # 票据合并时间戳：票据沉淀期（_x5sec_settle_remaining）起点
+                                self.last_x5sec_merged_at = time.time()
 
                                 # 更新风控日志为成功状态
                                 if 'log_id' in locals() and log_id:
@@ -707,6 +725,13 @@ class TokenMixin:
                         logger.info(f"【{self.cookie_id}】已发送滑块验证相关通知，跳过Token刷新失败通知")
                     return None
 
+        except _host.InitAuthError:
+            # 状态性异常（滑块预算冷却 / 票据沉淀期）必须原样上传：下方通用
+            # 处理器会改写 last_token_refresh_status 并吞掉异常，导致
+            # _calculate_retry_delay 的冷却/沉淀分支永远失效，初始化循环在
+            # 冷却期 10s 一发自锤（2026-10-05 生产实锤，09-28 修复的复发）
+            raise
+
         except Exception as e:
             self.last_token_refresh_status = "token_refresh_exception"
             self.last_token_refresh_error_message = self._safe_str(e)
@@ -789,11 +814,58 @@ class TokenMixin:
         remaining = int(float(state.get('cooldown_until', 0)) - time.time())
         return max(300, remaining) if remaining > 0 else 300
 
-    async def _finalize_token_success(self, new_token: str) -> str:
+    def _x5sec_settle_remaining(self) -> int:
+        """票据沉淀期剩余秒数；0 = 不在沉淀期。
+
+        env ``XY_SLIDER_X5SEC_SETTLE_PERIOD``（默认 300，0 = 关闭）。沉淀期从
+        ``last_x5sec_merged_at``（滑块成功合并时刻）起算：期内再被重判不发起新
+        求解，等 baxia 对会话的再评估消化刚合并的票据。
+        """
+        try:
+            period = max(0, int(float(os.getenv("XY_SLIDER_X5SEC_SETTLE_PERIOD", "300") or 0)))
+        except (TypeError, ValueError):
+            period = 300
+        if period <= 0:
+            return 0
+        merged_at = float(getattr(self, 'last_x5sec_merged_at', 0.0) or 0.0)
+        if merged_at <= 0:
+            return 0
+        return max(0, int(merged_at + period - time.time()))
+
+    async def _persist_slider_success_record(self, token_path: Optional[str] = None) -> None:
+        """把滑块成功链路记录（slidex 0.6.29 success_record）落库并绑定结局。
+
+        主仓 ingest 通道：``_handle_captcha_verification`` 成功时把 slidex 的
+        ``solver.success_record`` 暂存到 ``_pending_slider_success_record``；
+        token 最终成功（本方法，aiohttp/浏览器侧两路共用）或合并失败时调用。
+        记录缺失/写库失败一律静默——可观测性永不影响业务链路。
+        """
+        record = getattr(self, '_pending_slider_success_record', None)
+        if not isinstance(record, dict) or not record:
+            return
+        self._pending_slider_success_record = None
+        try:
+            payload = dict(record)
+            payload['bot_context'] = {
+                'final_outcome': 'token_success',
+                'token_path': token_path,
+                'account_proxy': bool(getattr(self, 'proxy_config', None)),
+            }
+            from db_manager import db_manager
+            db_manager.upsert_slider_success_record(payload)
+            logger.info(
+                f"【{self.cookie_id}】成功链路记录已入库 "
+                f"(run_id={payload.get('run_id')}, outcome={payload.get('outcome')}, final=token_success)"
+            )
+        except Exception as e:
+            logger.debug(f"【{self.cookie_id}】成功链路记录入库失败（忽略）: {e}")
+
+    async def _finalize_token_success(self, new_token: str, token_path: Optional[str] = None) -> str:
         """Token 刷新成功收尾 —— aiohttp 与浏览器侧重试两条路径共用，防漂移。
 
         置位成功状态、清空各类失败/退避标记、重置消息接收时间标识；若存在
         滑块成功挂起通知则发送恢复通知。调用方自行打各自的路径日志。
+        ``token_path``: 'aiohttp' | 'browser'，随成功链路记录落库。
         """
         self.current_token = new_token
         self.last_token_refresh_time = time.time()
@@ -813,6 +885,8 @@ class TokenMixin:
                 "滑块验证通过，账号会话已恢复",
                 "slider_recovered_success",
             )
+        # 成功链路记录：滑块通过的指纹链路 + 最终 token 结局绑定入库
+        await self._persist_slider_success_record(token_path=token_path)
         return new_token
 
     async def _connect_cdp_browser(self, cdp: str):
@@ -919,7 +993,7 @@ class TokenMixin:
                 await self._persist_runtime_cookie_state(cookies_str=merged_str, source="cdp_browser_token_sync")
 
                 logger.warning(f"【{self.cookie_id}】浏览器侧Token刷新成功")
-                return await self._finalize_token_success(access_token)
+                return await self._finalize_token_success(access_token, token_path='browser')
             finally:
                 try:
                     await pw.stop()

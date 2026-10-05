@@ -132,8 +132,10 @@ RISK_CONTROL = config.get('RISK_CONTROL', {
     'backoff_escalation_factor': 1.5,
     'backoff_max_cap_seconds': 3600,
     'consecutive_failure_protection_threshold': 5,
-    'post_slider_retry_delay_min': 5.0,
-    'post_slider_retry_delay_max': 10.0,
+    # 滑块成功后的稳定窗口：默认 45-75s——baxia 对会话风险分的再评估需要
+    # 分钟级沉淀，拖完几秒就重试只会把刚挣到的 x5sec 烧成新罚单（2026-10-05）
+    'post_slider_retry_delay_min': 45.0,
+    'post_slider_retry_delay_max': 75.0,
     'token_refresh_dedup_window_seconds': 60,
     'token_retry_min_wait_seconds': 180,
     'max_post_slider_session_retries': 1,

@@ -748,6 +748,10 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
             # 滑块预算冷却：等窗口过后再允许一个探测周期，防止持续消耗风控资源
             return max(300, self._slider_budget_cooldown_remaining())
 
+        if getattr(self, 'last_token_refresh_status', None) == 'x5sec_settling':
+            # 票据沉淀期：刚合并的 x5sec 需要时间被服务端接受，期内不发起新求解
+            return max(60, self._x5sec_settle_remaining())
+
         if self._is_account_pause_status(getattr(self, 'last_token_refresh_status', None)):
             return max(300, self._compute_token_retry_wait_seconds(current_time))
 
@@ -1076,9 +1080,13 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
         self.last_slider_success_cookie_length = 0
         self.slider_success_reentry_window = 30
         self.post_slider_token_retry_delay = (
-            float(RISK_CONTROL.get('post_slider_retry_delay_min', 5.0) or 5.0),
-            float(RISK_CONTROL.get('post_slider_retry_delay_max', 10.0) or 10.0),
+            float(RISK_CONTROL.get('post_slider_retry_delay_min', 45.0) or 45.0),
+            float(RISK_CONTROL.get('post_slider_retry_delay_max', 75.0) or 75.0),
         )
+        # 票据沉淀期状态：最近一次滑块 x5sec 合并时刻 + 暂存的成功链路记录
+        # （slidex 0.6.29 success_record，token 成功时随结局落库）
+        self.last_x5sec_merged_at = 0.0
+        self._pending_slider_success_record = None
         self.last_password_login_backoff_log_time = 0.0
         self.token_refresh_lock = asyncio.Lock()  # 防止多个入口并发刷新 token
 
@@ -2352,6 +2360,33 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
             logger.error(f"【{self.cookie_id}】检查是否需要滑块验证时出错: {self._safe_str(e)}")
             return False
 
+    def _capture_slider_success_record(self, record) -> None:
+        """首写滑块成功链路记录（slidex 0.6.29 success_record schema v1）。
+
+        滑块成功、Cookie 合并前调用：记录落 ``slider_success_records`` 表
+        （final_outcome='slider_pass'）并暂存实例，token 刷新成功后由
+        ``_persist_slider_success_record`` 二次 upsert 更新结局。缺失/写库
+        失败一律静默——可观测性永不影响业务链路。
+        """
+        self._pending_slider_success_record = None
+        if not isinstance(record, dict) or not record:
+            return
+        self._pending_slider_success_record = record
+        try:
+            payload = dict(record)
+            payload['bot_context'] = {
+                'final_outcome': 'slider_pass',
+                'account_proxy': bool(getattr(self, 'proxy_config', None)),
+            }
+            from db_manager import db_manager
+            db_manager.upsert_slider_success_record(payload)
+            logger.info(
+                f"【{self.cookie_id}】成功链路记录已入库 "
+                f"(run_id={payload.get('run_id')}, outcome={payload.get('outcome')}, final=slider_pass)"
+            )
+        except Exception as e:
+            logger.debug(f"【{self.cookie_id}】成功链路记录首写失败（忽略）: {e}")
+
     async def _run_human_captcha_fallback(
         self,
         *,
@@ -2433,6 +2468,11 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
         cookies = human_result.cookies
         current_cookies_dict = trans_cookies(self.cookies_str)
         x5sec_cookies = dict(human_result.x5_cookies or {})
+        # 成功链路记录：立即落库（final=slider_pass），token 成功后更新结局；
+        # 同时记票据沉淀期起点
+        self._capture_slider_success_record(getattr(human_result, 'success_record', None))
+        if x5sec_cookies:
+            self.last_x5sec_merged_at = time.time()
         merge_result = self.protected_merge_cookie_dicts(current_cookies_dict, cookies)
         updated_cookies = merge_result["merged_cookies_dict"]
         for x5_key, x5_value in x5sec_cookies.items():
@@ -2582,6 +2622,11 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
                     logger.info(f"[{self.cookie_id}] slider success via {strict_result.engine}")
                     current_cookies_dict = trans_cookies(self.cookies_str)
                     x5sec_cookies = dict(strict_result.x5_cookies or {})
+                    # 成功链路记录：立即落库（final=slider_pass），token 成功后更新结局；
+                    # 同时记票据沉淀期起点
+                    self._capture_slider_success_record(getattr(strict_result, 'success_record', None))
+                    if x5sec_cookies:
+                        self.last_x5sec_merged_at = time.time()
 
                     merge_result = self.protected_merge_cookie_dicts(current_cookies_dict, cookies)
                     updated_cookies = merge_result["merged_cookies_dict"]
