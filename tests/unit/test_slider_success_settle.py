@@ -112,6 +112,22 @@ def test_init_auth_error_reraised_before_generic_except():
     assert "raise" in block, "InitAuthError 分支必须 re-raise"
 
 
+def test_captcha_inner_handler_passes_status_exceptions():
+    """生产实锤（2026-10-06 19:36）：滑块成功后的递归重试再被重判时，沉淀期
+    InitAuthError 从递归帧冒泡到外层滑块处理 try，被 `except Exception as
+    captcha_e` 当成"滑块验证处理异常"记账——误设 slider_failed 600s 退避、
+    清掉成功恢复通知、风控日志标 failed。内层必须先放行状态性异常。"""
+    src = inspect.getsource(TokenMixin._refresh_token_impl)
+    guard = "except _host.InitAuthError:"
+    captcha_e = src.find("except Exception as captcha_e:")
+    assert captcha_e != -1, "滑块处理内层 except 缺失"
+    assert src.count(guard) >= 2, "外层通用 except 与内层滑块处理 try 都需要放行"
+    last_guard = src.rfind(guard, 0, captcha_e)
+    between = src[last_guard:captcha_e]
+    assert between.count("except") == 1, "内层放行必须与 captcha_e 处理器同级相邻"
+    assert "raise" in between, "内层放行必须 re-raise"
+
+
 def test_settle_gate_precedes_budget_gate():
     """P2：票据沉淀期判定必须先于预算门控——期内被重判时先沉淀再谈预算。"""
     src = inspect.getsource(TokenMixin._refresh_token_impl)

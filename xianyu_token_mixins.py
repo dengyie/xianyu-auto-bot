@@ -503,6 +503,14 @@ class TokenMixin:
                                 
                                 # 标记已处理，避免后续再发送通用失败通知
                                 notification_sent = True
+                        except _host.InitAuthError:
+                            # 状态性异常（票据沉淀期/滑块预算冷却）从滑块成功后的
+                            # 递归重试里冒上来：滑块本身已经成功，绝不能按
+                            # "滑块验证处理异常" 记账——那会误设 slider_failed 600s
+                            # 退避、清掉成功恢复通知、把风控日志标成 failed
+                            # （2026-10-06 生产实锤：沉淀期异常被此处吞掉记账）。
+                            # 原样上传交由 _calculate_retry_delay 按剩余时间退避。
+                            raise
                         except Exception as captcha_e:
                             logger.error(f"【{self.cookie_id}】滑块验证处理异常: {self._safe_str(captcha_e)}")
                             self._clear_pending_slider_success_notice("滑块验证处理异常")
