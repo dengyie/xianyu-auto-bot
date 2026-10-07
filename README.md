@@ -71,7 +71,7 @@ source venv/bin/activate
 
 # 3. 安装锁定依赖
 pip install --require-hashes -r requirements.lock
-pip install --no-deps "slidex @ git+https://github.com/dengyie/slidex.git@0ac617c"
+pip install --no-deps "slidex @ git+https://github.com/dengyie/slidex.git@0d41893"
 
 # 4. 安装 Playwright 浏览器
 playwright install chromium

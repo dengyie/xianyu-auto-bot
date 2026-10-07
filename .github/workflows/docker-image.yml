@@ -135,7 +135,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build-and-push
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     # 与 cleanup.yml 共用串行组：prune 与 pull 并发会撞 containerd ingest（2026-09-05 踩过）
     concurrency:
       group: tencent-docker-serial
@@ -152,8 +152,20 @@ jobs:
 
       - name: Pull image on tencent
         run: |
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o User=root "$SSH_HOST" \
-            'sudo docker compose -f /opt/xianyu-auto-bot/docker-compose.yml pull xianyu-app'
+          # 腾讯轻量云拉取 GHCR 镜像经跨境链路，偶有超时断流；带重试保证拉取成功
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o User=root "$SSH_HOST" 'bash -s' << 'DEPLOY_SCRIPT'
+          for attempt in 1 2 3; do
+            echo "Pulling xianyu-app image (attempt $attempt)..."
+            if sudo docker compose -f /opt/xianyu-auto-bot/docker-compose.yml pull xianyu-app; then
+              echo "Pull succeeded"
+              exit 0
+            fi
+            echo "Pull attempt $attempt failed, retrying in 15s..."
+            sleep 15
+          done
+          echo "::error::Pull failed after 3 attempts"
+          exit 1
+          DEPLOY_SCRIPT
 
       - name: Recreate container on tencent
         run: |

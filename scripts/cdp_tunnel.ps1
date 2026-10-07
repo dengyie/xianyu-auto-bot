@@ -25,11 +25,28 @@ param(
     [string]$RemoteBind = "172.19.0.1:9222"
 )
 
+# 提取远端端口号供自愈清理
+$remotePort = if ($RemoteBind -match ':(\d+)$') { $Matches[1] } else { $LocalPort }
+
 Write-Host "[cdp-tunnel] reverse tunnel ${SshHost}:${RemoteBind} -> localhost:$LocalPort"
 while ($true) {
+    # 1. 检查本地 Chrome 调试端口可用性
+    try {
+        $null = Invoke-WebRequest -Uri "http://127.0.0.1:$LocalPort/json/version" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+    } catch {
+        Write-Warning "[cdp-tunnel] $(Get-Date -Format 'HH:mm:ss') 本地 Chrome 端口 $LocalPort 未响应，请确保 Chrome 已启动（带 --remote-debugging-port=$LocalPort）"
+    }
+
+    # 2. 远端自愈预检：清理 VPS 上可能残留的僵尸 sshd 端口占用，防止 'remote port forwarding failed'
+    try {
+        ssh -o ConnectTimeout=5 -o BatchMode=yes $SshHost "fuser -k ${remotePort}/tcp 2>/dev/null || true" | Out-Null
+    } catch {
+        # 忽略网络抖动导致的预检报错
+    }
+
     Write-Host "[cdp-tunnel] $(Get-Date -Format 'HH:mm:ss') tunnel starting..."
     ssh -N -R "$($RemoteBind):localhost:$($LocalPort)" `
-        -o ServerAliveInterval=30 -o ServerAliveCountMax=3 `
+        -o ServerAliveInterval=15 -o ServerAliveCountMax=3 `
         -o ExitOnForwardFailure=yes -o ConnectTimeout=20 $SshHost
     Write-Host "[cdp-tunnel] $(Get-Date -Format 'HH:mm:ss') tunnel exited (code=$LASTEXITCODE), reconnecting in 5s..."
     Start-Sleep -Seconds 5
