@@ -20,6 +20,7 @@ from app.api.common import TASK_LOG_TYPE_LABELS, _empty_slider_session_stats, _e
 from app.api import state
 import db_manager
 import reply_server
+from ai_reply_engine import STYLE_VETERAN as AI_STYLE_VETERAN
 from ai_reply_engine import ai_reply_engine
 import auto_updater
 from utils.message_filter_service import message_filter_service
@@ -235,7 +236,7 @@ def create_admin_ops_router() -> APIRouter:
                 result = {"message": "测试成功", "reply": reply}
                 # veteran 档附带商品档案调试信息，便于前端核对资料吸收效果
                 settings = db_manager.db_manager.get_ai_reply_settings(cookie_id)
-                if settings.get('reply_style') == ai_reply_engine.STYLE_VETERAN:
+                if settings.get('reply_style') == AI_STYLE_VETERAN:
                     result['item_brief'] = ai_reply_engine.resolve_item_brief(
                         test_item_info, effective_item_id, settings)
                 return result
