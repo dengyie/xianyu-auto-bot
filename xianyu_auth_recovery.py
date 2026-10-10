@@ -524,7 +524,10 @@ class XianyuAuthRecoveryMixin:
 
     @staticmethod
     def _is_counted_password_login_failure_reason(reason: str) -> bool:
-        return str(reason or '').strip() in {'slider_failed', 'risk_control'}
+        # slider_punish(300 other-punish)与 slider_failed 同等计入连续失败:
+        # 惩罚退避 2x 升级 + 4h 封顶后仍连续命中,说明设备/会话已被持续判罚,
+        # 继续自动重探只会加深惩罚——须累计到阈值触发自动暂停保护。
+        return str(reason or '').strip() in {'slider_failed', 'slider_punish', 'risk_control'}
 
 
     def _get_night_mode_settings(self) -> Dict[str, Any]:
