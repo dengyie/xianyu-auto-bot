@@ -32,6 +32,12 @@ class SliderVerificationResult:
     message: str
     # slidex 0.6.29 成功链路记录（指纹链路 + 环境快照），随结果带给宿主入库
     success_record: Optional[Dict[str, Any]] = None
+    # 最近一次 /slide 判决码（300=other-punish 等）：失败时让宿主区分
+    # "风控惩罚拒绝"与"本地/轨迹失败"，以选择不同退避策略
+    slide_code: Optional[int] = None
+    # slide_code 命中风控惩罚码集合（slidex.PUNISH_SLIDE_CODES）的预判布尔，
+    # 宿主直接消费，避免自行硬编码惩罚码造成双真相源
+    is_punish: bool = False
 
     def as_legacy_tuple(self) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """兼容旧调用方的 ``(success, cookies)`` 返回格式。"""
@@ -311,6 +317,21 @@ async def run_slider_async_strict(
     record = getattr(slider, "success_record", None)
     if isinstance(record, dict) and record:
         result = replace(result, success_record=record)
+    # 最近一次 /slide 判决码：失败时供宿主区分风控惩罚与本地异常
+    slide_code = getattr(slider, "last_slide_code", None)
+    if slide_code is not None:
+        try:
+            result = replace(result, slide_code=int(slide_code))
+        except (TypeError, ValueError):
+            pass
+    try:
+        from slidex._slide_result import is_punish_slide_code
+        if slide_code is not None and is_punish_slide_code(slide_code):
+            result = replace(result, is_punish=True)
+    except ImportError:
+        # 旧版 slidex 无此判据：维持码值透传，宿主侧兜底按码值判断
+        if (result.slide_code or -1) == 300:
+            result = replace(result, is_punish=True)
     return result
 
 

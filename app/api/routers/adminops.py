@@ -202,11 +202,20 @@ def create_admin_ops_router() -> APIRouter:
 
             # 构造测试数据
             test_message = test_data.get('message', '你好')
-            test_item_info = {
-                'title': test_data.get('item_title', '测试商品'),
-                'price': test_data.get('item_price', 100),
-                'desc': test_data.get('item_desc', '这是一个测试商品')
-            }
+            # 可选 item_id：传入则走真实商品档案链路（DB 完整 item_info + brief 缓存）；
+            # 不传则使用三段假商品（引擎形态C兜底），不触发 LLM 消化与缓存
+            test_item_id = (test_data.get('item_id') or '').strip()
+            if test_item_id:
+                test_item_info = db_manager.db_manager.get_item_info(cookie_id, test_item_id)
+                if not test_item_info:
+                    raise HTTPException(status_code=404, detail=f"商品不存在: {test_item_id}")
+            else:
+                test_item_info = {
+                    'title': test_data.get('item_title', '测试商品'),
+                    'price': test_data.get('item_price', 100),
+                    'desc': test_data.get('item_desc', '这是一个测试商品')
+                }
+            effective_item_id = test_item_id or "test_item"
 
             # 生成测试回复（跳过去抖等待）
             # 不变量：chat_id 必须保持 test_ 前缀的合成值（禁止改为真实会话或
@@ -218,12 +227,18 @@ def create_admin_ops_router() -> APIRouter:
                 chat_id=f"test_{int(time.time())}",
                 cookie_id=cookie_id,
                 user_id="test_user",
-                item_id="test_item",
+                item_id=effective_item_id,
                 skip_wait=True
             )
 
             if reply:
-                return {"message": "测试成功", "reply": reply}
+                result = {"message": "测试成功", "reply": reply}
+                # veteran 档附带商品档案调试信息，便于前端核对资料吸收效果
+                settings = db_manager.db_manager.get_ai_reply_settings(cookie_id)
+                if settings.get('reply_style') == ai_reply_engine.STYLE_VETERAN:
+                    result['item_brief'] = ai_reply_engine.resolve_item_brief(
+                        test_item_info, effective_item_id, settings)
+                return result
             else:
                 raise HTTPException(status_code=400, detail="AI回复生成失败")
 

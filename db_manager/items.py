@@ -544,9 +544,11 @@ class DBItemsMixin:
                     if item_info.get('item_detail'):
                         try:
                             item_info['item_detail_parsed'] = json.loads(item_info['item_detail'])
-                        except:
+                        except Exception as exc:
+                            logger.warning(f"item_detail JSON解析失败: {item_id} - {exc}")
                             item_info['item_detail_parsed'] = {}
-                    logger.info(f"item_info: {item_info}")
+                    # 热路径（每条买家消息触发）：降级 debug，避免全量商品数据刷屏
+                    logger.debug(f"item_info: {item_info}")
                     return item_info
                 return None
 

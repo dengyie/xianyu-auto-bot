@@ -1223,6 +1223,19 @@ Cookie数量: {cookie_count}
                 cursor.execute("ALTER TABLE ai_reply_settings ADD COLUMN api_type TEXT DEFAULT ''")
                 logger.info("数据库迁移完成：添加api_type列")
 
+            # v2 回复风格扩展列（docs/AI回复风格重构 §7.1）：
+            # reply_style=veteran/legacy、item_brief_mode=cache_llm/rule_only/off、item_brief_ttl 秒
+            ai_reply_v2_column_defs = {
+                'reply_style': "TEXT DEFAULT 'legacy'",
+                'item_brief_mode': "TEXT DEFAULT 'cache_llm'",
+                'item_brief_ttl': "INTEGER DEFAULT 2592000",
+            }
+            for column_name, column_type in ai_reply_v2_column_defs.items():
+                if column_name not in ai_columns:
+                    logger.info(f"添加ai_reply_settings表的{column_name}列...")
+                    cursor.execute(f"ALTER TABLE ai_reply_settings ADD COLUMN {column_name} {column_type}")
+                    logger.info(f"数据库迁移完成：添加ai_reply_settings.{column_name}列")
+
             # 检查ai_config_presets表是否存在api_type列
             cursor.execute("PRAGMA table_info(ai_config_presets)")
             preset_columns = [column[1] for column in cursor.fetchall()]

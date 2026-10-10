@@ -3945,31 +3945,18 @@ class SendMixin:
                 logger.warning(f"账号 {self.cookie_id} 未启用AI回复")
                 return None
 
-            # 从数据库获取商品信息
+            # 从数据库获取商品信息（整对象透传，由引擎统一解析 item_detail 双形态）
             from db_manager import db_manager
             item_info_raw = _db_package().get_item_info(self.cookie_id, item_id)
 
             if not item_info_raw:
                 logger.warning(f"数据库中无商品信息: {item_id}")
-                # 使用默认商品信息
-                item_info = {
-                    'title': '商品信息获取失败',
-                    'price': 0,
-                    'desc': '暂无商品描述'
-                }
-            else:
-                # 解析数据库中的商品信息
-                item_info = {
-                    'title': item_info_raw.get('item_title', '未知商品'),
-                    'price': self._parse_price(item_info_raw.get('item_price', '0')),
-                    'desc': item_info_raw.get('item_detail', '暂无商品描述')
-                }
 
             # 生成AI回复
             # 由于外部已实现防抖机制，跳过内部等待（skip_wait=True）
             reply = await ai_reply_engine.generate_reply_async(
                 message=send_message,
-                item_info=item_info,
+                item_info=item_info_raw,
                 chat_id=chat_id,
                 cookie_id=self.cookie_id,
                 user_id=send_user_id,

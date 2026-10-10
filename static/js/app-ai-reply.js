@@ -269,6 +269,8 @@ async function configAIReply(accountId) {
     document.getElementById('maxDiscountPercent').value = settings.max_discount_percent;
     document.getElementById('maxDiscountAmount').value = settings.max_discount_amount;
     document.getElementById('maxBargainRounds').value = settings.max_bargain_rounds;
+    document.getElementById('replyStyle').value = settings.reply_style || 'legacy';
+    document.getElementById('itemBriefMode').value = settings.item_brief_mode || 'cache_llm';
     // 解析自定义提示词 JSON，填入三个独立文本框
     let prompts = {};
     if (settings.custom_prompts) {
@@ -277,6 +279,9 @@ async function configAIReply(accountId) {
     document.getElementById('promptPrice').value = prompts.price || '';
     document.getElementById('promptTech').value = prompts.tech || '';
     document.getElementById('promptDefault').value = prompts.default || '';
+
+    // 拉取账号商品列表填充测试区真实商品选择
+    loadAccountItemsForTest(accountId);
 
     // 切换设置显示状态
     toggleAIReplySettings();
@@ -397,6 +402,8 @@ async function saveAIReplyConfig() {
         max_discount_percent: parseInt(document.getElementById('maxDiscountPercent').value),
         max_discount_amount: parseInt(document.getElementById('maxDiscountAmount').value),
         max_bargain_rounds: parseInt(document.getElementById('maxBargainRounds').value),
+        reply_style: document.getElementById('replyStyle').value || 'legacy',
+        item_brief_mode: document.getElementById('itemBriefMode').value || 'cache_llm',
         custom_prompts: customPromptsJson
     };
 
@@ -435,19 +442,25 @@ async function testAIReply() {
     const accountId = document.getElementById('aiConfigAccountId').value;
     const testMessage = document.getElementById('testMessage').value.trim();
     const testItemPrice = document.getElementById('testItemPrice').value;
+    const testItemId = document.getElementById('testItemId').value;
 
     if (!testMessage) {
         showToast('请输入测试消息', 'warning');
         return;
     }
 
-    // 构建测试数据
+    // 构建测试数据（item_id 传入时后端按真实商品档案链路生成）
     const testData = {
         message: testMessage,
         item_title: '测试商品',
         item_price: parseFloat(testItemPrice) || 100,
         item_desc: '这是一个用于测试AI回复功能的商品'
     };
+    if (testItemId) testData.item_id = testItemId;
+
+    // 隐藏上一轮档案调试块
+    const briefResult = document.getElementById('testBriefResult');
+    if (briefResult) briefResult.style.display = 'none';
 
     // 显示加载状态
     const testResult = document.getElementById('testResult');
@@ -468,6 +481,12 @@ async function testAIReply() {
     if (response.ok) {
         const result = await response.json();
         testReplyContent.innerHTML = result.reply;
+        // veteran 档展示商品档案调试信息
+        if (result.item_brief && briefResult) {
+            const briefEl = document.getElementById('testBriefContent');
+            if (briefEl) briefEl.textContent = JSON.stringify(result.item_brief, null, 2);
+            briefResult.style.display = 'block';
+        }
         showToast('AI回复测试成功', 'success');
     } else {
         const error = await response.text();
@@ -482,6 +501,26 @@ async function testAIReply() {
     showToast('测试AI回复失败', 'danger');
     } finally {
     if (testBtn) { testBtn.disabled = false; testBtn.textContent = '测试回复'; }
+    }
+}
+
+// 拉取账号商品列表填充测试区「关联真实商品」下拉
+async function loadAccountItemsForTest(accountId) {
+    const select = document.getElementById('testItemId');
+    if (!select) return;
+    select.innerHTML = '<option value="">-- 使用模拟商品 --</option>';
+    try {
+        const data = await fetchJSON(`${apiBase}/items/cookie/${accountId}`);
+        (data.items || []).forEach(item => {
+            if (!item.item_id) return;
+            const opt = document.createElement('option');
+            opt.value = item.item_id;
+            const title = (item.item_title || item.item_id).trim();
+            opt.textContent = title.length > 28 ? title.slice(0, 28) + '…' : title;
+            select.appendChild(opt);
+        });
+    } catch (e) {
+        console.error('加载账号商品列表失败:', e);
     }
 }
 

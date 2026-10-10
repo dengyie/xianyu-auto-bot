@@ -5330,6 +5330,25 @@
                            min="1" max="10" value="3">
                     <small class="form-text text-muted mt-2 d-block">超过轮数后自动保持底线回复</small>
                   </div>
+
+                  <div class="ai-metric-card">
+                    <label for="replyStyle" class="form-label">回复风格</label>
+                    <select class="form-select" id="replyStyle">
+                      <option value="legacy">经典客服（默认）</option>
+                      <option value="veteran">沉稳老练卖家（推荐）</option>
+                    </select>
+                    <small class="form-text text-muted mt-2 d-block">老练档：像真实卖家一样口语化回复，先熟读商品资料再答话</small>
+                  </div>
+
+                  <div class="ai-metric-card">
+                    <label for="itemBriefMode" class="form-label">商品档案</label>
+                    <select class="form-select" id="itemBriefMode">
+                      <option value="cache_llm">规则+AI消化（缓存，推荐）</option>
+                      <option value="rule_only">仅规则提取</option>
+                      <option value="off">不生成档案</option>
+                    </select>
+                    <small class="form-text text-muted mt-2 d-block">仅老练档生效；档案生成后缓存复用</small>
+                  </div>
                 </div>
               </div>
             </div>
@@ -5357,7 +5376,7 @@
                     </div>
                     <small class="form-text text-muted d-block mb-2">当买家明确要求降价、优惠、砍价时的应对策略</small>
                     <textarea class="form-control ai-prompt-textarea" id="promptPrice" rows="4"
-                              placeholder="【议价场景】&#10;策略：根据议价次数递减优惠&#10;- 第1次：可小幅优惠，表达诚意&#10;- 第2次：中等优惠，强调已是优惠价&#10;- 第3次及以后：最大优惠或坚持底线&#10;语气友好但坚定，突出商品价值和优势。"></textarea>
+                              placeholder="【议价场景】&#10;- 前1-2次小让或送小赠品稳住，强调成色和自用价值&#10;- 后续轮次逐渐收紧，超过最大轮数坚守底线价&#10;- 语气像真实卖家：口语、简短、不承诺额外售后"></textarea>
                   </div>
 
                   <div class="ai-prompt-card">
@@ -5367,7 +5386,7 @@
                     </div>
                     <small class="form-text text-muted d-block mb-2">当买家询问产品功能、使用方法、技术细节时的回复策略</small>
                     <textarea class="form-control ai-prompt-textarea" id="promptTech" rows="3"
-                              placeholder="【技术/产品问题】&#10;基于商品信息回答，不要自行发挥。&#10;如果问题超出商品信息范围，回复：&quot;等等，这个我需要看一看&quot;"></textarea>
+                              placeholder="【技术/产品问题】&#10;只依据商品资料回答，资料里没有的就说不确定，核实后再答复，不要编造参数。"></textarea>
                   </div>
 
                   <div class="ai-prompt-card ai-prompt-card-wide">
@@ -5377,7 +5396,7 @@
                     </div>
                     <small class="form-text text-muted d-block mb-2">物流、售后、商品介绍等其他咨询的回复策略</small>
                     <textarea class="form-control ai-prompt-textarea" id="promptDefault" rows="3"
-                              placeholder="【一般咨询】&#10;基于商品信息回答物流、售后等问题。&#10;如果问题超出商品信息范围，回复：&quot;等等，这个我需要看一看&quot;&#10;如果客户明确询问退款，回复：&quot;虚拟产品，一旦发出是不可以退款的&quot;"></textarea>
+                              placeholder="【一般咨询】&#10;结合商品资料回答物流、售后等问题，没把握的先核实再答，不打包票。"></textarea>
                   </div>
                 </div>
               </div>
@@ -5405,6 +5424,14 @@
                     <input type="number" class="form-control" id="testItemPrice"
                            value="100" placeholder="商品价格">
                   </div>
+
+                  <div class="ai-test-input">
+                    <label for="testItemId" class="form-label">关联真实商品（可选）</label>
+                    <select class="form-select" id="testItemId">
+                      <option value="">-- 使用模拟商品 --</option>
+                    </select>
+                    <small class="form-text text-muted">选择后按真实商品资料生成档案并缓存</small>
+                  </div>
                 </div>
 
                 <div class="ai-test-actions">
@@ -5418,6 +5445,13 @@
                   <div class="alert alert-info mb-0">
                     <div class="fw-semibold mb-2"><i class="bi bi-chat-left-quote me-1"></i>AI回复结果</div>
                     <div id="testReplyContent"></div>
+                  </div>
+                </div>
+
+                <div id="testBriefResult" class="ai-test-result mt-3" style="display: none;">
+                  <div class="alert alert-light border-secondary mb-0">
+                    <div class="fw-semibold mb-2"><i class="bi bi-card-checklist me-1"></i>商品档案（调试）</div>
+                    <pre id="testBriefContent" class="mb-0" style="font-size: 12px; white-space: pre-wrap; word-break: break-all;"></pre>
                   </div>
                 </div>
               </div>

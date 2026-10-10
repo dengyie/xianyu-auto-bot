@@ -16,7 +16,7 @@ def _patch_once(monkeypatch, engine, outcomes):
     """outcomes: 依次弹出的结果——Exception 实例则抛出，None/空串视为空回复。"""
     calls = []
 
-    def _once(settings, messages):
+    def _once(settings, messages, max_tokens=None, temperature=None):
         calls.append(1)
         outcome = outcomes.pop(0)
         if isinstance(outcome, Exception):
@@ -86,7 +86,7 @@ def test_retry_backoff_is_exponential(monkeypatch, engine):
     def _fake_sleep(seconds):
         sleeps.append(seconds)
 
-    def _once(settings, messages):
+    def _once(settings, messages, max_tokens=None, temperature=None):
         raise RuntimeError("OpenAI Chat API响应缺少choices: 'choices' - body: {...}")
 
     monkeypatch.setattr(engine, "_invoke_provider_once", _once)
@@ -124,7 +124,7 @@ def test_chat_api_200_without_choices_raises_body_in_error(monkeypatch, engine):
     _fake_response(monkeypatch, 200, {"error": {"message": "quota exceeded for channel"}})
     calls = []
 
-    def _once(settings, messages):
+    def _once(settings, messages, max_tokens=None, temperature=None):
         calls.append(1)
         return engine._call_openai_chat_api(
             {"base_url": "https://cpa.example.com/v1", "api_key": "k", "model_name": "m"},

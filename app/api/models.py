@@ -29,6 +29,12 @@ class AIReplySettings(BaseModel):
     max_discount_amount: int = 100
     max_bargain_rounds: int = 3
     custom_prompts: str = ""
+    # v2 回复风格：veteran(老练卖家)/legacy(经典客服)；默认 legacy 保证升级零行为变化
+    reply_style: str = "legacy"
+    # 商品档案模式：cache_llm(规则+LLM消化+缓存)/rule_only(仅规则)/off
+    item_brief_mode: str = "cache_llm"
+    # 档案缓存有效期（秒），默认 30 天
+    item_brief_ttl: int = 2592000
 
 
 class ActionEvent:

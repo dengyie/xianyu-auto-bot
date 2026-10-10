@@ -2616,6 +2616,10 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
                 )
                 self.last_slider_captcha_engine = getattr(strict_result, 'engine', None)
                 self.last_slider_result_message = getattr(strict_result, 'message', None)
+                # 最近一次 /slide 判决码（300=other-punish 等）与惩罚预判布尔：
+                # 失败分支据此区分"风控惩罚拒绝"与"本地/轨迹失败"，选择不同退避曲线
+                self.last_slider_slide_code = getattr(strict_result, 'slide_code', None)
+                self.last_slider_is_punish = bool(getattr(strict_result, 'is_punish', False))
 
                 if strict_result.success and strict_result.cookies:
                     cookies = strict_result.cookies

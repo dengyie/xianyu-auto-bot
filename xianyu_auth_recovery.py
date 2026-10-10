@@ -488,16 +488,27 @@ class XianyuAuthRecoveryMixin:
 
 
     @classmethod
-    def set_password_login_failure_backoff(cls, cookie_id: str, reason: str, seconds: int):
-        """设置密码登录失败后的退避时间"""
+    def set_password_login_failure_backoff(cls, cookie_id: str, reason: str, seconds: int,
+                                           *, escalation_factor: Optional[float] = None,
+                                           max_cap_seconds: Optional[int] = None):
+        """设置密码登录失败后的退避时间
+
+        escalation_factor / max_cap_seconds：按失败类型覆盖全局升级曲线。
+        风控惩罚类失败（slider_punish）用更陡的 2x 升级 + 4h 封顶——设备被判罚
+        后短间隔重探只会加深惩罚；本地异常类维持全局 1.5x + 1h 默认曲线。
+        """
         if not cookie_id or seconds <= 0:
             return
         previous_state = cls._password_login_failure_backoff.get(cookie_id) or {}
         previous_reason = previous_state.get('reason')
         previous_count = int(previous_state.get('consecutive_count', 0) or 0)
         consecutive_count = previous_count + 1 if previous_reason == reason else 1
-        escalation_factor = float(RISK_CONTROL.get('backoff_escalation_factor', 1.5) or 1.5)
-        max_cap = max(seconds, int(RISK_CONTROL.get('backoff_max_cap_seconds', 3600) or 3600))
+        if escalation_factor is None:
+            escalation_factor = float(RISK_CONTROL.get('backoff_escalation_factor', 1.5) or 1.5)
+        if max_cap_seconds is None:
+            max_cap_seconds = int(RISK_CONTROL.get('backoff_max_cap_seconds', 3600) or 3600)
+        escalation_factor = max(1.0, float(escalation_factor))
+        max_cap = max(seconds, int(max_cap_seconds))
         actual_seconds = int(round(min(seconds * (escalation_factor ** max(0, consecutive_count - 1)), max_cap)))
         actual_seconds = max(seconds, actual_seconds)
         now = time.time()
@@ -659,7 +670,7 @@ class XianyuAuthRecoveryMixin:
             return False
 
         backoff_reason = failure_backoff.get('reason', 'unknown')
-        if backoff_reason not in {'slider_failed', 'verification_required', 'credentials', 'risk_control'}:
+        if backoff_reason not in {'slider_failed', 'slider_punish', 'verification_required', 'credentials', 'risk_control'}:
             return False
 
         remaining_time = failure_backoff.get('remaining_time', 0.0)

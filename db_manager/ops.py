@@ -19,8 +19,8 @@ class DBOpsMixin:
                 INSERT OR REPLACE INTO ai_reply_settings
                 (cookie_id, ai_enabled, model_name, api_key, base_url, api_type,
                  max_discount_percent, max_discount_amount, max_bargain_rounds,
-                 custom_prompts, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                 custom_prompts, reply_style, item_brief_mode, item_brief_ttl, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ''', (
                     cookie_id,
                     settings.get('ai_enabled', False),
@@ -31,7 +31,10 @@ class DBOpsMixin:
                     settings.get('max_discount_percent', 10),
                     settings.get('max_discount_amount', 100),
                     settings.get('max_bargain_rounds', 3),
-                    settings.get('custom_prompts', '')
+                    settings.get('custom_prompts', ''),
+                    settings.get('reply_style', 'legacy'),
+                    settings.get('item_brief_mode', 'cache_llm'),
+                    settings.get('item_brief_ttl', 2592000)
                 ))
                 self.conn.commit()
                 logger.debug(f"AI回复设置保存成功: {cookie_id}")
@@ -42,13 +45,27 @@ class DBOpsMixin:
                 return False
     def get_ai_reply_settings(self, cookie_id: str) -> dict:
         """获取AI回复设置"""
+        default_settings = {
+            'ai_enabled': False,
+            'model_name': 'qwen-plus',
+            'api_key': '',
+            'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+            'api_type': '',
+            'max_discount_percent': 10,
+            'max_discount_amount': 100,
+            'max_bargain_rounds': 3,
+            'custom_prompts': '',
+            'reply_style': 'legacy',
+            'item_brief_mode': 'cache_llm',
+            'item_brief_ttl': 2592000
+        }
         with self.lock:
             try:
                 cursor = self.conn.cursor()
                 cursor.execute('''
                 SELECT ai_enabled, model_name, api_key, base_url, api_type,
                        max_discount_percent, max_discount_amount, max_bargain_rounds,
-                       custom_prompts
+                       custom_prompts, reply_style, item_brief_mode, item_brief_ttl
                 FROM ai_reply_settings WHERE cookie_id = ?
                 ''', (cookie_id,))
 
@@ -63,34 +80,17 @@ class DBOpsMixin:
                         'max_discount_percent': result[5],
                         'max_discount_amount': result[6],
                         'max_bargain_rounds': result[7],
-                        'custom_prompts': result[8]
+                        'custom_prompts': result[8],
+                        'reply_style': result[9] or 'legacy',
+                        'item_brief_mode': result[10] or 'cache_llm',
+                        'item_brief_ttl': result[11] if result[11] is not None else 2592000
                     }
                 else:
                     # 返回默认设置
-                    return {
-                        'ai_enabled': False,
-                        'model_name': 'qwen-plus',
-                        'api_key': '',
-                        'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-                        'api_type': '',
-                        'max_discount_percent': 10,
-                        'max_discount_amount': 100,
-                        'max_bargain_rounds': 3,
-                        'custom_prompts': ''
-                    }
+                    return dict(default_settings)
             except Exception as e:
                 logger.error(f"获取AI回复设置失败: {e}")
-                return {
-                    'ai_enabled': False,
-                    'model_name': 'qwen-plus',
-                    'api_key': '',
-                    'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-                    'api_type': '',
-                    'max_discount_percent': 10,
-                    'max_discount_amount': 100,
-                    'max_bargain_rounds': 3,
-                    'custom_prompts': ''
-                }
+                return dict(default_settings)
     def get_all_ai_reply_settings(self) -> Dict[str, dict]:
         """获取所有账号的AI回复设置"""
         with self.lock:
@@ -99,7 +99,7 @@ class DBOpsMixin:
                 cursor.execute('''
                 SELECT cookie_id, ai_enabled, model_name, api_key, base_url, api_type,
                        max_discount_percent, max_discount_amount, max_bargain_rounds,
-                       custom_prompts
+                       custom_prompts, reply_style, item_brief_mode, item_brief_ttl
                 FROM ai_reply_settings
                 ''')
 
@@ -115,7 +115,10 @@ class DBOpsMixin:
                         'max_discount_percent': row[6],
                         'max_discount_amount': row[7],
                         'max_bargain_rounds': row[8],
-                        'custom_prompts': row[9]
+                        'custom_prompts': row[9],
+                        'reply_style': row[10] or 'legacy',
+                        'item_brief_mode': row[11] or 'cache_llm',
+                        'item_brief_ttl': row[12] if row[12] is not None else 2592000
                     }
 
                 return result

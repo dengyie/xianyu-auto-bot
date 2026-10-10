@@ -478,10 +478,43 @@ class TokenMixin:
                                     post_slider_session_retry_count=0,
                                 )
                             else:
+                                # 区分失败性质：is_punish=True = /slide 判决码命中
+                                # baxia other-punish（设备/会话被判罚，slidex
+                                # PUNISH_SLIDE_CODES 判定，经 orchestrator 透传）。
+                                # 这类失败短间隔重探只会加深惩罚（2026-10-08 生产
+                                # 实锤：深夜连环 300 → 拖一次失败一次 → 预算烧光），
+                                # 走 slider_punish 陡峭退避（600s 起步、2x 升级、
+                                # 4h 封顶、计入连续失败保护）；其余（本地异常、
+                                # 票据缺失等）维持 slider_failed 600s 平记。
+                                if getattr(self, 'last_slider_is_punish', False):
+                                    self.set_password_login_failure_backoff(
+                                        self.cookie_id, 'slider_punish', 600,
+                                        escalation_factor=2.0, max_cap_seconds=14400,
+                                    )
+                                    punish_state = self.get_password_login_failure_backoff(self.cookie_id) or {}
+                                    punish_remaining = int(punish_state.get('seconds', 600))
+                                    self.last_token_refresh_error_message = (
+                                        f"滑块被风控惩罚拒绝(slide_code={getattr(self, 'last_slider_slide_code', None)})，"
+                                        "未获取到新Cookie"
+                                    )
+                                    logger.warning(
+                                        f"【{self.cookie_id}】滑块被风控惩罚拒绝"
+                                        f"(slide_code={getattr(self, 'last_slider_slide_code', None)})，"
+                                        f"进入惩罚退避期: slider_punish, {punish_remaining}秒"
+                                        f"（第{punish_state.get('consecutive_count', 1)}次，倍增升级）"
+                                    )
+                                    _host.log_captcha_event(
+                                        self.cookie_id,
+                                        "滑块风控惩罚，进入惩罚退避",
+                                        None,
+                                        f"类型: slider_punish_backoff, 退避秒数: {punish_remaining}, "
+                                        f"slide_code: {getattr(self, 'last_slider_slide_code', None)}"
+                                    )
+                                else:
+                                    self.set_password_login_failure_backoff(self.cookie_id, 'slider_failed', 600)
+                                    self.last_token_refresh_error_message = "滑块验证失败，未获取到新Cookie"
+                                    logger.warning(f"【{self.cookie_id}】已进入滑块失败退避期: slider_failed, 600秒")
                                 logger.error(f"【{self.cookie_id}】滑块验证失败")
-                                self.set_password_login_failure_backoff(self.cookie_id, 'slider_failed', 600)
-                                self.last_token_refresh_error_message = "滑块验证失败，未获取到新Cookie"
-                                logger.warning(f"【{self.cookie_id}】已进入滑块失败退避期: slider_failed, 600秒")
 
                                 # 更新风控日志为失败状态
                                 if 'log_id' in locals() and log_id:
@@ -795,8 +828,12 @@ class TokenMixin:
     # ═══ 滑块求解预算门控 ═══
 
     def _slider_budget_gate(self) -> Tuple[bool, int]:
-        """挑战入口调用：预算耗尽返回 (True, 冷却剩余秒数)；否则扣减一次预算并返回 (False, 0)。"""
-        budget = max(1, int(os.environ.get('XY_SLIDER_SOLVE_BUDGET', '6') or 6))
+        """挑战入口调用：预算耗尽返回 (True, 冷却剩余秒数)；否则扣减一次预算并返回 (False, 0)。
+
+        ``XY_SLIDER_SOLVE_BUDGET`` 默认 2（原 6）：单发策略下一次事故只耗 1 次预算，
+        预算 2 意味着 30 分钟内最多两次求解窗口；再配合 300 惩罚退避，实际很难连发。
+        """
+        budget = max(1, int(os.environ.get('XY_SLIDER_SOLVE_BUDGET', '2') or 2))
         cooldown = max(60, int(os.environ.get('XY_SLIDER_SOLVE_COOLDOWN', '1800') or 1800))
         now = time.time()
         with _slider_budget_lock:
