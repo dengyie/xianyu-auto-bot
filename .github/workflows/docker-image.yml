@@ -135,7 +135,9 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build-and-push
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 跨境 pull 实测单次可达 ~25 分钟；30 分钟上限曾连续 3 轮被取消（1046c71）。
+    # 60 分钟给足余量，配合下方 detached 拉取（重跑续传），杜绝超时取消。
+    timeout-minutes: 60
     # 与 cleanup.yml 共用串行组：prune 与 pull 并发会撞 containerd ingest（2026-09-05 踩过）
     concurrency:
       group: tencent-docker-serial
@@ -150,22 +152,52 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Pull image on tencent
+      - name: Start pull on tencent (detached)
+        # 腾讯轻量云拉 GHCR 镜像走跨境链路，单次实测可达 ~25 分钟，且大层易断流。
+        # 在 VPS 上用 setsid 把 pull 与 SSH 会话解耦：progress 存在时 SSH 断开
+        # 也不会中断拉取，重跑本 job 直接复用仍在跑的 pull（不重复抢 ingest 锁）。
         run: |
-          # 腾讯轻量云拉取 GHCR 镜像经跨境链路，偶有超时断流；带重试保证拉取成功
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o User=root "$SSH_HOST" 'bash -s' << 'DEPLOY_SCRIPT'
-          for attempt in 1 2 3; do
-            echo "Pulling xianyu-app image (attempt $attempt)..."
-            if sudo docker compose -f /opt/xianyu-auto-bot/docker-compose.yml pull xianyu-app; then
-              echo "Pull succeeded"
-              exit 0
-            fi
-            echo "Pull attempt $attempt failed, retrying in 15s..."
+          set -euo pipefail
+          LOG=/tmp/xianyu_pull.log
+          EXITF=/tmp/xianyu_pull.exit
+          if pgrep -f 'compose .*pull xianyu-app' >/dev/null; then
+            echo "an in-flight pull already exists — will poll it instead of starting a new one"
+          else
+            rm -f "$EXITF"
+            : > "$LOG"
+            setsid nohup bash -c \
+              "sudo docker compose -f /opt/xianyu-auto-bot/docker-compose.yml pull xianyu-app >>$LOG 2>&1; echo EXIT=\$? > $EXITF" \
+              </dev/null >/dev/null 2>&1 &
+            echo "detached pull started (log: $LOG)"
+          fi
+          DEPLOY_SCRIPT
+
+      - name: Wait for pull to complete
+        # 轮询 detached 拉取的退出码标记文件，每 ~15s 探一次，上限 ~50 分钟
+        # （200×15s，始终小于 job 的 60 分钟 timeout）。
+        run: |
+          SSH="ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o User=root"
+          for i in $(seq 1 200); do
+            state=$($SSH "$SSH_HOST" 'if [ -f /tmp/xianyu_pull.exit ]; then cat /tmp/xianyu_pull.exit; else echo PULLING; fi')
+            case "$state" in
+              "EXIT=0")
+                echo "pull succeeded (poll #$i)"
+                exit 0 ;;
+              EXIT=*)
+                echo "::error::pull failed: $state"
+                $SSH "$SSH_HOST" 'tail -40 /tmp/xianyu_pull.log' || true
+                exit 1 ;;
+              *)
+                if [ $((i % 4)) -eq 0 ]; then
+                  echo "still pulling (poll #$i)..."
+                  $SSH "$SSH_HOST" 'tail -2 /tmp/xianyu_pull.log' || true
+                fi ;;
+            esac
             sleep 15
           done
-          echo "::error::Pull failed after 3 attempts"
+          echo "::error::pull did not finish within ~50 minutes"
           exit 1
-          DEPLOY_SCRIPT
 
       - name: Recreate container on tencent
         run: |
