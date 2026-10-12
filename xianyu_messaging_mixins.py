@@ -2347,10 +2347,6 @@ class MessagePipelineMixin:
                 send_message=send_message,
             )
             message_route = message_route_info.get('route', 'user_chat')
-            # 到达此处即已通过同步包/引导/自回声等早返回分支,是服务端新推的真实业务帧
-            # (买家对话/订单状态/系统通知)。会话引导重放不会走到这里,故用它复位看门狗
-            # 空闲退避是安全的:链路确实在投递有效业务数据。
-            self._mark_non_heartbeat_message(time.time())
             order_status_signal = message_route_info.get('order_status_signal')
             should_notify_message = bool(message_route_info.get('should_notify'))
             allow_auto_reply = bool(message_route_info.get('allow_auto_reply'))
@@ -2359,6 +2355,13 @@ class MessagePipelineMixin:
             message_direction = message_route_info.get('message_direction', 0)
             content_type = message_route_info.get('content_type', 0)
             card_title = str(message_route_info.get('card_title') or '').strip()
+            # 到达此处即已通过同步包/引导/自回声等早返回分支,是服务端推送的真实业务帧。
+            # 仅当不是"自发回推"(send_user_id==自己且非系统消息)时才复位看门狗退避:
+            # 自发回推只是我们刚发出的消息被服务端回传,不能证明链路在投递新的买家/订单
+            # 业务数据,复位会掩盖"只发不收"的半死连接。会话引导重放走不到这里
+            # (见 _mark_stream_frame_arrival)。
+            if not (send_user_id == self.myid and not is_system_message):
+                self._mark_non_heartbeat_message(time.time())
             special_flow_card_titles = {
                 '我已小刀，待刀成',
                 '我已小刀,待刀成',

@@ -65,6 +65,23 @@ def _buyer_chat_item(text=CHAT_TEXT):
     return {"data": base64.b64encode(json.dumps(inner).encode("utf-8")).decode("ascii")}
 
 
+def _self_echo_item(text="我方发出的消息"):
+    inner = {
+        "1": {
+            "2": "chat@goofish",
+            "5": 1727300000000,
+            "10": {
+                "reminderContent": text,
+                "reminderTitle": "self",
+                "senderUserId": "self_001",
+                "senderNick": "self",
+                "bizTag": json.dumps({"sourceId": "S:1", "messageId": "mid-self-001"}),
+            },
+        }
+    }
+    return {"data": base64.b64encode(json.dumps(inner).encode("utf-8")).decode("ascii")}
+
+
 def _frame(items, mid="mid-1"):
     return {
         "headers": {"mid": mid, "sid": "sid-1", "app-key": "k"},
@@ -214,3 +231,42 @@ async def test_priority_scan_covers_all_items(monkeypatch):
     frame = _frame([_guide_item(), _buyer_chat_item("这个能便宜点吗")])
     priority = m._get_message_priority(frame)
     assert priority == 2
+
+
+# ---------- 看门狗退避复位守卫（review 6b9d284 P2-1） ----------
+
+@pytest.mark.asyncio
+async def test_incoming_buyer_frame_resets_watchdog_backoff(monkeypatch):
+    """真实买家业务帧必须复位看门狗空闲退避：账号转活跃立即恢复基准检测节奏。"""
+    hub = _Hub()
+    hub.install(monkeypatch)
+    m = _make_mixin()
+    m._classify_message_route = lambda **k: _route()
+    m._apply_message_filters = mock.AsyncMock(return_value={"skip_auto_reply": False, "rules": []})
+    m._is_item_owned_by_self = mock.AsyncMock(return_value=True)
+    m._schedule_debounced_reply = mock.AsyncMock()
+    m._mark_non_heartbeat_message = mock.MagicMock()
+
+    await m.handle_message(_frame([_buyer_chat_item()]), mock.AsyncMock(), "mid-mark-buyer")
+
+    m._mark_non_heartbeat_message.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_self_echo_frame_does_not_reset_watchdog_backoff(monkeypatch):
+    """自发回推只是我方刚发出的消息被服务端回传，不证明链路在投递新的买家/订单
+    业务数据，不得复位退避——否则"只发不收"的半死连接会被掩盖。"""
+    import chat_event_hub
+    import XianyuAutoAsync
+
+    hub = _Hub()
+    hub.install(monkeypatch)
+    m = _make_mixin()
+    m._classify_message_route = lambda **k: _route()
+    monkeypatch.setattr(chat_event_hub.self_send_dedup, "consume", lambda *a, **k: True)
+    monkeypatch.setattr(XianyuAutoAsync, "pause_manager", mock.MagicMock())
+    m._mark_non_heartbeat_message = mock.MagicMock()
+
+    await m.handle_message(_frame([_self_echo_item()]), mock.AsyncMock(), "mid-mark-self")
+
+    m._mark_non_heartbeat_message.assert_not_called()

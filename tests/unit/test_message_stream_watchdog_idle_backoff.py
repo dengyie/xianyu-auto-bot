@@ -144,14 +144,15 @@ def test_frame_arrival_refreshes_timestamps_without_resetting_backoff():
 
 
 def test_replayed_guidance_frames_do_not_hold_backoff_at_zero():
-    """回归线上 bug:空闲号每次重连后 3~8 秒到达重放引导包,逐帧热路径若复位退避,
-    则 idle_streak 恒为 0、每 ~30 分钟无谓重连。改用 _mark_stream_frame_arrival 后,
-    重放帧不再清零退避,结算得以推进。"""
+    """回归线上 bug:空闲号每次重连后 3~8 秒到达重放引导包(落在 90s 举证窗口内),
+    逐帧热路径若复位退避,则 idle_streak 恒为 0、每 ~30 分钟无谓重连。改用
+    _mark_stream_frame_arrival 后,重放帧只刷新时间戳、不清 window,结算照常推进。"""
     p = _FakePipeline(stream_watchdog_pending_justify_deadline=1000)
-    p._mark_stream_frame_arrival(1003, is_sync_package=True)   # 重放引导帧落在窗口内
+    p._mark_stream_frame_arrival(990, is_sync_package=True)    # 重放引导帧落在窗口内
     assert p.stream_watchdog_idle_streak == 0
+    assert p.stream_watchdog_pending_justify_deadline == 1000   # 热路径不替本次重连举证
     # 窗口过期后结算:重放帧不能替这次重连举证成功
-    assert p._stream_watchdog_settle_previous_fire(1200) == 1
+    assert p._stream_watchdog_settle_previous_fire(1100) == 1
 
 
 # --------------------------------------------------------------------------

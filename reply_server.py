@@ -2081,7 +2081,7 @@ def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
     session_keepalive_interval = max(60, int(getattr(live_instance, 'session_keepalive_interval', 600) or 600))
     session_keepalive_retry_interval = max(30, int(getattr(live_instance, 'session_keepalive_retry_interval', 180) or 180))
     stream_watchdog_grace_period = max(30, int(getattr(live_instance, 'stream_watchdog_grace_period', heartbeat_interval * 4) or heartbeat_interval * 4))
-    message_stream_watchdog_timeout = max(60, int(getattr(live_instance, 'message_stream_watchdog_timeout', session_keepalive_interval * 3) or session_keepalive_interval * 3))
+    message_stream_watchdog_timeout = max(60, int(getattr(live_instance, 'message_stream_watchdog_timeout', 3600) or 3600))
     stream_watchdog_idle_streak = max(0, int(getattr(live_instance, 'stream_watchdog_idle_streak', 0) or 0))
     stream_watchdog_settings = getattr(live_instance, '_stream_watchdog_settings', None) or {}
     try:
