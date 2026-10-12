@@ -886,7 +886,7 @@ class MessagePipelineMixin:
 
         risk_control = getattr(_host, 'RISK_CONTROL', None) or {}
         numeric_specs = (
-            ('timeout_seconds', 'XY_MESSAGE_STREAM_WATCHDOG_TIMEOUT', 1800, 300),
+            ('timeout_seconds', 'XY_MESSAGE_STREAM_WATCHDOG_TIMEOUT', 3600, 300),
             ('max_backoff_multiplier', 'XY_MESSAGE_STREAM_WATCHDOG_MAX_MULTIPLIER', 4, 1),
             ('justify_window_seconds', 'XY_MESSAGE_STREAM_WATCHDOG_JUSTIFY_WINDOW', 90, 10),
         )
@@ -920,7 +920,7 @@ class MessagePipelineMixin:
     @staticmethod
     def _stream_watchdog_effective_timeout(settings: Optional[Dict[str, Any]], idle_streak: int) -> int:
         """空闲自适应检测阈值：基准超时 × min(1+空闲退避级数, 上限倍数)。"""
-        base = max(1, int((settings or {}).get('timeout_seconds', 1800) or 1800))
+        base = max(1, int((settings or {}).get('timeout_seconds', 3600) or 3600))
         cap = max(1, int((settings or {}).get('max_backoff_multiplier', 4) or 4))
         return base * min(1 + max(0, int(idle_streak or 0)), cap)
 
@@ -934,11 +934,25 @@ class MessagePipelineMixin:
             self.stream_watchdog_pending_justify_deadline = 0
         return max(0, int(getattr(self, 'stream_watchdog_idle_streak', 0) or 0))
 
-    def _mark_non_heartbeat_message(self, received_at: Optional[float] = None, *, is_sync_package: bool = False):
-        """记录最近一次非心跳业务包时间。
+    def _mark_stream_frame_arrival(self, received_at: Optional[float] = None, *, is_sync_package: bool = False):
+        """记录"收到任意非心跳帧",只刷新链路活性时间戳,不复位空闲退避。
 
-        任一业务帧到达都证明链路正在投递，故空闲退避立即复位（否则账号转活跃后仍会停在
-        最大退避档位）；重连后的举证窗口仅用于决定何时结算"空闲误判"，见
+        逐帧收包热路径(XianyuAutoAsync 每帧调用)会频繁收到同步包/引导重放/确认包,
+        它们只证明 WS 还在投递帧,不能证明业务链路健康。若在此复位退避,重连后 3~8 秒
+        必然到达的引导重放会立刻把退避清零(线上实测因此恒为 0 档、每 ~30 分钟无谓重连)。
+        真实业务事件请改用 _mark_non_heartbeat_message。
+        """
+        now = received_at or time.time()
+        self.last_non_heartbeat_message_time = now
+        if is_sync_package:
+            self.last_sync_package_time = now
+
+    def _mark_non_heartbeat_message(self, received_at: Optional[float] = None, *, is_sync_package: bool = False):
+        """记录一次真实业务帧:刷新活性时间戳并复位空闲退避。
+
+        仅由 handle_message 在确认是真实业务事件(买家对话/订单状态)后调用。真业务帧
+        证明链路确实在投递有效数据,故退避立即复位(否则账号转活跃后仍会停在最大退避
+        档位);重连后的举证窗口仅用于决定何时结算"空闲误判",见
         _stream_watchdog_settle_previous_fire。
         """
         now = received_at or time.time()
@@ -947,8 +961,32 @@ class MessagePipelineMixin:
             self.last_sync_package_time = now
         self.stream_watchdog_idle_streak = 0
         self.stream_watchdog_pending_justify_deadline = 0
-        if self.stream_watchdog_trigger_times:
-            self.stream_watchdog_trigger_times.clear()
+        trigger_times = getattr(self, 'stream_watchdog_trigger_times', None)
+        if trigger_times:
+            trigger_times.clear()
+
+    def _is_duplicate_session_guidance(self, session_id, arouse_timestamp) -> bool:
+        """按 (sessionId, arouseTimeStamp) 判重会话引导消息,已处理过则返回 True。
+
+        引导消息是服务端在每次重连后重放的静态包(同一 arouseTimeStamp、内容不变),
+        当天会被重放上百次。以有界 FIFO 缓存记忆已处理的键,重复到达直接跳过,
+        既省去重复解析/日志,也避免它们干扰看门狗(见 _mark_stream_frame_arrival)。
+        键缺失(旧格式/测试构造)时不做判重,始终按新消息处理。
+        """
+        if session_id in (None, '') or arouse_timestamp in (None, ''):
+            return False
+        cache = getattr(self, '_session_guidance_seen', None)
+        if cache is None:
+            cache = {}
+            self._session_guidance_seen = cache
+        key = (str(session_id), str(arouse_timestamp))
+        if key in cache:
+            return True
+        cache[key] = time.time()
+        while len(cache) > 512:
+            cache.pop(next(iter(cache)))
+        return False
+
     def _record_message_stream_watchdog_trigger(self, occurred_at: Optional[float] = None) -> int:
         """记录业务流看门狗触发次数，便于识别重复假在线。"""
         now = occurred_at or time.time()
@@ -1871,10 +1909,30 @@ class MessagePipelineMixin:
                         if 'operation' in parsed_data and 'content' in parsed_data['operation']:
                             content = parsed_data['operation']['content']
                             if 'sessionArouse' in content:
+                                _arouse = content['sessionArouse'] or {}
+                                _arouse_info = _arouse.get('sessionArouseInfo') if isinstance(_arouse, dict) else None
+                                _arouse_ts = None
+                                _scripts = None
+                                if isinstance(_arouse_info, dict):
+                                    _arouse_ts = _arouse_info.get('arouseTimeStamp')
+                                    _scripts = _arouse_info.get('arouseChatScriptInfo')
+                                if _arouse_ts is None and isinstance(_arouse, dict):
+                                    _arouse_ts = _arouse.get('arouseTimeStamp')
+                                if _scripts is None and isinstance(_arouse, dict):
+                                    _scripts = _arouse.get('arouseChatScriptInfo')
+                                _session_id = parsed_data.get('sessionId') or content.get('sessionId')
+                                if self._is_duplicate_session_guidance(_session_id, _arouse_ts):
+                                    # 服务端每次重连都会重放同一批静态引导包,已处理过的直接忽略,
+                                    # 不再刷日志/干扰看门狗;也不刷新业务活性(见 _mark_stream_frame_arrival)。
+                                    logger.debug(
+                                        f"【{self.cookie_id}】[{msg_id}] 会话引导消息重复(session={_session_id}, "
+                                        f"arouseTimeStamp={_arouse_ts}),忽略"
+                                    )
+                                    return
                                 # 处理系统引导消息
                                 logger.info(f"[{msg_time}] 【{self.cookie_id}】[{msg_id}] 【系统】小闲鱼智能提示:")
-                                if 'arouseChatScriptInfo' in content['sessionArouse']:
-                                    for qa in content['sessionArouse']['arouseChatScriptInfo']:
+                                for qa in (_scripts or []):
+                                    if isinstance(qa, dict) and 'chatScrip' in qa:
                                         logger.info(f"  - {qa['chatScrip']}")
                                 logger.info(f"[{msg_time}] 【{self.cookie_id}】[{msg_id}] ⏹️ 系统引导消息处理完成")
                                 return
@@ -2289,6 +2347,10 @@ class MessagePipelineMixin:
                 send_message=send_message,
             )
             message_route = message_route_info.get('route', 'user_chat')
+            # 到达此处即已通过同步包/引导/自回声等早返回分支,是服务端新推的真实业务帧
+            # (买家对话/订单状态/系统通知)。会话引导重放不会走到这里,故用它复位看门狗
+            # 空闲退避是安全的:链路确实在投递有效业务数据。
+            self._mark_non_heartbeat_message(time.time())
             order_status_signal = message_route_info.get('order_status_signal')
             should_notify_message = bool(message_route_info.get('should_notify'))
             allow_auto_reply = bool(message_route_info.get('allow_auto_reply'))

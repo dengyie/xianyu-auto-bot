@@ -122,6 +122,62 @@ async def test_chattype_non_arouse_continues_processing():
     assert not any("系统引导消息处理完成" in r for r in records)
 
 
+# ---------- 会话引导消息重放去重 ----------
+
+def _guidance_frame(session_id="60736454871", arouse_ts=1777110481086, script="你好呀", mid="g"):
+    payload = {
+        "chatType": 1,
+        "sessionId": session_id,
+        "operation": {"content": {"contentType": 8, "sessionArouse": {
+            "sessionArouseInfo": {
+                "arouseTimeStamp": arouse_ts,
+                "arouseChatScriptInfo": [{"chatScrip": script}],
+            }
+        }}},
+    }
+    item = {"data": base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")}
+    return {"headers": {"mid": mid}, "body": {"syncPushPackage": {"data": [item]}}}
+
+
+@pytest.mark.asyncio
+async def test_replayed_session_guidance_is_ignored_after_first_seen():
+    """服务端每次重连都会重放同一批静态引导包(同 sessionId+arouseTimeStamp)。
+    首次正常处理,之后重复到达直接忽略,不再刷日志。"""
+    m = _make_mixin()
+    ws = mock.AsyncMock()
+    records = []
+    hid = loguru_logger.add(lambda msg: records.append(str(msg)), level="INFO")
+    try:
+        await m.handle_message(_guidance_frame(mid="g-1"), ws, "g-1")
+        first = list(records)
+        records.clear()
+        await m.handle_message(_guidance_frame(mid="g-2"), ws, "g-2")
+        second = list(records)
+    finally:
+        loguru_logger.remove(hid)
+
+    assert any("系统引导消息处理完成" in r for r in first)
+    # 重复帧不再进入引导处理,改为忽略
+    assert not any("系统引导消息处理完成" in r for r in second)
+
+
+@pytest.mark.asyncio
+async def test_distinct_session_guidance_still_processed():
+    """不同 (sessionId, arouseTimeStamp) 的引导消息是新消息,必须照常处理。"""
+    m = _make_mixin()
+    ws = mock.AsyncMock()
+    records = []
+    hid = loguru_logger.add(lambda msg: records.append(str(msg)), level="INFO")
+    try:
+        await m.handle_message(_guidance_frame(session_id="111", mid="d-1"), ws, "d-1")
+        records.clear()
+        await m.handle_message(_guidance_frame(session_id="222", mid="d-2"), ws, "d-2")
+    finally:
+        loguru_logger.remove(hid)
+
+    assert any("系统引导消息处理完成" in r for r in records)
+
+
 # ---------- 自发消息回推去重 ----------
 
 @pytest.mark.asyncio

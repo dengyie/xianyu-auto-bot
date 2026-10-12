@@ -5,8 +5,12 @@
 "疑似假在线"通知刷屏。
 
 本模块锁定改进后的行为：
-- 重连"事后举证"：窗口内有业务帧 → 退避复位；窗口过期仍无业务帧 → 退避 +1；
+- 逐帧热路径 `_mark_stream_frame_arrival` 只刷新时间戳、**不复位退避**——服务端每次
+  重连都会在数秒内重放历史引导包，若在此复位退避则退避恒为 0 档（线上实测）；
+- 真实业务帧 `_mark_non_heartbeat_message` 才复位退避（账号转活跃立即恢复基准节奏）；
+- 重连"事后举证"：窗口内无业务帧 → 退避 +1；有业务帧 → 复位；
 - 有效阈值 = 基础阈值 × min(1+退避档位, 上限倍数)，空闲越久检测越稀疏；
+- 会话引导消息按 (sessionId, arouseTimeStamp) 判重，重复重放直接忽略；
 - 已判定空闲的账号默认不再发假在线通知；
 - 阈值解析优先级 env > DB > RISK_CONTROL > 默认，并做最小值夹取。
 """
@@ -21,7 +25,7 @@ from xianyu_messaging_mixins import MessagePipelineMixin
 
 
 DEFAULT_SETTINGS = {
-    'timeout_seconds': 1800,
+    'timeout_seconds': 3600,
     'max_backoff_multiplier': 4,
     'justify_window_seconds': 90,
     'notify_on_idle': False,
@@ -55,7 +59,7 @@ class _FakePipeline(MessagePipelineMixin):
 
 @pytest.mark.parametrize(
     'idle_streak,expected',
-    [(0, 1800), (1, 3600), (2, 5400), (3, 7200), (4, 7200), (9, 7200)],
+    [(0, 3600), (1, 7200), (2, 10800), (3, 14400), (4, 14400), (9, 14400)],
 )
 def test_effective_timeout_grows_then_caps(idle_streak, expected):
     assert MessagePipelineMixin._stream_watchdog_effective_timeout(DEFAULT_SETTINGS, idle_streak) == expected
@@ -63,13 +67,13 @@ def test_effective_timeout_grows_then_caps(idle_streak, expected):
 
 def test_effective_timeout_respects_configured_cap():
     settings = dict(DEFAULT_SETTINGS, max_backoff_multiplier=2)
-    assert MessagePipelineMixin._stream_watchdog_effective_timeout(settings, 1) == 3600
-    assert MessagePipelineMixin._stream_watchdog_effective_timeout(settings, 5) == 3600
+    assert MessagePipelineMixin._stream_watchdog_effective_timeout(settings, 1) == 7200
+    assert MessagePipelineMixin._stream_watchdog_effective_timeout(settings, 5) == 7200
 
 
 def test_effective_timeout_tolerates_missing_settings():
-    # 缺配置时退回内置默认，不抛异常
-    assert MessagePipelineMixin._stream_watchdog_effective_timeout(None, 0) == 1800
+    # 缺配置时退回内置默认,不抛异常
+    assert MessagePipelineMixin._stream_watchdog_effective_timeout(None, 0) == 3600
 
 
 # --------------------------------------------------------------------------
@@ -119,6 +123,67 @@ def test_business_frame_records_activity_and_clears_trigger_window():
     assert p.last_non_heartbeat_message_time == 500
     assert p.last_sync_package_time == 500
     assert list(p.stream_watchdog_trigger_times) == []
+
+
+# --------------------------------------------------------------------------
+# 逐帧热路径:只刷新时间戳,不复位退避(重放引导包不得证明链路健康)
+# --------------------------------------------------------------------------
+
+def test_frame_arrival_refreshes_timestamps_without_resetting_backoff():
+    p = _FakePipeline(
+        stream_watchdog_idle_streak=3,
+        stream_watchdog_pending_justify_deadline=1000,
+        stream_watchdog_trigger_times=deque([1.0], maxlen=8),
+    )
+    p._mark_stream_frame_arrival(1200, is_sync_package=True)
+    assert p.last_non_heartbeat_message_time == 1200   # 展示/诊断时间戳刷新
+    assert p.last_sync_package_time == 1200
+    assert p.stream_watchdog_idle_streak == 3          # 退避保持不变
+    assert p.stream_watchdog_pending_justify_deadline == 1000
+    assert list(p.stream_watchdog_trigger_times) == [1.0]
+
+
+def test_replayed_guidance_frames_do_not_hold_backoff_at_zero():
+    """回归线上 bug:空闲号每次重连后 3~8 秒到达重放引导包,逐帧热路径若复位退避,
+    则 idle_streak 恒为 0、每 ~30 分钟无谓重连。改用 _mark_stream_frame_arrival 后,
+    重放帧不再清零退避,结算得以推进。"""
+    p = _FakePipeline(stream_watchdog_pending_justify_deadline=1000)
+    p._mark_stream_frame_arrival(1003, is_sync_package=True)   # 重放引导帧落在窗口内
+    assert p.stream_watchdog_idle_streak == 0
+    # 窗口过期后结算:重放帧不能替这次重连举证成功
+    assert p._stream_watchdog_settle_previous_fire(1200) == 1
+
+
+# --------------------------------------------------------------------------
+# 会话引导消息判重(按 sessionId + arouseTimeStamp)
+# --------------------------------------------------------------------------
+
+def test_guidance_dedupe_first_seen_then_duplicate():
+    p = _FakePipeline()
+    assert p._is_duplicate_session_guidance('60736454871', 1777110481086) is False
+    assert p._is_duplicate_session_guidance('60736454871', 1777110481086) is True
+    # 不同会话或不同时间戳视为新消息
+    assert p._is_duplicate_session_guidance('60736454872', 1777110481086) is False
+    assert p._is_duplicate_session_guidance('60736454871', 1777110481087) is False
+
+
+def test_guidance_dedupe_ignores_missing_keys():
+    # 旧格式/测试构造缺 sessionId 或 arouseTimeStamp 时不判重,始终按新消息处理
+    p = _FakePipeline()
+    assert p._is_duplicate_session_guidance(None, 123) is False
+    assert p._is_duplicate_session_guidance(None, 123) is False
+    assert p._is_duplicate_session_guidance('sid', '') is False
+    assert p._is_duplicate_session_guidance('sid', '') is False
+
+
+def test_guidance_dedupe_cache_is_bounded():
+    p = _FakePipeline()
+    for i in range(700):
+        p._is_duplicate_session_guidance(f'sid-{i}', i)
+    cache = p._session_guidance_seen
+    assert len(cache) <= 512
+    # 最近写入的键仍在缓存中(旧的被 FIFO 淘汰),重复到达可命中
+    assert p._is_duplicate_session_guidance('sid-699', 699) is True
 
 
 # --------------------------------------------------------------------------
@@ -233,11 +298,15 @@ def test_resolver_notify_on_idle_from_env(resolver_env):
 
 
 # --------------------------------------------------------------------------
-# 端到端（离线模拟）：空闲号重连节奏被拉长；有积压帧则维持基准节奏
+# 端到端(离线模拟):空闲号重连节奏被拉长;有积压业务帧则维持基准节奏
 # --------------------------------------------------------------------------
 
-def _simulate_reconnects(*, horizon=20000, step=15, frames_after_reconnect=()):
-    """按真实看门狗分支条件驱动时间轴，返回各次强制重连的时刻。"""
+def _simulate_reconnects(*, horizon=60000, step=15, business_frames=(), replay_frames=()):
+    """按真实看门狗分支条件驱动时间轴，返回各次强制重连的时刻。
+
+    - business_frames: 真实业务帧到达时刻 → 走 _mark_non_heartbeat_message(复位退避);
+    - replay_frames:   重连后重放的引导/同步帧 → 走 _mark_stream_frame_arrival(不复位)。
+    """
     p = _FakePipeline()
     settings = dict(DEFAULT_SETTINGS)
     p._stream_watchdog_settings = settings
@@ -246,7 +315,8 @@ def _simulate_reconnects(*, horizon=20000, step=15, frames_after_reconnect=()):
     p.last_heartbeat_response = 0.0
     grace = 120
     heartbeat_stale = 45
-    pending_frames = deque(frames_after_reconnect)
+    pending_business = deque(business_frames)
+    pending_replay = deque(replay_frames)
 
     now = 0.0
     reconnects = []
@@ -268,29 +338,37 @@ def _simulate_reconnects(*, horizon=20000, step=15, frames_after_reconnect=()):
         p.last_stream_watchdog_reconnect_time = now
         p.stream_watchdog_pending_justify_deadline = now + settings['justify_window_seconds']
         reconnects.append(now)
-        # 模拟重连后的积压帧
-        while pending_frames and pending_frames[0] <= p.stream_watchdog_pending_justify_deadline:
-            frame_at = pending_frames.popleft()
-            p._mark_non_heartbeat_message(frame_at, is_sync_package=True)
+        # 模拟重连后的重放帧(不举证)与真实业务帧(举证)
+        while pending_replay and pending_replay[0] <= p.stream_watchdog_pending_justify_deadline:
+            p._mark_stream_frame_arrival(pending_replay.popleft(), is_sync_package=True)
+        while pending_business and pending_business[0] <= p.stream_watchdog_pending_justify_deadline:
+            p._mark_non_heartbeat_message(pending_business.popleft(), is_sync_package=True)
     return reconnects
 
 
 def test_idle_account_reconnect_cadence_lengthens():
     reconnects = _simulate_reconnects()
     intervals = [round(b - a) for a, b in zip(reconnects, reconnects[1:])]
-    # 首次仍按基础 30 分钟触发，随后逐步拉长并封顶到基础阈值
-    assert reconnects[0] == 1800
-    assert intervals[0] == 1800
-    assert max(intervals) >= 3600
-    # 相同时间窗内重连次数应显著少于"固定 30 分钟"的基线
-    baseline = len(range(1800, 20000, 1800))
+    # 首次仍按基础 60 分钟触发,随后逐步拉长
+    assert reconnects[0] == 3600
+    assert intervals and max(intervals) > 3600
+    # 相同时间窗内重连次数应显著少于"固定基础阈值"的基线
+    baseline = len(range(3600, 60000, 3600))
     assert len(reconnects) < baseline
 
 
+def test_replayed_frames_alone_do_not_justify_reconnect():
+    """重放帧落在举证窗口内也不算"确有积压":退避照常推进,重连节奏被拉长。"""
+    replays = [t + 5 for t in range(3600, 60000, 3600)]
+    reconnects = _simulate_reconnects(replay_frames=replays)
+    intervals = [round(b - a) for a, b in zip(reconnects, reconnects[1:])]
+    assert intervals and max(intervals) > 3600
+
+
 def test_justified_reconnect_keeps_baseline_cadence():
-    # 每次重连后 30 秒内都有积压业务帧 → 举证成立，退避始终复位
-    frames = [t + 30 for t in range(1800, 20000, 1800)]
-    reconnects = _simulate_reconnects(frames_after_reconnect=frames)
+    # 每次重连后 30 秒内都有真实业务帧 → 举证成立,退避始终复位
+    frames = [t + 30 for t in range(3600, 60000, 3600)]
+    reconnects = _simulate_reconnects(business_frames=frames)
     intervals = [round(b - a) for a, b in zip(reconnects, reconnects[1:])]
     assert intervals, 'expected repeated reconnects'
-    assert all(interval <= 1900 for interval in intervals)
+    assert all(interval <= 3700 for interval in intervals)

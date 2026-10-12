@@ -4197,7 +4197,11 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
                                         continue
 
                                     is_sync_package = self.is_sync_package(message_data)
-                                    self._mark_non_heartbeat_message(time.time(), is_sync_package=is_sync_package)
+                                    # 仅登记"收到帧"（刷新时间戳用于展示/诊断），不重置空闲退避：
+                                    # 这里绝大多数帧是服务端重连后重放的历史引导包，若在此重置退避，
+                                    # 重连后 3~8 秒内到达的重放包会把 idle_streak 清零，退避永不生效。
+                                    # 真正的业务帧在 handle_message 分类通过后调用 _mark_non_heartbeat_message。
+                                    self._mark_stream_frame_arrival(time.time(), is_sync_package=is_sync_package)
 
                                     # 处理其他消息
                                     # 使用高性能消息队列系统处理消息，解决消息阻塞问题

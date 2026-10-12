@@ -139,7 +139,7 @@ RISK_CONTROL = config.get('RISK_CONTROL', {
     'token_refresh_dedup_window_seconds': 60,
     'token_retry_min_wait_seconds': 180,
     'max_post_slider_session_retries': 1,
-    'message_stream_watchdog_timeout_seconds': 1800,
+    'message_stream_watchdog_timeout_seconds': 3600,
     'message_stream_watchdog_max_backoff_multiplier': 4,
     'message_stream_watchdog_justify_window_seconds': 90,
     'message_stream_watchdog_notify_on_idle': False,
