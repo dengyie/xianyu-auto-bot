@@ -164,23 +164,56 @@ jobs:
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Start pull on tencent (detached)
-        # 腾讯轻量云拉 GHCR 镜像走跨境链路，单次实测可达 ~25 分钟，且大层易断流。
-        # 在 VPS 上用 setsid 把 pull 与 SSH 会话解耦：progress 存在时 SSH 断开
-        # 也不会中断拉取，重跑本 job 直接复用仍在跑的 pull（不重复抢 ingest 锁）。
+        # 跨境链路直连 GHCR 实测仅 0.3–3 MB/s:当 apt+Playwright 层(~600MB)digest 变化
+        # (Dockerfile 改动 / 构建缓存失效)时,单层需 3–30+ 分钟且频繁 EOF 断流(overlay2
+        # 大层失败即回退,曾连续判红)。改用 NJU 反代 ghcr.nju.edu.cn——与 GHCR 字节一致
+        # (同 manifest digest,已验证),实测 ~3.7 MB/s,616MB 层 ~3 分钟。策略:先用镜像
+        # 拉本次提交的 sha-<short> 标签,回打成 ghcr.io/<repo>:latest(compose 引用的名字);
+        # 镜像不可达时回退直连 compose pull。仍用 setsid 解耦 SSH:重跑 job 复用仍在跑的
+        # pull,不重复抢 containerd ingest 锁。
         run: |
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o User=root "$SSH_HOST" 'bash -s' << 'DEPLOY_SCRIPT'
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o User=root "$SSH_HOST" "SHORT_SHA=${{ github.sha }} bash -s" << 'DEPLOY_SCRIPT'
           set -euo pipefail
           LOG=/tmp/xianyu_pull.log
           EXITF=/tmp/xianyu_pull.exit
-          if pgrep -f 'compose .*pull xianyu-app' >/dev/null; then
+          HELPER=/tmp/xianyu_pull_helper.sh
+          SHORT="${SHORT_SHA:0:7}"
+          cat > "$HELPER" <<'HELPER_EOF'
+          #!/usr/bin/env bash
+          SHORT="$1"
+          EXPECT_REV="$2"
+          REPO=dengyie/xianyu-auto-bot
+          MIRROR=ghcr.nju.edu.cn
+          LOG=/tmp/xianyu_pull.log
+          EXITF=/tmp/xianyu_pull.exit
+          echo "=== pull start $(date) short=$SHORT repo=$REPO expect_rev=$EXPECT_REV ===" > "$LOG"
+          rc=1
+          echo "--- mirror path: $MIRROR/$REPO:sha-$SHORT ---" >> "$LOG"
+          if timeout 1200 sudo docker pull "$MIRROR/$REPO:sha-$SHORT" >>"$LOG" 2>&1; then
+            got_rev=$(sudo docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$MIRROR/$REPO:sha-$SHORT" 2>/dev/null || echo "")
+            echo "--- mirror image revision=$got_rev expected=$EXPECT_REV ---" >> "$LOG"
+            if [ "$got_rev" = "$EXPECT_REV" ]; then
+              if sudo docker tag "$MIRROR/$REPO:sha-$SHORT" "ghcr.io/$REPO:latest" >>"$LOG" 2>&1 \
+                 && sudo docker tag "$MIRROR/$REPO:sha-$SHORT" "ghcr.io/$REPO:sha-$SHORT" >>"$LOG" 2>&1; then
+                rc=0
+              fi
+            else
+              echo "--- mirror revision mismatch (stale/lagging mirror); refusing tag ---" >> "$LOG"
+            fi
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "--- mirror path failed; fallback: direct GHCR compose pull ---" >> "$LOG"
+            sudo docker compose -f /opt/xianyu-auto-bot/docker-compose.yml pull xianyu-app >>"$LOG" 2>&1 && rc=0
+          fi
+          echo "EXIT=$rc" > "$EXITF"
+          HELPER_EOF
+          chmod +x "$HELPER"
+          if pgrep -f 'xianyu_pull_helper' >/dev/null || pgrep -f 'compose .*pull xianyu-app' >/dev/null; then
             echo "an in-flight pull already exists — will poll it instead of starting a new one"
           else
             rm -f "$EXITF"
-            : > "$LOG"
-            setsid nohup bash -c \
-              "sudo docker compose -f /opt/xianyu-auto-bot/docker-compose.yml pull xianyu-app >>$LOG 2>&1; echo EXIT=\$? > $EXITF" \
-              </dev/null >/dev/null 2>&1 &
-            echo "detached pull started (log: $LOG)"
+            setsid nohup "$HELPER" "$SHORT" "$SHORT_SHA" </dev/null >/dev/null 2>&1 &
+            echo "detached pull started (mirror-first, log: $LOG)"
           fi
           DEPLOY_SCRIPT
 
