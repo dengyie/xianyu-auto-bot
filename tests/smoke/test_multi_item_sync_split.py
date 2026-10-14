@@ -56,7 +56,7 @@ async def test_multi_item_sync_frame_is_split_and_fully_processed():
     split = [r for r in records if "拆帧逐条处理" in r]
     assert len(split) == 1 and "3 条消息" in split[0]
     # 三个 item 各自走完整管线（旧实现只处理 data[0]，后两条静默丢失）
-    detected = [r for r in records if "检测到chatType消息" in r]
+    detected = [r for r in records if "系统引导消息处理完成" in r]
     assert len(detected) == 3
     # 原帧统一 ack 一次；synthetic 帧带 _slidex_no_ack 不重复 ack
     assert ws.send.await_count == 1
@@ -74,7 +74,7 @@ async def test_single_item_frame_does_not_log_split():
         loguru_logger.remove(handler_id)
 
     assert not [r for r in records if "拆帧逐条处理" in r]
-    assert len([r for r in records if "检测到chatType消息" in r]) == 1
+    assert len([r for r in records if "系统引导消息处理完成" in r]) == 1
 
 
 @pytest.mark.asyncio
@@ -94,6 +94,6 @@ async def test_split_preserves_item_order():
     finally:
         loguru_logger.remove(handler_id)
 
-    detected = [r for r in records if "检测到chatType消息" in r]
+    detected = [r for r in records if "系统引导消息处理完成" in r]
     assert len(detected) == 2
     assert ws.send.await_count >= 1  # 原帧 ack 已发送

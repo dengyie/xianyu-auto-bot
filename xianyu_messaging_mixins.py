@@ -1905,7 +1905,10 @@ class MessagePipelineMixin:
                     # 处理未加密的消息（如系统提示等）
                     msg_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                     if isinstance(parsed_data, dict) and 'chatType' in parsed_data:
-                        logger.warning(f"【{self.cookie_id}】[{msg_id}] ⚠️ 检测到chatType消息，完整内容: {parsed_data}")
+                        # chatType 帧(尤其服务端每次重连都重放的引导包)数量多、体积大,
+                        # 完整 payload 只在 DEBUG 下输出,避免 WARNING 刷屏(曾把日志撑到数百 KB);
+                        # 首见引导脚本另在下方以 INFO 逐条列出。
+                        logger.debug(f"【{self.cookie_id}】[{msg_id}] 检测到chatType消息，完整内容: {parsed_data}")
                         if 'operation' in parsed_data and 'content' in parsed_data['operation']:
                             content = parsed_data['operation']['content']
                             if 'sessionArouse' in content:
