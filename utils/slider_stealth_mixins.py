@@ -4940,8 +4940,12 @@ class SliderVerificationMixin:
             time.sleep(1.5)
 
             screenshot_bytes = None
+            # 记录最后一次回退失败原因:浏览器在风控恢复过程中被拆掉时,5 种方式都会以
+            # "Target page/context/browser has been closed" 失败——这是预期内的清理竞态,
+            # 不是故障,故整体降级为 DEBUG,仅在"浏览器已关闭"时留一条 INFO 便于排查。
+            last_error = None
 
-            # 方式1：通过 frame.frame_element() 截取 iframe 元素
+            # 方式1:通过 frame.frame_element() 截取 iframe 元素
             if frame is not None and screenshot_bytes is None:
                 try:
                     frame_element = frame.frame_element()
@@ -4949,9 +4953,10 @@ class SliderVerificationMixin:
                         screenshot_bytes = frame_element.screenshot(timeout=5000)
                         logger.info(f"【{self.pure_user_id}】方式1: 截取验证iframe元素成功")
                 except Exception as e:
+                    last_error = e
                     logger.debug(f"【{self.pure_user_id}】方式1失败(frame_element): {e}")
 
-            # 方式2：通过 iframe 选择器截取
+            # 方式2:通过 iframe 选择器截取
             if screenshot_bytes is None and iframe_selector:
                 try:
                     iframe_element = page.query_selector(iframe_selector)
@@ -4959,9 +4964,10 @@ class SliderVerificationMixin:
                         screenshot_bytes = iframe_element.screenshot(timeout=5000)
                         logger.info(f"【{self.pure_user_id}】方式2: 按选择器截取iframe成功")
                 except Exception as e:
+                    last_error = e
                     logger.debug(f"【{self.pure_user_id}】方式2失败(selector): {e}")
 
-            # 方式3：通过 alibaba-login-box 选择器（常见的人脸验证 iframe）
+            # 方式3:通过 alibaba-login-box 选择器(常见的人脸验证 iframe)
             if screenshot_bytes is None:
                 try:
                     login_box = page.query_selector('iframe#alibaba-login-box')
@@ -4969,26 +4975,34 @@ class SliderVerificationMixin:
                         screenshot_bytes = login_box.screenshot(timeout=5000)
                         logger.info(f"【{self.pure_user_id}】方式3: 截取alibaba-login-box成功")
                 except Exception as e:
+                    last_error = e
                     logger.debug(f"【{self.pure_user_id}】方式3失败(alibaba-login-box): {e}")
 
-            # 方式4：截取整个页面可见区域
+            # 方式4:截取整个页面可见区域
             if screenshot_bytes is None:
                 try:
                     screenshot_bytes = page.screenshot(full_page=False, timeout=10000)
                     logger.info(f"【{self.pure_user_id}】方式4: 截取整页面成功")
                 except Exception as e:
-                    logger.warning(f"【{self.pure_user_id}】方式4失败(full_page): {e}")
+                    last_error = e
+                    logger.debug(f"【{self.pure_user_id}】方式4失败(full_page): {e}")
 
-            # 方式5：截取整个页面（含滚动区域）
+            # 方式5:截取整个页面(含滚动区域)
             if screenshot_bytes is None:
                 try:
                     screenshot_bytes = page.screenshot(full_page=True, timeout=10000)
                     logger.info(f"【{self.pure_user_id}】方式5: 截取完整页面成功")
                 except Exception as e:
-                    logger.warning(f"【{self.pure_user_id}】方式5失败(full_page=True): {e}")
+                    last_error = e
+                    logger.debug(f"【{self.pure_user_id}】方式5失败(full_page=True): {e}")
 
             if screenshot_bytes is None:
-                logger.error(f"【{self.pure_user_id}】所有截图方式均失败")
+                err_text = str(last_error or '')
+                if 'has been closed' in err_text:
+                    # 预期清理竞态:浏览器已被拆除,截图无从谈起,不是错误
+                    logger.info(f"【{self.pure_user_id}】截图跳过:验证浏览器已关闭(清理竞态)")
+                else:
+                    logger.debug(f"【{self.pure_user_id}】所有截图方式均失败: {err_text or '未知原因'}")
                 return None
 
             timestamp = _host.datetime.now().strftime('%Y%m%d_%H%M%S')

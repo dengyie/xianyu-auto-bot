@@ -319,7 +319,11 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
     # 初始化鉴权失败熔断：区分于 WebSocket 建链失败，避免重连风暴
     _init_auth_failure_state = {}  # {cookie_id: {'count': int, 'window_started_at': float, 'last_failure_at': float, 'last_reason': str, 'circuit_until': float}}
     _init_auth_failure_lock = threading.Lock()
-    _init_auth_failure_window = 60
+    # 窗口 600s：须 ≥ 节流类重试节奏的两倍，否则计数器永远到不了阈值——线上复核发现
+    # 原 60s 窗口小于实际重试间隔（票据沉淀期 219~247s、预算冷却 1799s），38 次失败
+    # 全部记为 (1/3)、'进入冷静期' 0 次，熔断器形同虚设。600s 让连败 3 次真正能触发；
+    # 又 < 1799s 的预算冷却间隔，故一次刻意的长冷却会自动重置计数、不误触发。
+    _init_auth_failure_window = 600
     _init_auth_failure_threshold = 3
     _init_auth_cooldown = 60
 
@@ -487,6 +491,20 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
         self.last_sent_heartbeat_mid = None
         self.pending_heartbeat_mids.clear()
         self.last_stream_watchdog_reconnect_time = 0
+
+
+    def _log_background_task_snapshot(self):
+        """打印后台任务启动前的调试快照。
+
+        每次重连都会走到这里,内容只是旧任务引用,属排查用细节,故用 DEBUG;
+        频繁重连时若用 WARNING 会污染日志、淹没真告警。
+        """
+        logger.debug(
+            f"【{self.cookie_id}】准备启动后台任务 - 当前状态: "
+            f"heartbeat={self.heartbeat_task}, token_refresh={self.token_refresh_task}, "
+            f"cleanup={self.cleanup_task}, cookie_refresh={self.cookie_refresh_task}, "
+            f"stream_watchdog={self.stream_watchdog_task}"
+        )
 
 
     async def _force_websocket_reconnect(self, reason: str) -> bool:
@@ -4112,8 +4130,8 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
                             self.last_successful_connection = time.time()
                             self._reset_stream_activity_state(self.last_successful_connection)
 
-                            # 记录后台任务启动前的状态
-                            logger.warning(f"【{self.cookie_id}】准备启动后台任务 - 当前状态: heartbeat={self.heartbeat_task}, token_refresh={self.token_refresh_task}, cleanup={self.cleanup_task}, cookie_refresh={self.cookie_refresh_task}, stream_watchdog={self.stream_watchdog_task}")
+                            # 记录后台任务启动前的状态(仅 DEBUG,避免频繁重连刷屏)
+                            self._log_background_task_snapshot()
                             
                             # 如果存在心跳任务引用，先清理（心跳任务依赖WebSocket，必须重启）
                             if self.heartbeat_task:

@@ -504,7 +504,8 @@ class CookieMixin:
                         # 如果更新失败，记录错误但不使用 save_cookie（避免覆盖账号密码）
                         logger.warning(f"更新Cookie到数据库失败: {self.cookie_id}，但不使用save_cookie避免覆盖账号密码")
                     else:
-                        logger.warning(f"已更新Cookie到数据库: {self.cookie_id}")
+                        # 常规成功路径:此前误用 WARNING 刷屏,降为 INFO(真失败仍在上分支 WARNING)
+                        logger.info(f"已更新Cookie到数据库: {self.cookie_id}")
                 except Exception as e:
                     logger.error(f"更新数据库Cookie失败: {self._safe_str(e)}")
                     # 发送数据库更新失败通知
