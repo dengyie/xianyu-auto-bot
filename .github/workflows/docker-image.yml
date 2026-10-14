@@ -127,8 +127,19 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64,linux/arm64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # 缓存策略（2026-10-14 加固）：仅靠 type=gha 会因 10GB/7天限额被逐出，
+          # 逐出后 apt+Playwright 浏览器层（~600MB）每次重建都会产生**新 digest**，
+          # 于是 VPS 每次都要跨境重下这一整层——单个 600MB 层在跨境链路上几乎不可能
+          # 一次拉完（overlay2 不回续传，失败即从 0 重来）。改为 GHCR 持久缓存 +
+          # 以 VPS 已部署镜像为种子，令重建复用同一批层，VPS 只需下变化的应用层。
+          # `sha-de8805d` 是种子：指向线上当前镜像，保证本次重建与该镜像层一致。
+          cache-from: |
+            type=gha
+            type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:buildcache
+            type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:sha-de8805d
+          cache-to: |
+            type=gha,mode=max
+            type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:buildcache,mode=max
 
   deploy-to-tencent:
     # 镜像构建成功后自动部署到腾讯轻量云生产（仅 push to main 触发）
