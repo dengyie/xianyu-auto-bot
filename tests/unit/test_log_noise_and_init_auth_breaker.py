@@ -209,3 +209,72 @@ def test_background_task_snapshot_logs_debug():
         logger.remove(sink_id)
 
     assert _levels(records, "准备启动后台任务") == ["DEBUG"]
+
+
+# --------------------------------------------------------------------------
+# 项五:冷静期日志必须报最终生效等待(2026-10-15 线上复核)
+#
+# `retry_delay = max(retry_delay, circuit_wait)` 保证冷静期只抬高下限、绝不缩短。
+# 原实现打印的是 circuit_wait,于是 max(1800,59)=1800s 却打"冷静期 59 秒",误导。
+# --------------------------------------------------------------------------
+
+def _make_retry_host(status=None, cooldown_remaining=None, connection_failures=0):
+    m = XianyuLive.__new__(XianyuLive)
+    m.cookie_id = "1926782908"
+    m.last_token_refresh_status = status
+    m.connection_failures = connection_failures
+    m._is_account_pause_status = lambda s: False
+    m._is_in_qr_login_grace_period = lambda t: False
+    if cooldown_remaining is not None:
+        m._slider_budget_cooldown_remaining = lambda: cooldown_remaining
+    return m
+
+
+def test_circuit_cooldown_does_not_shorten_wait_and_logs_effective():
+    """线下实况:重试间隔 1800s、冷静期仅 59s → 应等 1800s 且日志报 1800。"""
+    m = _make_retry_host("slider_budget_cooldown", cooldown_remaining=1800)
+    records, sink_id = _capture_loguru_records()
+    try:
+        delay = m._resolve_init_auth_retry_delay(
+            "Token获取失败(status=slider_budget_cooldown)",
+            {"circuit_until": time.time() + 59},
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert delay == 1800, f"冷静期不得缩短等待: {delay}"
+    msgs = [r["message"] for r in records if "初始化鉴权失败已达到阈值" in r["message"]]
+    assert msgs and "1800 秒后重试" in msgs[0], msgs
+    assert "冷静期余" in msgs[0], msgs
+
+
+def test_circuit_cooldown_raises_floor_when_retry_delay_small():
+    """快速连败(基础重试 5s)时,冷静期 59s 必须抬高下限。"""
+    m = _make_retry_host(connection_failures=0)
+    records, sink_id = _capture_loguru_records()
+    try:
+        delay = m._resolve_init_auth_retry_delay(
+            "no close frame received or sent",
+            {"circuit_until": time.time() + 59},
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert delay == 59, f"冷静期应抬高下限: {delay}"
+    msgs = [r["message"] for r in records if "初始化鉴权失败已达到阈值" in r["message"]]
+    assert msgs and "59 秒后重试" in msgs[0], msgs
+
+
+def test_no_active_circuit_logs_plain_retry():
+    """冷静期已过 / 未开 → 打普通重试日志,报按错误类型算出的间隔。"""
+    m = _make_retry_host("slider_budget_cooldown", cooldown_remaining=1800)
+    records, sink_id = _capture_loguru_records()
+    try:
+        delay = m._resolve_init_auth_retry_delay(
+            "Token获取失败(status=slider_budget_cooldown)", {}
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert delay == 1800
+    assert any("将在 1800 秒后重试初始化鉴权" in r["message"] for r in records)

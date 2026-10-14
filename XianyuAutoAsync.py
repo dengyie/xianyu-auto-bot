@@ -795,6 +795,28 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
             return max(10, min(5 * self.connection_failures, 30))
 
 
+    def _resolve_init_auth_retry_delay(self, error_msg: str, init_auth_state: Optional[dict]) -> int:
+        """计算初始化鉴权失败后的重试等待，并记录日志；返回最终等待秒数。
+
+        熔断冷静期 (circuit_until) 只抬高等待下限、绝不缩短：
+        最终等待 = max(按错误类型算出的重试间隔, 冷静期剩余)。
+        **必须报这个最终值**——否则 max(1800, 59) 实际睡 1800s 却打印"冷静期 59 秒"，
+        会让人误以为熔断把重试变激进了（2026-10-15 线上复核发现）。
+        """
+        retry_delay = self._calculate_retry_delay(error_msg)
+        circuit_until = (init_auth_state or {}).get('circuit_until', 0)
+        if circuit_until and time.time() < circuit_until:
+            circuit_wait = max(1, int(circuit_until - time.time()))
+            retry_delay = max(retry_delay, circuit_wait)
+            logger.warning(
+                f"【{self.cookie_id}】初始化鉴权失败已达到阈值，"
+                f"{retry_delay} 秒后重试（冷静期余 {circuit_wait}s）"
+            )
+        else:
+            logger.warning(f"【{self.cookie_id}】将在 {retry_delay} 秒后重试初始化鉴权...")
+        return retry_delay
+
+
     def _cleanup_instance_caches(self):
         """清理实例级别的缓存，防止内存泄漏"""
         try:
@@ -4255,16 +4277,7 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
                     logger.error(f"【{self.cookie_id}】初始化鉴权失败 ({self.init_auth_failures}/{self._init_auth_failure_threshold})")
                     logger.error(f"【{self.cookie_id}】初始化失败原因: {error_msg}")
 
-                    retry_delay = self._calculate_retry_delay(error_msg)
-                    circuit_until = init_auth_state.get('circuit_until', 0)
-                    if circuit_until and time.time() < circuit_until:
-                        circuit_wait = max(1, int(circuit_until - time.time()))
-                        retry_delay = max(retry_delay, circuit_wait)
-                        logger.warning(
-                            f"【{self.cookie_id}】初始化鉴权失败已达到阈值，进入冷静期 {circuit_wait} 秒后再重试"
-                        )
-                    else:
-                        logger.warning(f"【{self.cookie_id}】将在 {retry_delay} 秒后重试初始化鉴权...")
+                    retry_delay = self._resolve_init_auth_retry_delay(error_msg, init_auth_state)
 
                     self._reset_background_tasks()
                     await self._interruptible_sleep(retry_delay)
