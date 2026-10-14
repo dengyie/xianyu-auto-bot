@@ -251,18 +251,22 @@ def test_circuit_cooldown_does_not_shorten_wait_and_logs_effective():
 def test_circuit_cooldown_raises_floor_when_retry_delay_small():
     """快速连败(基础重试 5s)时,冷静期 59s 必须抬高下限。"""
     m = _make_retry_host(connection_failures=0)
+    cooldown = 59
     records, sink_id = _capture_loguru_records()
     try:
         delay = m._resolve_init_auth_retry_delay(
             "no close frame received or sent",
-            {"circuit_until": time.time() + 59},
+            {"circuit_until": time.time() + cooldown},
         )
     finally:
         logger.remove(sink_id)
 
-    assert delay == 59, f"冷静期应抬高下限: {delay}"
+    # 冷静期剩余由整数截断,允许 1s 误差(CI 慢机器上会取到 58)
+    assert cooldown - 1 <= delay <= cooldown, f"冷静期应抬高下限: {delay}"
     msgs = [r["message"] for r in records if "初始化鉴权失败已达到阈值" in r["message"]]
-    assert msgs and "59 秒后重试" in msgs[0], msgs
+    assert msgs, msgs
+    # 日志必须报最终生效值(与返回一致),而不是写死的 59
+    assert f"{delay} 秒后重试" in msgs[0], msgs
 
 
 def test_no_active_circuit_logs_plain_retry():
