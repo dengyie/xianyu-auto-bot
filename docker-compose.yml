@@ -48,6 +48,14 @@ services:
       # CDP 模式：非空时滑块连接外部真实浏览器（用户 PC Chrome 经 ssh -R 反向隧道
       # 到 VPS localhost:9222），真实设备指纹 + 家宽直连；会话 cookie 由 slidex 注入
       - XY_SLIDER_CDP_ENDPOINT=${XY_SLIDER_CDP_ENDPOINT:-}
+      # CDP 连接前的标签唤醒：默认关闭。开启(1)时 slidex 会为唤醒冻结标签而把用户
+      # PC 上的标签逐个切到前台（可见抖动），且标签越多连接越慢——冻结标签应在用户
+      # PC 侧关掉 Chrome 内存节省根治（见 scripts/cdp_tunnel.ps1 启动参数）。仅在
+      # 无法关内存节省时才作为兜底打开。
+      - SLIDEX_CDP_PRE_ACTIVATE=${SLIDEX_CDP_PRE_ACTIVATE:-}
+      # connect_over_cdp 握手超时（秒）。超时后 slidex 会兜底唤醒一次再重试一轮，
+      # 故一般无需调大。
+      - SLIDEX_CDP_CONNECT_TIMEOUT=${SLIDEX_CDP_CONNECT_TIMEOUT:-45}
 
       - PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}
       - PYTHONDONTWRITEBYTECODE=${PYTHONDONTWRITEBYTECODE:-1}

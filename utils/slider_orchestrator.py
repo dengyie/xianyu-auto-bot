@@ -242,7 +242,16 @@ def cdp_endpoint_from_env() -> str:
 
 
 async def cdp_endpoint_reachable(endpoint: str, timeout: float = 3.0) -> bool:
-    """快速 TCP 探测 CDP 端点（反向隧道是否在线），解析失败视为可达（不拦截）。"""
+    """探测 CDP 端点是否真正可用（反向隧道在线 **且** 用户 PC 的 Chrome 在跑）。
+
+    只探 TCP 不够：隧道在线时 sshd 在 172.19.0.1:9222 上必然 accept，但用户 PC
+    的 Chrome 可能没启动（或没带 --remote-debugging-port），此时 connect_over_cdp
+    会白等一整个握手超时，表现就是"滑块页迟迟不打开/最后什么都没打开"。所以
+    TCP 通了之后再对 DevTools 的 HTTP 端点 /json/version 发一次请求看它是否应答：
+      - 返回 webSocketDebuggerUrl → 真正可用；
+      - 连接被立刻重置/EOF（隧道把请求转给 PC 上并不存在的 Chrome）→ 判不可用；
+      - 只是慢（超时）→ 保守判为可用，不误拦本可成功的求解。
+    解析失败视为可达（不拦截）。"""
     from urllib.parse import urlparse
 
     try:
@@ -258,9 +267,47 @@ async def cdp_endpoint_reachable(endpoint: str, timeout: float = 3.0) -> bool:
             await writer.wait_closed()
         except Exception:
             pass
-        return True
     except Exception:
         return False
+
+    if endpoint.startswith(("ws://", "wss://")):
+        return True  # 直接给了 ws 地址，交 connect_over_cdp 判断
+
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=timeout
+        )
+    except Exception:
+        return False
+    try:
+        request = (
+            f"GET /json/version HTTP/1.1\r\nHost: {host}:{port}\r\n"
+            "Connection: close\r\nUser-Agent: xianyu-cdp-probe\r\n\r\n"
+        )
+        try:
+            writer.write(request.encode("ascii"))
+            await writer.drain()
+        except Exception:
+            # 写不进去/已重置：隧道把连接转给了 PC 上并不存在的 Chrome
+            return False
+        try:
+            raw = await asyncio.wait_for(reader.read(4096), timeout=timeout)
+        except asyncio.TimeoutError:
+            return True  # 慢，但可能只是忙：不误拦
+        except Exception:
+            return False  # 被重置：对端没有真正的 DevTools HTTP 端点
+        if not raw:
+            # 隧道把连接转给 PC 上并不存在的 Chrome：立刻 EOF
+            return False
+        # 已拿到 HTTP 应答：只要看得出是 DevTools 端点（webSocketDebuggerUrl）
+        # 或至少是合法 HTTP 就判可用；否则保守判可用，避免误拦。
+        return b"webSocketDebuggerUrl" in raw or b"HTTP/1." in raw
+    finally:
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
 
 
 async def _invoke_slider_async(slider: Any, url: str, **kwargs: Any) -> Tuple[bool, Optional[Dict[str, Any]]]:
@@ -277,8 +324,10 @@ async def _invoke_slider_async(slider: Any, url: str, **kwargs: Any) -> Tuple[bo
         # 出可操作提示，把周期还给 fallback 链路。
         if not await cdp_endpoint_reachable(cdp):
             logger.warning(
-                f"CDP 端点 {cdp} 不可达——用户 PC 上的反向隧道未在线。"
-                f"请在用户 PC 运行仓库 scripts/cdp_tunnel.ps1（并确认 Chrome 调试端口已启动）"
+                f"CDP 端点 {cdp} 不可达（反向隧道未在线，或用户 PC 上的 Chrome "
+                f"未带 --remote-debugging-port=9222 启动）。请在用户 PC 运行仓库 "
+                f"scripts/cdp_tunnel.ps1，并确认该 Chrome 已启动——否则 "
+                f"connect_over_cdp 会白等整个握手超时，滑块页不会打开"
             )
             return False, None
         return await slider.solve_on_existing_page(cdp, url)

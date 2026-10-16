@@ -302,3 +302,114 @@ def test_cdp_mode_drissionpage_fallback_env_override_async(monkeypatch):
     assert result.success is True
     assert result.engine == "drissionpage"
     assert result.x5_cookies == {"x5sec": "dp_ticket"}
+
+
+# ==================== CDP 预检:TCP 通不等于可用 ====================
+# 只探 TCP 会漏掉"隧道在线但用户 PC 的 Chrome 没跑"这一常见故障:此时 sshd 在
+# 172.19.0.1:9222 上正常 accept,connect_over_cdp 却会白等整个握手超时,现场表现
+# 就是"滑块页迟迟不打开/最后什么都没打开"。以下用真实本地 TCP 服务验证两级探测。
+
+
+async def _spawn_probe_server(handler):
+    import asyncio
+
+    server = await asyncio.start_server(handler, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    return server, port
+
+
+async def test_cdp_preflight_true_when_devtools_http_answers():
+    """Chrome 在跑(DevTools HTTP 端点应答)→ 可达。"""
+    import asyncio
+    import json as _json
+
+    from utils.slider_orchestrator import cdp_endpoint_reachable
+
+    async def handler(reader, writer):
+        try:
+            await reader.read(1024)
+            body = _json.dumps(
+                {"Browser": "Chrome/136", "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/browser/x"}
+            ).encode()
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body)
+            await writer.drain()
+        except Exception:
+            pass
+        finally:
+            writer.close()
+
+    server, port = await _spawn_probe_server(handler)
+    try:
+        assert await cdp_endpoint_reachable(f"http://127.0.0.1:{port}", timeout=1.0) is True
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_cdp_preflight_false_when_tunnel_up_but_chrome_absent():
+    """隧道端口 accept 但转过去是空的(Chrome 没启动)→ 立刻判不可达,不再白等超时。"""
+    from utils.slider_orchestrator import cdp_endpoint_reachable
+
+    async def handler(reader, writer):
+        writer.close()  # 立刻 EOF,模拟转发到不存在的 Chrome
+
+    server, port = await _spawn_probe_server(handler)
+    try:
+        assert await cdp_endpoint_reachable(f"http://127.0.0.1:{port}", timeout=1.0) is False
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_cdp_preflight_false_when_port_closed():
+    """端口没人监听(隧道未在线)→ 不可达。"""
+    import socket
+
+    from utils.slider_orchestrator import cdp_endpoint_reachable
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()  # 立刻释放该端口,保证无人监听
+
+    assert await cdp_endpoint_reachable(f"http://127.0.0.1:{port}", timeout=0.5) is False
+
+
+async def test_cdp_preflight_true_when_probe_slow():
+    """只是慢(超时)不得误判不可达——否则会拦掉本可成功的求解。"""
+    import asyncio
+
+    from utils.slider_orchestrator import cdp_endpoint_reachable
+
+    async def handler(reader, writer):
+        try:
+            await reader.read(1024)
+            await asyncio.sleep(0.4)  # 慢于探测超时
+        except Exception:
+            pass
+        finally:
+            writer.close()
+
+    server, port = await _spawn_probe_server(handler)
+    try:
+        assert await cdp_endpoint_reachable(f"http://127.0.0.1:{port}", timeout=0.1) is True
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_cdp_preflight_ws_endpoint_skips_http_probe():
+    """直接给 ws:// 地址时跳过 HTTP 探测(交给 connect_over_cdp 判断)。"""
+    import asyncio
+
+    from utils.slider_orchestrator import cdp_endpoint_reachable
+
+    async def handler(reader, writer):
+        writer.close()
+
+    server, port = await _spawn_probe_server(handler)
+    try:
+        assert await cdp_endpoint_reachable(f"ws://127.0.0.1:{port}/devtools/browser/x", timeout=1.0) is True
+    finally:
+        server.close()
+        await server.wait_closed()
