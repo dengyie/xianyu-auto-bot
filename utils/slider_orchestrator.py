@@ -241,17 +241,48 @@ def cdp_endpoint_from_env() -> str:
     return _cdp_endpoint_from_env()
 
 
-async def cdp_endpoint_reachable(endpoint: str, timeout: float = 3.0) -> bool:
-    """探测 CDP 端点是否真正可用（反向隧道在线 **且** 用户 PC 的 Chrome 在跑）。
+async def _read_devtools_http_response(reader, limit: int = 8192) -> bytes:
+    """按 Content-Length 把一个 HTTP 应答读完整,而不是只取首个 TCP 分段。
 
-    只探 TCP 不够：隧道在线时 sshd 在 172.19.0.1:9222 上必然 accept，但用户 PC
-    的 Chrome 可能没启动（或没带 --remote-debugging-port），此时 connect_over_cdp
-    会白等一整个握手超时，表现就是"滑块页迟迟不打开/最后什么都没打开"。所以
-    TCP 通了之后再对 DevTools 的 HTTP 端点 /json/version 发一次请求看它是否应答：
-      - 返回 webSocketDebuggerUrl → 真正可用；
-      - 连接被立刻重置/EOF（隧道把请求转给 PC 上并不存在的 Chrome）→ 判不可用；
-      - 只是慢（超时）→ 保守判为可用，不误拦本可成功的求解。
-    解析失败视为可达（不拦截）。"""
+    跨公网的反向隧道会把响应头与响应体拆进不同的分段:只调用一次 reader.read()
+    常常只拿到 "HTTP/1.1 200 OK\\r\\n...\\r\\n\\r\\n",此时若按"是否含
+    webSocketDebuggerUrl"判断,就会把好端端在跑的 Chrome 误判成不可达,进而
+    拦掉本可成功的求解(这正是旧实现退化成"看到 HTTP/1. 就算可用"的原因)。
+    没有 Content-Length 时退化为读到 EOF 或读满 limit。
+    """
+    import re
+
+    buf = b""
+    expected = None
+    while len(buf) < limit:
+        chunk = await reader.read(limit - len(buf))
+        if not chunk:
+            break
+        buf += chunk
+        if expected is None:
+            head_end = buf.find(b"\r\n\r\n")
+            if head_end >= 0:
+                match = re.search(rb"content-length:\s*(\d+)", buf[:head_end], re.IGNORECASE)
+                if match:
+                    expected = head_end + 4 + int(match.group(1))
+        if expected is not None and len(buf) >= expected:
+            break
+    return buf
+
+
+async def cdp_endpoint_reachable(endpoint: str, timeout: float = 3.0) -> bool:
+    """探测 CDP 端点是否真正可用(反向隧道在线 **且** 用户 PC 的 Chrome 在跑)。
+
+    只探 TCP 不够:隧道在线时 sshd 在 172.19.0.1:9222 上必然 accept,但用户 PC
+    的 Chrome 可能没启动(或没带 --remote-debugging-port),此时 connect_over_cdp
+    会白等一整个握手超时,表现就是"滑块页迟迟不打开/最后什么都没打开"。所以
+    TCP 通了之后再对 DevTools 的 HTTP 端点 /json/version 发一次请求看它是否应答:
+      - 应答里带 webSocketDebuggerUrl → 真正可用;
+      - 连接被立刻重置/EOF(隧道把请求转给 PC 上并不存在的 Chrome)→ 判不可用;
+      - 应答是合法 HTTP 但没有 webSocketDebuggerUrl(9222 上是别的服务/代理
+        错误页)→ 判不可用,别把 connect 的整个超时浪费在非 DevTools 端口上;
+      - 只是慢(超时)→ 保守判为可用,不误拦本可成功的求解。
+    ws:// 端点例外:见下方注释。解析失败视为可达(不拦截)。"""
     from urllib.parse import urlparse
 
     try:
@@ -264,14 +295,19 @@ async def cdp_endpoint_reachable(endpoint: str, timeout: float = 3.0) -> bool:
         _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
         writer.close()
         try:
-            await writer.wait_closed()
+            await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
         except Exception:
             pass
     except Exception:
         return False
 
     if endpoint.startswith(("ws://", "wss://")):
-        return True  # 直接给了 ws 地址，交 connect_over_cdp 判断
+        # ws:// 只做到"端口可达"为止:这类地址没有可依赖的 HTTP 基址(可能就是
+        # 一个只认 WebSocket 握手的 path 代理),往里发普通 GET 拿不到 /json/version
+        # 是正常的,据此判不可达会拦掉本来能用的配置。宁可放给 connect_over_cdp 判断。
+        # 注意 slidex 侧的 _wake_cdp_targets 会把 ws:// 的 host:port 当 HTTP 基址用,
+        # 这是"唤醒"路径的独立取舍:它拿不到目标列表就返回 0,不会阻断求解。
+        return True
 
     try:
         reader, writer = await asyncio.wait_for(
@@ -288,24 +324,24 @@ async def cdp_endpoint_reachable(endpoint: str, timeout: float = 3.0) -> bool:
             writer.write(request.encode("ascii"))
             await writer.drain()
         except Exception:
-            # 写不进去/已重置：隧道把连接转给了 PC 上并不存在的 Chrome
+            # 写不进去/已重置:隧道把连接转给了 PC 上并不存在的 Chrome
             return False
         try:
-            raw = await asyncio.wait_for(reader.read(4096), timeout=timeout)
+            raw = await asyncio.wait_for(_read_devtools_http_response(reader), timeout=timeout)
         except asyncio.TimeoutError:
-            return True  # 慢，但可能只是忙：不误拦
+            return True  # 慢,但可能只是忙:不误拦
         except Exception:
-            return False  # 被重置：对端没有真正的 DevTools HTTP 端点
+            return False  # 被重置:对端没有真正的 DevTools HTTP 端点
         if not raw:
-            # 隧道把连接转给 PC 上并不存在的 Chrome：立刻 EOF
+            # 隧道把连接转给 PC 上并不存在的 Chrome:立刻 EOF
             return False
-        # 已拿到 HTTP 应答：只要看得出是 DevTools 端点（webSocketDebuggerUrl）
-        # 或至少是合法 HTTP 就判可用；否则保守判可用，避免误拦。
-        return b"webSocketDebuggerUrl" in raw or b"HTTP/1." in raw
+        # 已拿到完整 HTTP 应答:只有 DevTools 版本信息里的 webSocketDebuggerUrl
+        # 才能证明"这就是可用的 CDP 端点"。
+        return b"webSocketDebuggerUrl" in raw
     finally:
         try:
             writer.close()
-            await writer.wait_closed()
+            await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
         except Exception:
             pass
 

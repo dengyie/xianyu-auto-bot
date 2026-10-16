@@ -113,7 +113,7 @@ ENV NODE_PATH=/usr/lib/node_modules
 COPY requirements.txt requirements.lock ./
 RUN pip install --no-cache-dir --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple&& \
     pip install --no-cache-dir --require-hashes -r requirements.lock -i https://pypi.tuna.tsinghua.edu.cn/simple && \
-    pip install --no-cache-dir --no-deps "slidex @ git+https://github.com/dengyie/slidex.git@2d774d1ecce42aed920ea53aeb37e5d7b2a02b96"
+    pip install --no-cache-dir --no-deps "slidex @ git+https://github.com/dengyie/slidex.git@a227e4a6fc8626a13a60bc92b25a9bb54a2c782b"
 
 # 复制项目文件
 COPY . .

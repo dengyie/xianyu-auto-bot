@@ -399,7 +399,8 @@ async def test_cdp_preflight_true_when_probe_slow():
 
 
 async def test_cdp_preflight_ws_endpoint_skips_http_probe():
-    """直接给 ws:// 地址时跳过 HTTP 探测(交给 connect_over_cdp 判断)。"""
+    """直接给 ws:// 地址时只做到端口可达:这类地址没有可依赖的 HTTP 基址,
+    普通 GET 拿不到 /json/version 是正常的,不得据此判不可达。"""
     import asyncio
 
     from utils.slider_orchestrator import cdp_endpoint_reachable
@@ -410,6 +411,71 @@ async def test_cdp_preflight_ws_endpoint_skips_http_probe():
     server, port = await _spawn_probe_server(handler)
     try:
         assert await cdp_endpoint_reachable(f"ws://127.0.0.1:{port}/devtools/browser/x", timeout=1.0) is True
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_cdp_preflight_false_when_http_ok_but_not_devtools():
+    """9222 上应答 200 但不是 DevTools(别的服务/代理错误页)→ 判不可达,
+    别把 connect 的整个握手超时浪费在非 CDP 端口上。"""
+    from utils.slider_orchestrator import cdp_endpoint_reachable
+
+    async def handler(reader, writer):
+        try:
+            await reader.read(1024)
+            body = b"<html>your proxy is fine but this is not chrome</html>"
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: "
+                + str(len(body)).encode()
+                + b"\r\n\r\n"
+                + body
+            )
+            await writer.drain()
+        except Exception:
+            pass
+        finally:
+            writer.close()
+
+    server, port = await _spawn_probe_server(handler)
+    try:
+        assert await cdp_endpoint_reachable(f"http://127.0.0.1:{port}", timeout=1.0) is False
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_cdp_preflight_true_when_response_arrives_in_two_segments():
+    """响应头与响应体分两个 TCP 分段到达(跨公网隧道的常态)仍须判可达——
+    只读一次会话首段就下结论会把在跑的 Chrome 误判成不可达。"""
+    import asyncio
+    import json as _json
+
+    from utils.slider_orchestrator import cdp_endpoint_reachable
+
+    async def handler(reader, writer):
+        try:
+            await reader.read(1024)
+            body = _json.dumps(
+                {"Browser": "Chrome/136", "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/browser/x"}
+            ).encode()
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                + str(len(body)).encode()
+                + b"\r\n\r\n"
+            )
+            await writer.drain()
+            await asyncio.sleep(0.05)  # 头与体拆开到达
+            writer.write(body)
+            await writer.drain()
+        except Exception:
+            pass
+        finally:
+            writer.close()
+
+    server, port = await _spawn_probe_server(handler)
+    try:
+        assert await cdp_endpoint_reachable(f"http://127.0.0.1:{port}", timeout=1.0) is True
     finally:
         server.close()
         await server.wait_closed()

@@ -6,6 +6,8 @@ services:
     container_name: xianyu-auto-bot
     # 回收 chrome 退出后的僵尸进程（Playwright 浏览器树）
     init: true
+    # Chromium 多标签渲染的共享内存：Docker 默认 /dev/shm 仅 64MB，标签一多就会崩渲染进程（Target crashed / 页面被舍弃）。线上早已手工加上，仓库缺失属漂移。
+    shm_size: 512mb
     restart: unless-stopped
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
     # 使用 bash 执行脚本，避免 Windows 行尾格式问题
