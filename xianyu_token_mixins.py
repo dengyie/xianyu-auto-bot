@@ -358,6 +358,12 @@ class TokenMixin:
                         # 烧光 → 整晚 10s 自锤）。安静等完沉淀期再单次重探。
                         _settle_remaining = self._x5sec_settle_remaining()
                         if _settle_remaining > 0:
+                            # 走到这里 = 上一次求解已经成功合并了 x5sec，服务端却
+                            # 在紧接着的这次 Token 请求上又下发挑战 —— 票据没被
+                            # 接受，是会话级判罚而不是票据未生效。本轮再拖一次是
+                            # 把预算花在注定被重判的拖动上（2026-10-19 生产实测），
+                            # 所以本轮剩下的尝试直接不再求解。
+                            self._suppress_round_solve("票据已到手但被服务端重判")
                             self.last_token_refresh_status = 'x5sec_settling'
                             self.last_init_failure_reason = 'x5sec_settling'
                             logger.warning(
@@ -366,6 +372,20 @@ class TokenMixin:
                                 "x5sec 立刻烧掉；到期后单次重探"
                             )
                             raise _host.InitAuthError("Token获取失败(status=x5sec_settling)")
+
+                        # 本轮求解抑制门控：同一轮内已经求解过一次且被判罚重判，
+                        # 后续尝试不再消耗风控资源（求解注定失败，只会加深判罚）。
+                        # 放在预算门控之前——被抑制的尝试不该扣预算。
+                        _suppress_remaining = self._round_solve_suppression_remaining()
+                        if _suppress_remaining > 0:
+                            self.last_token_refresh_status = 'risk_round_solve_suppressed'
+                            self.last_init_failure_reason = 'risk_round_solve_suppressed'
+                            logger.warning(
+                                f"【{self.cookie_id}】本轮已求解过一次且被重判，"
+                                f"跳过本次求解（抑制窗口剩余 {_suppress_remaining}s），"
+                                "等窗口结束再放行下一次探测"
+                            )
+                            raise _host.InitAuthError("Token获取失败(status=risk_round_solve_suppressed)")
 
                         # 求解预算门控：预算耗尽时不再消耗风控资源（每次被挑战都
                         # 会消耗一次惩罚额度），进入冷却等窗口过后自动放行探测周期
@@ -877,6 +897,59 @@ class TokenMixin:
             return 0
         return max(0, int(merged_at + period - time.time()))
 
+    def _round_solve_suppression_remaining(self) -> int:
+        """本轮求解抑制剩余秒数；0 = 未抑制。
+
+        会话级判罚下票据救不回来（求解成功 → 票据合并 → 立刻又被重判），同
+        一轮内继续求解只是把预算烧在注定失败的拖动上（2026-10-19 生产实测：
+        一轮 3 次初始化鉴权失败、2 次求解全部"成功"却全部被重判）。抑制窗口从
+        判定点起算，长度对齐初始化鉴权失败窗口（``_init_auth_failure_window``，
+        默认 600s），到期自动放行下一次探测，不用依赖跨轮的账本复位。
+        """
+        until = float(getattr(self, '_round_solve_suppressed_until', 0.0) or 0.0)
+        if until <= 0:
+            return 0
+        return max(0, int(until - time.time()))
+
+    def _round_solve_suppress_window(self) -> int:
+        """本轮求解抑制窗口长度（秒）。
+
+        默认对齐初始化鉴权失败窗口 ``_init_auth_failure_window``（600s）——
+        "同一轮"就是这个窗口。env ``XY_ROUND_SOLVE_SUPPRESS_WINDOW`` 可覆盖，
+        便于按实测判罚时长调，不必为改常数发版；解析容错（空值/非数字/非正数
+        一律回落默认，不抛 ValueError），与 ``XY_SLIDER_X5SEC_SETTLE_PERIOD``
+        同款。
+        """
+        default = max(60, int(getattr(self, '_init_auth_failure_window', 600) or 600))
+        raw = (os.environ.get("XY_ROUND_SOLVE_SUPPRESS_WINDOW") or "").strip()
+        if raw:
+            try:
+                value = int(float(raw))
+            except (TypeError, ValueError):
+                logger.warning(
+                    f"【{self.cookie_id}】XY_ROUND_SOLVE_SUPPRESS_WINDOW={raw!r} 不是数字，"
+                    f"按默认 {default}s 处理"
+                )
+            else:
+                if value > 0:
+                    return max(60, value)
+                logger.warning(
+                    f"【{self.cookie_id}】XY_ROUND_SOLVE_SUPPRESS_WINDOW={raw!r} 非正数，"
+                    f"按默认 {default}s 处理"
+                )
+        return default
+
+    def _suppress_round_solve(self, reason: str) -> None:
+        """置位本轮求解抑制（幂等，只拉长不缩短），并记一条可见日志。"""
+        window = self._round_solve_suppress_window()
+        deadline = time.time() + window
+        current = float(getattr(self, '_round_solve_suppressed_until', 0.0) or 0.0)
+        self._round_solve_suppressed_until = max(current, deadline)
+        logger.warning(
+            f"【{self.cookie_id}】{reason}；本轮（{window}s 抑制窗口）不再重复求解，"
+            f"剩余 {self._round_solve_suppression_remaining()}s 后放行下一次探测"
+        )
+
     async def _persist_slider_success_record(self, token_path: Optional[str] = None) -> None:
         """把滑块成功链路记录（slidex 0.6.29 success_record）落库并绑定结局。
 
@@ -929,6 +1002,8 @@ class TokenMixin:
         self.last_init_failure_reason = None
         self.last_init_failure_type = None
         self.init_auth_failures = 0
+        # Token 恢复成功 = 上一轮彻底翻篇，解除本轮求解抑制
+        self._round_solve_suppressed_until = 0.0
         self.last_token_refresh_status = "success"
         self.last_token_refresh_error_message = None
         # Token 成功 → 滑块求解预算清零（正常节奏下一次自然到期只消耗 1 次）

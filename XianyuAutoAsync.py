@@ -770,6 +770,12 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
             # 票据沉淀期：刚合并的 x5sec 需要时间被服务端接受，期内不发起新求解
             return max(60, self._x5sec_settle_remaining())
 
+        if getattr(self, 'last_token_refresh_status', None) == 'risk_round_solve_suppressed':
+            # 同一轮内已经花过一次求解、且票据刚合并就被重判（会话级判罚），
+            # 本轮剩下的尝试不再求解；等抑制窗口结束再放行下一次探测。
+            # 延迟必须穿透抑制窗口，否则会在窗口内以 10 秒级间隔空转刷日志。
+            return max(60, self._round_solve_suppression_remaining())
+
         if self._is_account_pause_status(getattr(self, 'last_token_refresh_status', None)):
             return max(300, self._compute_token_retry_wait_seconds(current_time))
 
@@ -1126,6 +1132,9 @@ class XianyuLive(DeliveryMixin, CookieMixin, TokenMixin, MessagePipelineMixin, S
         # 票据沉淀期状态：最近一次滑块 x5sec 合并时刻 + 暂存的成功链路记录
         # （slidex 0.6.29 success_record，token 成功时随结局落库）
         self.last_x5sec_merged_at = 0.0
+        # 同一轮求解抑制截止时刻：求解成功、票据刚合并就被服务端重判（baxia
+        # 会话级判罚，票据救不回来）时置位，本轮剩下的尝试不再求解。0 = 未抑制。
+        self._round_solve_suppressed_until = 0.0
         self._pending_slider_success_record = None
         self.last_password_login_backoff_log_time = 0.0
         self.token_refresh_lock = asyncio.Lock()  # 防止多个入口并发刷新 token
