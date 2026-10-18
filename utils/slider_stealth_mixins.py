@@ -37,6 +37,43 @@ _host = _HostProxy()
 class PasswordLoginMixin:
     """密码登录（Playwright/Headful）全流程与登录态探测。"""
 
+    @staticmethod
+    def _goto_login_page(page, login_url: str, pure_user_id: str = "") -> str:
+        """导航到登录页；networkidle 永不静默时降级 domcontentloaded。
+
+        与 slidex 0.6.40 同根因修复对齐：处罚/风控页持续跑后台信标，
+        networkidle 可能永不达成，60s 后抛 Page.goto Timeout——页面其实已可用，
+        登录表单是否存在由后续探测判定，导航等待不是成败判据。连接类错误仍按
+        原逻辑重试，其余错误照抛。返回实际采用的 wait_until。
+        """
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                page.goto(login_url, wait_until='networkidle', timeout=60000)
+                return 'networkidle'
+            except Exception as e:
+                error_msg = str(e)
+                if 'Timeout' in type(e).__name__:
+                    logger.warning(
+                        f"【{pure_user_id}】登录页 networkidle 超时（疑似处罚页信标未静默），"
+                        "降级 domcontentloaded 继续"
+                    )
+                    try:
+                        page.goto(login_url, wait_until='domcontentloaded', timeout=30000)
+                    except Exception as fallback_e:
+                        logger.warning(f"【{pure_user_id}】降级 domcontentloaded 仍失败: {fallback_e}")
+                    return 'domcontentloaded'
+                if any(err in error_msg for err in ('ERR_CONNECTION_CLOSED', 'ERR_CONNECTION_RESET', 'ERR_CONNECTION_REFUSED')):
+                    if attempt < max_retries - 1:
+                        wait_time = 2 * (attempt + 1)
+                        logger.warning(
+                            f"【{pure_user_id}】连接被关闭，{wait_time}秒后第{attempt + 2}次重试..."
+                        )
+                        time.sleep(wait_time)
+                        continue
+                raise
+        return 'networkidle'
+
     def login_with_password_playwright(self, account: str, password: str, show_browser: bool = False,
                                       notification_callback: Optional[Callable] = None,
                                       force_clean_context: bool = False) -> dict:
@@ -274,24 +311,11 @@ class PasswordLoginMixin:
                 except Exception as warmup_e:
                     logger.warning(f"【{self.pure_user_id}】预访问失败（不影响登录）: {warmup_e}")
 
-                # 访问登录页面（带重试逻辑）
+                # 访问登录页面（带重试逻辑 + networkidle 假超时降级）
                 login_url = "https://www.goofish.com/im"
                 logger.info(f"【{self.pure_user_id}】访问登录页面: {login_url}")
 
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        page.goto(login_url, wait_until='networkidle', timeout=60000)
-                        break
-                    except Exception as e:
-                        error_msg = str(e)
-                        if any(err in error_msg for err in ['ERR_CONNECTION_CLOSED', 'ERR_CONNECTION_RESET', 'ERR_CONNECTION_REFUSED']):
-                            if attempt < max_retries - 1:
-                                wait_time = 2 * (attempt + 1)
-                                logger.warning(f"【{self.pure_user_id}】连接被关闭，{wait_time}秒后第{attempt+2}次重试...")
-                                time.sleep(wait_time)
-                                continue
-                        raise
+                self._goto_login_page(page, login_url, self.pure_user_id)
                 
                 # 等待页面加载
                 wait_time = 2 if not show_browser else 2
