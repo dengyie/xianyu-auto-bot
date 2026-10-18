@@ -55,6 +55,11 @@ services:
       # PC 侧关掉 Chrome 内存节省根治（见 scripts/cdp_tunnel.ps1 启动参数）。仅在
       # 无法关内存节省时才作为兜底打开。
       - SLIDEX_CDP_PRE_ACTIVATE=${SLIDEX_CDP_PRE_ACTIVATE:-}
+      # 连接前冻结标签探针(0.6.37/0.6.38): 默认关闭。开启(1)时 connect 之前先裸 WS
+      # 逐个探活,只对真冻的标签 /json/activate,不再等一次完整握手超时才由兜底唤醒
+      # 把全部 page 切到前台。探针失灵(全部连不上)时安全阀会跳过自愈。预算默认 6s,
+      # 可按链路用 SLIDEX_CDP_PROBE_TIMEOUT 调(反向隧道实测活标签往返 ~2.1s)。
+      - SLIDEX_CDP_PROBE_FROZEN=${SLIDEX_CDP_PROBE_FROZEN:-}
       # connect_over_cdp 握手超时（秒）。超时后 slidex 会兜底唤醒一次再重试一轮，
       # 故一般无需调大。
       - SLIDEX_CDP_CONNECT_TIMEOUT=${SLIDEX_CDP_CONNECT_TIMEOUT:-45}
