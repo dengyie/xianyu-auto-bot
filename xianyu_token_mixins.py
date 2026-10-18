@@ -888,7 +888,10 @@ class TokenMixin:
         """
         try:
             period = max(0, int(float(os.getenv("XY_SLIDER_X5SEC_SETTLE_PERIOD", "300") or 0)))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError: 字面量 "inf"/"infinity" 能被 float() 接受，但
+            # int(float("inf")) 抛 OverflowError；容错解析必须兜住，否则一个坏 env
+            # 会把鉴权链打断（与 XY_ROUND_SOLVE_SUPPRESS_WINDOW 同款语义）。
             period = 300
         if period <= 0:
             return 0
@@ -925,7 +928,10 @@ class TokenMixin:
         if raw:
             try:
                 value = int(float(raw))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
+                # OverflowError: 字面量 "inf"/"infinity" 能被 float() 接受，但
+                # int(float("inf")) 抛 OverflowError；坏 env 一律回落默认，绝不抛出
+                # 把鉴权链打断。
                 logger.warning(
                     f"【{self.cookie_id}】XY_ROUND_SOLVE_SUPPRESS_WINDOW={raw!r} 不是数字，"
                     f"按默认 {default}s 处理"

@@ -122,6 +122,23 @@ def test_suppress_uses_env_window(monkeypatch):
     assert 700 <= m._round_solve_suppression_remaining() <= 777
 
 
+def test_window_env_inf_falls_back(monkeypatch):
+    """int(float('inf')) 抛 OverflowError —— 容错解析必须兜住，坏 env 不能把鉴权链打断。"""
+    m = _make_live()
+    for bad in ("inf", "infinity", "INF"):
+        monkeypatch.setenv("XY_ROUND_SOLVE_SUPPRESS_WINDOW", bad)
+        assert m._round_solve_suppress_window() == int(XianyuLive._init_auth_failure_window), f"{bad!r} 应回落默认"
+
+
+def test_settle_period_env_inf_falls_back(monkeypatch):
+    """同一根因也存在于结算期解析：'inf' 回落默认 300s，不得抛异常。"""
+    m = _make_live()
+    m.last_x5sec_merged_at = time.time()
+    for bad in ("inf", "infinity"):
+        monkeypatch.setenv("XY_SLIDER_X5SEC_SETTLE_PERIOD", bad)
+        assert 0 < m._x5sec_settle_remaining() <= 300, f"{bad!r} 应回落默认"
+
+
 # ---------- 延迟分支 ----------
 
 def test_suppressed_status_delay_tracks_remaining():
@@ -278,6 +295,42 @@ async def test_next_round_can_solve_again():
 
     await m._refresh_token_impl()
     assert len(solve_calls) == 1, "抑制窗口结束后应放行一次求解"
+
+
+@pytest.mark.asyncio
+async def test_round_flow_settle_arm_then_suppress_then_release():
+    """整轮状态机串联：结算置位 → 抑制接管不求解 → 窗口过期放行求解。
+
+    前面几条只各测一段（契约测试更是只比字符串位置）。这条连续驱动**同一个
+    实例**走完三段，验证状态真的在段之间衔接、且全程只在放行那一次求解。
+    """
+    solve_calls = []
+    m = _make_challenged_live(solve_calls)
+    m.last_x5sec_merged_at = time.time() - 10
+    m._x5sec_settle_remaining = lambda: 243  # 刚求解成功合并票据，紧接着被重判
+
+    # 第 1 段：结算分支 = 判罚签名 → 置位抑制并 raise（不求解）
+    with pytest.raises(Exception) as e1:
+        await m._refresh_token_impl()
+    assert "x5sec_settling" in str(e1.value)
+    assert solve_calls == [], "结算分支不该求解"
+    _armed = m._round_solve_suppression_remaining()
+    assert _armed > 0, "结算分支必须置位本轮抑制"
+    assert m.last_token_refresh_status == "x5sec_settling"
+
+    # 第 2 段：结算期已过 → 抑制门控接管，仍不求解（这一步改前会再烧一次求解）
+    m._x5sec_settle_remaining = lambda: 0
+    with pytest.raises(Exception) as e2:
+        await m._refresh_token_impl()
+    assert "risk_round_solve_suppressed" in str(e2.value)
+    assert solve_calls == [], "抑制窗口内的尝试必须跳过求解"
+    assert m.last_token_refresh_status == "risk_round_solve_suppressed"
+
+    # 第 3 段：窗口过期 → 放行一次求解（恢复能力不受损）
+    m._round_solve_suppressed_until = time.time() - 1
+    m.last_token_refresh_status = None
+    await m._refresh_token_impl()
+    assert len(solve_calls) == 1, "抑制窗口结束后应放行且只放行一次求解"
 
 
 @pytest.mark.asyncio
