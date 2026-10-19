@@ -46,7 +46,7 @@ qrcode[pil]>=7.4.2
 playwright==1.59.0
 patchright==1.63.0
 DrissionPage>=4.0.0
-slidex @ git+https://github.com/dengyie/slidex.git@f855857558514f2bb3d952662a868e7ff48a5768
+slidex @ git+https://github.com/dengyie/slidex.git@66153dc573b954d35541445182c400c128e681e7
 
 # ==================== 加密和安全 ====================
 PyJWT>=2.8.0
