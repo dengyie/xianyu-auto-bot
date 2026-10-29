@@ -103,7 +103,7 @@ class TestChooseIndex:
     def test_bad_block_switches_to_better_candidate(self):
         state = _state(
             {
-                "bad": _entry(success=1, fail=12, recent=[0] * 12 + [1]),
+                "bad": _entry(success=1, fail=12, recent=[1] + [0] * 12),
                 "good": _entry(success=10, fail=1, recent=[1] * 10 + [0]),
             },
             {"0": "bad", "3": "good"},
@@ -112,6 +112,55 @@ class TestChooseIndex:
         assert changed is True
         assert index == 3
         assert "switch" in reason
+
+    def test_low_score_without_trailing_streak_holds(self):
+        # 分数被历史失败拖得很低，但最近几次是成败交替：证据不足以判定
+        # "这个块现在不行"，保持不动，避免一次网络抖动就换指纹。
+        state = _state(
+            {
+                "cur": _entry(success=3, fail=9, recent=[0] * 6 + [1, 0, 1, 0, 1, 0]),
+                "rival": _entry(success=12, fail=0),
+            },
+            {"0": "cur", "1": "rival"},
+        )
+        entry = state["profiles"]["cur"]
+        assert health.recent_score(entry) < health.BAD_RATE
+        assert health.trailing_fails(entry) == 1
+        index, reason, changed = health.choose_index(state, 0, 4)
+        assert (index, changed) == (0, False)
+        assert "hold(streak" in reason
+
+    def test_trailing_fail_streak_must_reach_threshold(self):
+        # 末尾连续失败 MIN_TRAILING_FAILS-1 次，分数已低于阈值：还不够格换块
+        state = _state(
+            {
+                "cur": _entry(success=1, fail=11, recent=[0] * 6 + [1] + [0] * 4),
+                "rival": _entry(success=12, fail=0),
+            },
+            {"0": "cur", "1": "rival"},
+        )
+        entry = state["profiles"]["cur"]
+        assert health.sample_count(entry) >= health.MIN_SAMPLES
+        assert health.recent_score(entry) < health.BAD_RATE
+        assert health.trailing_fails(entry) == health.MIN_TRAILING_FAILS - 1
+        index, reason, changed = health.choose_index(state, 0, 4)
+        assert (index, changed) == (0, False)
+        assert "hold(streak" in reason
+
+    def test_trailing_fail_streak_at_threshold_switches(self):
+        state = _state(
+            {
+                "cur": _entry(success=1, fail=11, recent=[0] * 6 + [1] + [0] * health.MIN_TRAILING_FAILS),
+                "rival": _entry(success=12, fail=0),
+            },
+            {"0": "cur", "1": "rival"},
+        )
+        entry = state["profiles"]["cur"]
+        assert health.recent_score(entry) < health.BAD_RATE
+        assert health.trailing_fails(entry) == health.MIN_TRAILING_FAILS
+        index, reason, changed = health.choose_index(state, 0, 4)
+        assert changed is True
+        assert index == 1
 
     def test_margin_prevents_churn_when_candidates_are_close(self):
         state = _state(
@@ -226,6 +275,20 @@ class TestBackfill:
         )
         assert state["profiles"] == {}
 
+    def test_index_label_not_guessed_when_history_has_several_profiles(self, tmp_path):
+        # 历史里出现多个画像时，"当前 index 属于哪个画像"并不是已知事实；
+        # 强行把唯一 index 绑到某个画像上会污染映射，宁可等运行时观测。
+        success_file = str(tmp_path / "u_success.json")
+        failure_file = str(tmp_path / "u_failure.json")
+        state_file = str(tmp_path / "u_profile_health.json")
+        _write_json(success_file, [
+            {"profile_id": "p_a", "success": True, "timestamp": 100.0},
+            {"profile_id": "p_b", "success": True, "timestamp": 200.0},
+        ])
+        state = health.backfill_from_history(state_file, success_file, failure_file, index=2)
+        assert set(state["profiles"]) == {"p_a", "p_b"}
+        assert state["index_labels"] == {}
+
 
 class TestReport:
     def test_report_lists_profiles_and_switches(self):
@@ -247,30 +310,30 @@ class TestSlidexPatchIntegration:
         import sys
         import types
 
-        calls = {"identity": 0, "recorded": []}
+        calls = {"identity": 0, "solve": 0, "solve_result": None}
 
         class XianyuSliderStealth:
             def __init__(self):
                 self.pure_user_id = "u1"
+                # 有头/非 Windows 时画像 index 才真正生效，测试默认走生效分支
+                self.headless = False
                 self.success_history_file = str(tmp_path / "u1_success.json")
                 self.failure_history_file = str(tmp_path / "u1_failure.json")
                 self.browser_profile_file = str(tmp_path / "u1_browser_profile.json")
                 self.browser_identity = {"profile_index": identity_index, "language_index": 0}
                 self.profile_id = "unknown"
                 self.browser_features = {"profile_id": "unknown"}
+                self._slider_did_slide = False
+                self._solve_result = True
 
             def _load_or_create_browser_identity(self, profile_count, language_count, profile_version=2):
                 calls["identity"] += 1
                 return dict(self.browser_identity)
 
-            def _save_success_record(self, trajectory_data):
-                calls["recorded"].append("success")
-
-            def _save_failure_record(self, trajectory_data, failure_info):
-                calls["recorded"].append("failure")
-
-            def _get_random_browser_features(self):
-                return {"profile_id": self.profile_id}
+            def solve_slider(self, max_retries=3, fast_mode=False):
+                calls["solve"] += 1
+                calls["solve_result"] = self._solve_result
+                return self._solve_result
 
         module = types.ModuleType("slidex.stealth")
         module.XianyuSliderStealth = XianyuSliderStealth
@@ -308,13 +371,94 @@ class TestSlidexPatchIntegration:
             saved = json.load(handle)
         assert saved["profiles"]["bad"]["retired_until"] > 0
 
-        slider._save_success_record({"verification_result": {"profile_id": "good"}})
-        slider._save_failure_record({"verification_result": {"profile_id": "good"}}, {})
-        assert calls["recorded"] == ["success", "failure"]
+        # 求解成功 → 记一次成功到当前画像块（index 3 → good）
+        slider.profile_id = "win_chrome_118_1600x900"
+        slider.browser_features = {"profile_id": "win_chrome_118_1600x900"}
+        slider._slider_did_slide = True
+        assert slider.solve_slider() is True
+        assert calls["solve"] == 1
         with open(state_file, "r", encoding="utf-8") as handle:
             saved = json.load(handle)
-        assert saved["profiles"]["good"]["success"] == 13
-        assert saved["profiles"]["good"]["fail"] == 1
+        assert saved["profiles"]["win_chrome_118_1600x900"]["success"] == 1
+        assert saved["index_labels"]["3"] == "win_chrome_118_1600x900"
+
+    def test_failure_counts_only_when_the_block_actually_slid(self, monkeypatch, tmp_path):
+        slider_cls, _ = self._install_fake_slidex(monkeypatch, tmp_path, identity_index=1)
+        from utils.slidex_patch import apply_slidex_profile_policy_patch
+
+        assert apply_slidex_profile_policy_patch() is True
+        slider = slider_cls()
+        slider._load_or_create_browser_identity(4, 3, 3)
+        slider.profile_id = "win_chrome_120_1366x768"
+        slider.browser_features = {"profile_id": "win_chrome_120_1366x768"}
+        state_file = str(tmp_path / "u1_profile_health.json")
+
+        # 滑动过但没过 → 记一次失败
+        slider._solve_result = False
+        slider._slider_did_slide = True
+        assert slider.solve_slider() is False
+        with open(state_file, "r", encoding="utf-8") as handle:
+            saved = json.load(handle)
+        assert saved["profiles"]["win_chrome_120_1366x768"]["fail"] == 1
+        assert saved["profiles"]["win_chrome_120_1366x768"]["success"] == 0
+
+        # 压根没滑动（没出现滑块/本地异常）→ 不记
+        slider._slider_did_slide = False
+        assert slider.solve_slider() is False
+        with open(state_file, "r", encoding="utf-8") as handle:
+            saved = json.load(handle)
+        assert saved["profiles"]["win_chrome_120_1366x768"]["fail"] == 1
+
+    def test_policy_is_skipped_when_index_is_ignored(self, monkeypatch, tmp_path):
+        # Windows + 无头时 slidex 强制 1600x900 画像，index 选择不生效：
+        # 既不换块，也不把结果记到被跳过的 index 上。
+        slider_cls, _ = self._install_fake_slidex(monkeypatch, tmp_path, identity_index=0)
+        state_file = str(tmp_path / "u1_profile_health.json")
+        _write_json(state_file, _state(
+            {
+                "bad": _entry(success=0, fail=12, recent=[0] * 12),
+                "good": _entry(success=12, fail=0, recent=[1] * 12),
+            },
+            {"0": "bad", "1": "good"},
+        ))
+        import utils.slidex_patch as patch
+
+        monkeypatch.setattr(patch.os, "name", "nt")
+        from utils.slidex_patch import apply_slidex_profile_policy_patch
+
+        assert apply_slidex_profile_policy_patch() is True
+        slider = slider_cls()
+        slider.headless = True
+        identity = slider._load_or_create_browser_identity(4, 3, 3)
+        assert identity["profile_index"] == 0
+        assert "profile_policy" not in identity
+
+        slider.profile_id = "win_chrome_118_1600x900"
+        slider.browser_features = {"profile_id": "win_chrome_118_1600x900"}
+        slider._slider_did_slide = True
+        assert slider.solve_slider() is True
+        with open(state_file, "r", encoding="utf-8") as handle:
+            saved = json.load(handle)
+        assert "win_chrome_118_1600x900" not in saved["profiles"]
+
+    def test_repeated_apply_does_not_double_wrap(self, monkeypatch, tmp_path):
+        slider_cls, calls = self._install_fake_slidex(monkeypatch, tmp_path, identity_index=0)
+        from utils.slidex_patch import apply_slidex_profile_policy_patch
+
+        assert apply_slidex_profile_policy_patch() is True
+        first = slider_cls.solve_slider
+        assert apply_slidex_profile_policy_patch() is True
+        assert slider_cls.solve_slider is first
+
+        slider = slider_cls()
+        slider.profile_id = "p"
+        slider.browser_features = {"profile_id": "p"}
+        slider._slider_did_slide = True
+        assert slider.solve_slider() is True
+        with open(str(tmp_path / "u1_profile_health.json"), "r", encoding="utf-8") as handle:
+            saved = json.load(handle)
+        # 只记一次，不是两层包装各记一次
+        assert saved["profiles"]["p"]["success"] == 1
 
     def test_patch_respects_kill_switch(self, monkeypatch, tmp_path):
         slider_cls, _ = self._install_fake_slidex(monkeypatch, tmp_path)
@@ -324,3 +468,4 @@ class TestSlidexPatchIntegration:
         assert apply_slidex_profile_policy_patch() is False
         # 原方法保持未被替换
         assert "patched" not in slider_cls._load_or_create_browser_identity.__qualname__
+        assert "patched" not in slider_cls.solve_slider.__qualname__

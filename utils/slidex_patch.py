@@ -16,6 +16,9 @@
 本补丁只负责"池子里还没有真人轨迹时"的合成兜底。真人轨迹由人工面板拖拽后通过
 ``SliderTrajectoryPool.save_trajectory`` 落库（见 utils/slider_human_fallback）。
 
+同文件还挂了第二个补丁 ``apply_slidex_profile_policy_patch``：按画像块（指纹）的
+历史成功率选择 index，并逐次记录成败，策略与存储见 utils/slider_profile_health。
+
 幂等、可重复调用；slidex 未安装 / 导入失败时静默跳过，不影响主流程。
 """
 
@@ -24,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -121,6 +125,7 @@ def apply_slidex_patch() -> bool:
 
 
 _PROFILE_POLICY_FLAG = "__xianyu_slidex_profile_policy_patched"
+_PROFILE_POLICY_WRAPPED_FLAG = "__xianyu_profile_policy_wrapped__"
 
 
 def _profile_policy_enabled() -> bool:
@@ -157,44 +162,88 @@ def _persist_identity_decision(slider: Any, identity: Dict[str, Any]) -> None:
                 payload = loaded
         payload.update(identity)
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        tmp_path = path + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, path)
+        # 临时名带 pid + 线程号：web 进程与 bot 进程可能同时写同一个账号的画像文件
+        tmp_path = "%s.%d.%d.tmp" % (path, os.getpid(), threading.get_ident())
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, path)
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
     except Exception as exc:  # pragma: no cover - 落盘失败不影响求解
         logger.debug(f"profile policy persist skipped: {exc}")
 
 
-def _record_profile_outcome(slider: Any, success: bool, trajectory_data: Optional[Dict[str, Any]] = None) -> None:
-    """把本次滑块结果记到对应画像块上。只在画像真正下发的链路上记。"""
-    if not getattr(slider, "browser_features", None):
+def _record_profile_outcome(slider: Any, success: bool) -> None:
+    """把一次求解结果记到本次实际下发的画像块上。
+
+    只在"画像真被应用"的链路上记：``browser_features`` 为空说明这条路根本没走
+    画像注入；Windows 无头下 slidex 会把画像强制成 1600x900，index 选择不生效，
+    记到 index 标签上会污染统计。
+    """
+    if not _profile_policy_effective(slider):
         return
-    if getattr(slider, "_cdp_connected", False):
+    features = getattr(slider, "browser_features", None)
+    if not features:
         return
     try:
         from utils import slider_profile_health as health
 
-        verification = (trajectory_data or {}).get("verification_result") or {}
         profile_id = str(
-            verification.get("profile_id") or getattr(slider, "profile_id", "") or ""
+            getattr(slider, "profile_id", "") or (features or {}).get("profile_id") or ""
         )
         if not profile_id or profile_id in {"unknown", "unassigned"}:
             return
         state_file, success_file, failure_file = _profile_paths(slider)
+        index = _profile_index(slider)
         if not os.path.exists(state_file):
-            health.backfill_from_history(state_file, success_file, failure_file)
-        index = getattr(slider, "_xy_profile_index", None)
+            health.backfill_from_history(state_file, success_file, failure_file, index=index)
         health.record_outcome(state_file, profile_id, success, index=index)
     except Exception as exc:  # pragma: no cover - 统计失败不影响求解
         logger.debug(f"profile health record skipped: {exc}")
 
 
+def _profile_index(slider: Any) -> Optional[int]:
+    """本次实际使用的画像 index。
+
+    优先用策略补丁记下的 ``_xy_profile_index``；补丁安装晚于实例初始化时该属性
+    不存在，退回 ``browser_identity`` 里真正参与选画像的那个 index（两者语义一致）。
+    """
+    index = getattr(slider, "_xy_profile_index", None)
+    if index is None:
+        identity = getattr(slider, "browser_identity", None) or {}
+        index = identity.get("profile_index") if isinstance(identity, dict) else None
+    try:
+        return int(index) if index is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _profile_policy_effective(slider: Any) -> bool:
+    """画像 index 是否真的会影响本次浏览器特征。
+
+    slidex 在「Windows + 无头」时会把画像强制成 1600x900 的桌面块（见
+    ``_get_random_browser_features`` 里的 ``preferred_profile``），选中的 index 被
+    忽略——此时既不该据此换块，也不该把结果记到被跳过的 index 上。
+    """
+    return not (os.name == "nt" and bool(getattr(slider, "headless", False)))
+
+
 def apply_slidex_profile_policy_patch() -> bool:
     """按画像块的历史成功率调画像：坏块降温、好块升温（粘性，不随机轮换）。
 
-    覆盖 slidex ``XianyuSliderStealth`` 的三个方法：
+    覆盖 slidex ``XianyuSliderStealth`` 的两个入口：
     - ``_load_or_create_browser_identity``：选 index 前先过一遍健康度策略；
-    - ``_save_success_record`` / ``_save_failure_record``：把结果累计到画像块。
+    - ``solve_slider``：每次求解结束记一次结果（成功 / 滑了但没过 / 没滑不算）。
+
+    只在 ``solve_slider`` 这一层记结果，是为了让分子分母对称：slidex 内部
+    ``_save_success_record`` 受 ``enable_learning`` 控制、一次求解只记一次，而
+    ``_save_failure_record`` 每次失败尝试都记，直接挂在那两个方法上会把
+    "多次失败 vs 一次成功" 算进成功率，也会在关闭学习时只剩失败没有成功。
 
     幂等；slidex 未安装时静默跳过；``XY_SLIDER_PROFILE_POLICY=0`` 可整体关闭。
     """
@@ -217,26 +266,41 @@ def apply_slidex_profile_policy_patch() -> bool:
         return False
 
     original_identity = getattr(slider_cls, "_load_or_create_browser_identity", None)
-    if original_identity is None:
+    original_solve = getattr(slider_cls, "solve_slider", None)
+    if original_identity is None or original_solve is None:
         return False
+    if getattr(original_solve, _PROFILE_POLICY_WRAPPED_FLAG, False):
+        # 已被更早的一次安装包过（例如模块被重新导入后 class 引用不同），
+        # 再包一层会重复计数。
+        try:
+            setattr(slider_cls, _PROFILE_POLICY_FLAG, True)
+        except Exception:
+            pass
+        return True
 
     def patched_identity(self, profile_count, language_count, profile_version=2):
         identity = original_identity(self, profile_count, language_count, profile_version)
         try:
-            candidate_count = int(profile_count or 0)
-            state_file, success_file, failure_file = _profile_paths(self)
-            state = health.load_state(state_file)
-            if not os.path.exists(state_file):
-                state = health.backfill_from_history(state_file, success_file, failure_file)
             try:
                 current_index = int(identity.get("profile_index", 0))
             except (TypeError, ValueError):
                 current_index = 0
-            chosen, reason, changed = health.choose_index(state, current_index, candidate_count)
             try:
-                self._xy_profile_index = chosen
+                self._xy_profile_index = current_index
             except Exception:
                 pass
+            if not _profile_policy_effective(self):
+                return identity
+
+            candidate_count = int(profile_count or 0)
+            state_file, success_file, failure_file = _profile_paths(self)
+            if os.path.exists(state_file):
+                state = health.load_state(state_file)
+            else:
+                state = health.backfill_from_history(
+                    state_file, success_file, failure_file, index=current_index
+                )
+            chosen, reason, changed = health.choose_index(state, current_index, candidate_count)
             if not changed:
                 logger.debug(f"【{getattr(self, 'pure_user_id', '?')}】画像策略: {reason}")
                 return identity
@@ -252,6 +316,7 @@ def apply_slidex_profile_policy_patch() -> bool:
             }
             try:
                 self.browser_identity = new_identity
+                self._xy_profile_index = chosen
             except Exception:
                 pass
             _persist_identity_decision(self, new_identity)
@@ -264,25 +329,21 @@ def apply_slidex_profile_policy_patch() -> bool:
             logger.debug(f"profile policy choose skipped: {exc}")
             return identity
 
-    original_success = getattr(slider_cls, "_save_success_record", None)
-    original_failure = getattr(slider_cls, "_save_failure_record", None)
-
-    def patched_success(self, trajectory_data):
-        if original_success is not None:
-            original_success(self, trajectory_data)
-        _record_profile_outcome(self, True, trajectory_data)
-
-    def patched_failure(self, trajectory_data, failure_info):
-        if original_failure is not None:
-            original_failure(self, trajectory_data, failure_info)
-        _record_profile_outcome(self, False, trajectory_data)
+    def patched_solve_slider(self, *args, **kwargs):
+        result = original_solve(self, *args, **kwargs)
+        try:
+            # 没滑动就返回失败（没出现滑块 / 本地异常）不能算到画像头上；
+            # 滑动过但没拿到 token 才算这个画像的一次失败。
+            if bool(result) or bool(getattr(self, "_slider_did_slide", False)):
+                _record_profile_outcome(self, bool(result))
+        except Exception as exc:  # pragma: no cover - 统计失败不影响求解
+            logger.debug(f"profile policy outcome skipped: {exc}")
+        return result
 
     try:
+        setattr(patched_solve_slider, _PROFILE_POLICY_WRAPPED_FLAG, True)
         slider_cls._load_or_create_browser_identity = patched_identity
-        if original_success is not None:
-            slider_cls._save_success_record = patched_success
-        if original_failure is not None:
-            slider_cls._save_failure_record = patched_failure
+        slider_cls.solve_slider = patched_solve_slider
         setattr(slider_cls, _PROFILE_POLICY_FLAG, True)
     except Exception as exc:  # pragma: no cover
         logger.debug(f"profile policy patch failed: {exc}")

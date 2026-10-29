@@ -20,6 +20,10 @@
 一个月前的连续失败长期按住一个现在好用的块；同时用固定的先验均值做收缩，样本少时
 不会因为一两次成功就冲到满分。之所以不用"最近 N 条"窗口：窗口边缘会把一段已经过去
 的惩罚期失败一直算在账上，看起来永远很差。
+
+换块需要同时满足三条：样本足够（MIN_SAMPLES）、平滑成功率低于 BAD_RATE、并且
+**最近连续失败**达到 MIN_TRAILING_FAILS。最后一条是刻意的：EWMA 掉到阈值以下可能
+只是几次零星失败叠加，单凭分数就换块会让画像在"看起来都一般"的几个块之间来回抖。
 """
 
 from __future__ import annotations
@@ -42,6 +46,7 @@ SHRINK_K = 4.0              # 向先验均值收缩的等效样本数
 EWMA_ALPHA = 0.15           # 单次结果的权重；越小越平滑、越看重历史
 RECENT_WINDOW = 40          # 仅用于报告/审计，保留最近多少次原始结果
 MIN_SAMPLES = 8             # 观测样本不足时不判"坏块"
+MIN_TRAILING_FAILS = 5      # 还必须"连续"失败这么多次，避免单次抖动就换块
 BAD_RATE = 0.45             # 平滑成功率低于此值视为坏块
 SWITCH_MARGIN = 0.08        # 目标画像必须比当前画像高出的分数
 SWITCH_COOLDOWN_S = 6 * 3600      # 两次切换之间至少间隔，防抖动
@@ -94,18 +99,27 @@ def load_state(path: str) -> Dict[str, Any]:
 
 
 def save_state(path: str, state: Dict[str, Any]) -> None:
-    """原子落盘（先写临时文件再 replace），失败只记不抛。"""
+    """原子落盘（先写临时文件再 replace），失败只记不抛。
+
+    临时文件名带 pid + 线程号：web 进程与 bot 进程可能同时写同一个账号的统计，
+    共用 ``xxx.tmp`` 会互相覆盖成半截 JSON。``os.replace`` 本身是原子的，
+    各自换成自己的完整副本，最坏情况是后写覆盖先写（统计丢一条，不会损坏文件）。
+    """
     directory = os.path.dirname(path) or "."
+    tmp_path = "%s.%d.%d.tmp" % (path, os.getpid(), threading.get_ident())
     try:
         os.makedirs(directory, exist_ok=True)
-        tmp_path = path + ".tmp"
         state["schema"] = STATE_SCHEMA
         state["updated_at"] = time.time()
         with open(tmp_path, "w", encoding="utf-8") as handle:
             json.dump(state, handle, ensure_ascii=False, indent=2)
         os.replace(tmp_path, path)
     except Exception:
-        pass
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
 
 
 def _new_entry(ts: float) -> Dict[str, Any]:
@@ -198,6 +212,16 @@ def cumulative_score(entry: Dict[str, Any]) -> float:
     return _smoothed(int(entry.get("success") or 0), int(entry.get("fail") or 0))
 
 
+def trailing_fails(entry: Dict[str, Any]) -> int:
+    """最近连续失败次数（从末尾往前数）。"""
+    count = 0
+    for flag in reversed(_recent_flags(entry)):
+        if flag:
+            break
+        count += 1
+    return count
+
+
 def sample_count(entry: Dict[str, Any]) -> int:
     return int(entry.get("ewma_n") or 0)
 
@@ -221,8 +245,8 @@ def choose_index(
 
     规则（粘性，不随机轮换）：
     - 当前画像没被判坏 → 原样保留；
-    - near-window 样本 < MIN_SAMPLES → 保留（先攒数据）；
-    - 当前画像近窗成功率 < BAD_RATE，且存在可用竞品比它高 SWITCH_MARGIN 分以上、
+    - 样本 < MIN_SAMPLES 或连续失败不足 MIN_TRAILING_FAILS → 保留（先攒数据/别被抖动骗）；
+    - 当前画像平滑成功率 < BAD_RATE，且存在可用竞品比它高 SWITCH_MARGIN 分以上、
       且不在 cooldown 内 → 换块；被换下的块做指数退避冻结。
     """
     now = float(now if now is not None else time.time())
@@ -242,11 +266,15 @@ def choose_index(
     current_entry = _entry_for(state, current_index)
     current_score = recent_score(current_entry)
     samples = sample_count(current_entry)
+    streak = trailing_fails(current_entry)
 
     if samples < MIN_SAMPLES:
         return current_index, "warmup(%d/%d)" % (samples, MIN_SAMPLES), False
     if current_score >= BAD_RATE:
         return current_index, "keep(score=%.2f n=%d)" % (current_score, samples), False
+    if streak < MIN_TRAILING_FAILS:
+        # 分数已经很低但只是零星失败：等证据够了再动，避免一次网络抖动就换指纹
+        return current_index, "hold(streak=%d/%d, score=%.2f)" % (streak, MIN_TRAILING_FAILS, current_score), False
     if now < float(state.get("cooldown_until") or 0.0):
         return current_index, "hold(cooldown, score=%.2f)" % current_score, False
 
@@ -267,7 +295,7 @@ def choose_index(
     if best_score < current_score + SWITCH_MARGIN:
         return current_index, "keep(margin %.2f->%.2f)" % (current_score, best_score), False
 
-    return best, "switch(bad %.2f -> best %.2f)" % (current_score, best_score), True
+    return best, "switch(bad %.2f streak=%d -> best %.2f)" % (current_score, streak, best_score), True
 
 
 def apply_switch(
@@ -308,26 +336,27 @@ def label_for_index(state: Dict[str, Any], index: int) -> str:
     return str((state.get("index_labels") or {}).get(str(int(index))) or "")
 
 
-def format_report(state: Dict[str, Any], *, title: str = "") -> str:
+def format_report(state: Dict[str, Any], *, title: str = "", now: Optional[float] = None) -> str:
     """把状态渲染成等宽表格，供日志/CLI 直接打印。"""
+    now = float(now if now is not None else time.time())
     lines: List[str] = []
     if title:
         lines.append(title)
-    profiles = state.get("profiles") or {}
-    if not profiles:
+    profiles = dict(state.get("profiles") or {})
+    valid = {k: v for k, v in profiles.items() if isinstance(v, dict)}
+    if not valid:
         lines.append("（暂无画像统计数据）")
         return "\n".join(lines)
+    cooldown_until = float(state.get("cooldown_until") or 0.0)
     lines.append(
-        "%-30s %6s %6s %9s %9s %9s %8s  %s"
-        % ("profile_id", "succ", "fail", "total", "cum_rate", "ewma_rate", "samples", "last")
+        "%-30s %6s %6s %9s %9s %9s %8s  %-16s %s"
+        % ("profile_id", "succ", "fail", "total", "cum_rate", "ewma_rate", "samples", "last", "state")
     )
     rows = sorted(
-        profiles.items(),
+        valid.items(),
         key=lambda kv: -(int(kv[1].get("success") or 0) + int(kv[1].get("fail") or 0)),
     )
     for profile_id, entry in rows:
-        if not isinstance(entry, dict):
-            continue
         succ = int(entry.get("success") or 0)
         fail = int(entry.get("fail") or 0)
         total = succ + fail
@@ -335,14 +364,23 @@ def format_report(state: Dict[str, Any], *, title: str = "") -> str:
         recent = recent_score(entry) * 100.0
         last_ts = max(float(entry.get("last_success_ts") or 0), float(entry.get("last_fail_ts") or 0))
         last = time.strftime("%Y-%m-%d %H:%M", time.localtime(last_ts)) if last_ts else "-"
+        retired_until = float(entry.get("retired_until") or 0.0)
+        status = "-"
+        if retired_until > now:
+            status = "冻结 %.1fh" % ((retired_until - now) / 3600.0)
         lines.append(
-            "%-30s %6d %6d %9d %8.1f%% %8.1f%% %8d  %s"
-            % (profile_id, succ, fail, total, cum, recent, sample_count(entry), last)
+            "%-30s %6d %6d %9d %8.1f%% %8.1f%% %8d  %-16s %s"
+            % (profile_id, succ, fail, total, cum, recent, sample_count(entry), last, status)
         )
     index_labels = state.get("index_labels") or {}
     if index_labels:
         mapping = ", ".join("%s=%s" % (k, v) for k, v in sorted(index_labels.items(), key=lambda kv: int(kv[0])))
         lines.append("index -> profile: " + mapping)
+    if cooldown_until > now:
+        lines.append(
+            "换块冷却中至 %s（此期间即使判坏也保持当前画像）"
+            % time.strftime("%Y-%m-%d %H:%M", time.localtime(cooldown_until))
+        )
     switches = state.get("switch_log") or []
     if switches:
         lines.append("最近切换:")
@@ -402,8 +440,12 @@ def backfill_from_history(
             state["profiles"][profile_id] = entry
         _apply_outcome(entry, success, ts)
     if index is not None:
-        for profile_id in list(state["profiles"]):
-            state["index_labels"][str(int(index))] = profile_id
+        # 只有当历史里只出现过一个画像时，"当前 index 就是这个画像"才是确定事实。
+        # 出现多个画像时猜哪个属于哪个 index 会污染映射，宁可等运行时观测再绑定
+        # （record_outcome 的 index 参数来自页面实际下发的 profile_id）。
+        distinct = [pid for pid, entry in state["profiles"].items() if isinstance(entry, dict)]
+        if len(distinct) == 1:
+            state["index_labels"][str(int(index))] = distinct[0]
     with _LOCK:
         save_state(path, state)
     return state
@@ -413,8 +455,13 @@ def _cli(argv: Optional[Iterable[str]] = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(description="打印浏览器画像（指纹块）健康度统计")
-    parser.add_argument("base_dir", nargs="?", default="trajectory_history", help="记录目录（默认 trajectory_history）")
     parser.add_argument("user_id", help="账号 / pure_user_id")
+    parser.add_argument(
+        "--dir",
+        default="trajectory_history",
+        dest="base_dir",
+        help="记录目录（默认 trajectory_history）",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
     path = state_path(args.base_dir, args.user_id)
     state = load_state(path)
@@ -429,6 +476,7 @@ if __name__ == "__main__":  # pragma: no cover
 __all__ = [
     "BAD_RATE",
     "MIN_SAMPLES",
+    "MIN_TRAILING_FAILS",
     "RECENT_WINDOW",
     "WIN32_PROFILE_LIMIT",
     "apply_switch",
@@ -443,4 +491,5 @@ __all__ = [
     "sample_count",
     "save_state",
     "state_path",
+    "trailing_fails",
 ]
