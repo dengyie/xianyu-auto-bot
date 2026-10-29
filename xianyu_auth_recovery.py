@@ -1518,6 +1518,13 @@ class XianyuAuthRecoveryMixin:
             # 使用集成的 Playwright 登录方法（slidex）
             from slidex.stealth import XianyuSliderStealth
             from slidex import SlidexConfig as _SlidexConfig
+            # 画像健康度策略：坏块降温、好块升温（幂等；失败不影响登录）
+            try:
+                from utils.slidex_patch import apply_slidex_profile_policy_patch
+
+                apply_slidex_profile_policy_patch()
+            except Exception as _policy_e:
+                logger.debug(f"【{self.cookie_id}】画像策略补丁跳过: {_policy_e}")
             browser_mode = "有头" if show_browser else "无头"
             logger.info(f"【{self.cookie_id}】开始使用{browser_mode}浏览器进行密码登录刷新Cookie...")
             logger.info(f"【{self.cookie_id}】使用账号: {username}")

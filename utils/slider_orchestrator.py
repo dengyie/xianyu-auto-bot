@@ -394,6 +394,15 @@ async def run_slider_async_strict(
     except Exception as patch_e:  # pragma: no cover - 兜底，绝不让补丁影响求解
         logger.debug(f"slidex patch apply failed: {patch_e}")
 
+    # 画像健康度策略（幂等）：按各指纹块的历史失败率降温/升温，见
+    # utils/slider_profile_health。slidex 缺失或 XY_SLIDER_PROFILE_POLICY=0 时静默跳过。
+    try:
+        from utils.slidex_patch import apply_slidex_profile_policy_patch
+
+        apply_slidex_profile_policy_patch()
+    except Exception as policy_e:  # pragma: no cover
+        logger.debug(f"slidex profile policy apply failed: {policy_e}")
+
     if _cdp_endpoint_from_env() and hasattr(slider, "solve_on_existing_page"):
         engine = "cdp"
     success, cookies = await _invoke_slider_async(slider, url, **kwargs)

@@ -21,8 +21,13 @@
 
 from __future__ import annotations
 
+import json
+import os
 import random
-from typing import List, Tuple
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
+from loguru import logger
 
 
 def human_like_trajectory(distance: float, attempt: int = 1) -> List[Tuple[float, float, float]]:
@@ -115,4 +120,178 @@ def apply_slidex_patch() -> bool:
     return patched
 
 
-__all__ = ["human_like_trajectory", "apply_slidex_patch"]
+_PROFILE_POLICY_FLAG = "__xianyu_slidex_profile_policy_patched"
+
+
+def _profile_policy_enabled() -> bool:
+    return os.environ.get("XY_SLIDER_PROFILE_POLICY", "1").strip().lower() not in {
+        "0",
+        "false",
+        "off",
+        "no",
+    }
+
+
+def _profile_paths(slider: Any) -> Tuple[str, str, str]:
+    """返回 (健康度状态文件, success.json, failure.json) 三个路径。"""
+    from utils import slider_profile_health as health
+
+    user_id = str(getattr(slider, "pure_user_id", "") or "unknown")
+    success_file = str(getattr(slider, "success_history_file", "") or "")
+    failure_file = str(getattr(slider, "failure_history_file", "") or "")
+    base_dir = os.path.dirname(success_file) or "trajectory_history"
+    return health.state_path(base_dir, user_id), success_file, failure_file
+
+
+def _persist_identity_decision(slider: Any, identity: Dict[str, Any]) -> None:
+    """把换块结果写回 browser_profile.json（供 legacy 链路/重启后复用）。"""
+    path = str(getattr(slider, "browser_profile_file", "") or "")
+    if not path:
+        return
+    try:
+        payload: Dict[str, Any] = {}
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as handle:
+                loaded = json.load(handle)
+            if isinstance(loaded, dict):
+                payload = loaded
+        payload.update(identity)
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, path)
+    except Exception as exc:  # pragma: no cover - 落盘失败不影响求解
+        logger.debug(f"profile policy persist skipped: {exc}")
+
+
+def _record_profile_outcome(slider: Any, success: bool, trajectory_data: Optional[Dict[str, Any]] = None) -> None:
+    """把本次滑块结果记到对应画像块上。只在画像真正下发的链路上记。"""
+    if not getattr(slider, "browser_features", None):
+        return
+    if getattr(slider, "_cdp_connected", False):
+        return
+    try:
+        from utils import slider_profile_health as health
+
+        verification = (trajectory_data or {}).get("verification_result") or {}
+        profile_id = str(
+            verification.get("profile_id") or getattr(slider, "profile_id", "") or ""
+        )
+        if not profile_id or profile_id in {"unknown", "unassigned"}:
+            return
+        state_file, success_file, failure_file = _profile_paths(slider)
+        if not os.path.exists(state_file):
+            health.backfill_from_history(state_file, success_file, failure_file)
+        index = getattr(slider, "_xy_profile_index", None)
+        health.record_outcome(state_file, profile_id, success, index=index)
+    except Exception as exc:  # pragma: no cover - 统计失败不影响求解
+        logger.debug(f"profile health record skipped: {exc}")
+
+
+def apply_slidex_profile_policy_patch() -> bool:
+    """按画像块的历史成功率调画像：坏块降温、好块升温（粘性，不随机轮换）。
+
+    覆盖 slidex ``XianyuSliderStealth`` 的三个方法：
+    - ``_load_or_create_browser_identity``：选 index 前先过一遍健康度策略；
+    - ``_save_success_record`` / ``_save_failure_record``：把结果累计到画像块。
+
+    幂等；slidex 未安装时静默跳过；``XY_SLIDER_PROFILE_POLICY=0`` 可整体关闭。
+    """
+    if not _profile_policy_enabled():
+        return False
+    try:
+        import slidex.stealth as _stealth
+    except Exception:
+        return False
+
+    slider_cls = getattr(_stealth, "XianyuSliderStealth", None)
+    if slider_cls is None:
+        return False
+    if getattr(slider_cls, _PROFILE_POLICY_FLAG, False):
+        return True
+
+    try:
+        from utils import slider_profile_health as health
+    except Exception:
+        return False
+
+    original_identity = getattr(slider_cls, "_load_or_create_browser_identity", None)
+    if original_identity is None:
+        return False
+
+    def patched_identity(self, profile_count, language_count, profile_version=2):
+        identity = original_identity(self, profile_count, language_count, profile_version)
+        try:
+            candidate_count = int(profile_count or 0)
+            state_file, success_file, failure_file = _profile_paths(self)
+            state = health.load_state(state_file)
+            if not os.path.exists(state_file):
+                state = health.backfill_from_history(state_file, success_file, failure_file)
+            try:
+                current_index = int(identity.get("profile_index", 0))
+            except (TypeError, ValueError):
+                current_index = 0
+            chosen, reason, changed = health.choose_index(state, current_index, candidate_count)
+            try:
+                self._xy_profile_index = chosen
+            except Exception:
+                pass
+            if not changed:
+                logger.debug(f"【{getattr(self, 'pure_user_id', '?')}】画像策略: {reason}")
+                return identity
+            state = health.apply_switch(state, current_index, chosen, reason)
+            health.save_state(state_file, state)
+            new_identity = dict(identity)
+            new_identity["profile_index"] = chosen
+            new_identity["profile_policy"] = {
+                "from": current_index,
+                "to": chosen,
+                "reason": reason,
+                "at": time.time(),
+            }
+            try:
+                self.browser_identity = new_identity
+            except Exception:
+                pass
+            _persist_identity_decision(self, new_identity)
+            logger.warning(
+                f"【{getattr(self, 'pure_user_id', '?')}】画像切换: {reason} "
+                f"(index {current_index} -> {chosen}, {health.label_for_index(state, chosen) or '未知画像'})"
+            )
+            return new_identity
+        except Exception as exc:  # pragma: no cover - 兜底，绝不影响求解
+            logger.debug(f"profile policy choose skipped: {exc}")
+            return identity
+
+    original_success = getattr(slider_cls, "_save_success_record", None)
+    original_failure = getattr(slider_cls, "_save_failure_record", None)
+
+    def patched_success(self, trajectory_data):
+        if original_success is not None:
+            original_success(self, trajectory_data)
+        _record_profile_outcome(self, True, trajectory_data)
+
+    def patched_failure(self, trajectory_data, failure_info):
+        if original_failure is not None:
+            original_failure(self, trajectory_data, failure_info)
+        _record_profile_outcome(self, False, trajectory_data)
+
+    try:
+        slider_cls._load_or_create_browser_identity = patched_identity
+        if original_success is not None:
+            slider_cls._save_success_record = patched_success
+        if original_failure is not None:
+            slider_cls._save_failure_record = patched_failure
+        setattr(slider_cls, _PROFILE_POLICY_FLAG, True)
+    except Exception as exc:  # pragma: no cover
+        logger.debug(f"profile policy patch failed: {exc}")
+        return False
+    return True
+
+
+__all__ = [
+    "human_like_trajectory",
+    "apply_slidex_patch",
+    "apply_slidex_profile_policy_patch",
+]

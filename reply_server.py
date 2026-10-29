@@ -102,6 +102,13 @@ def _load_slider_runtime():
         )
         from slidex import SlidexConfig
         from slidex._concurrency import concurrency_manager
+        # 画像健康度策略：按指纹块历史失败率决定换不换画像（幂等，失败静默）
+        try:
+            from utils.slidex_patch import apply_slidex_profile_policy_patch
+
+            apply_slidex_profile_policy_patch()
+        except Exception:
+            pass
         return XianyuSliderStealth, probe_cookie_verification_from_cookie, SlidexConfig, concurrency_manager
     except ModuleNotFoundError as exc:
         if exc.name != "slidex":
