@@ -178,7 +178,6 @@ class PasswordLoginMixin:
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
                 '--disable-blink-features=AutomationControlled',
-                '--disable-web-security',
                 '--disable-features=VizDisplayCompositor',
                 '--lang=zh-CN',
                 '--disable-infobars',
@@ -226,7 +225,7 @@ class PasswordLoginMixin:
                         user_agent=browser_features['user_agent'],
                         locale=browser_features['locale'],
                         accept_downloads=True,
-                        ignore_https_errors=True,
+                        ignore_https_errors=False,
                         extra_http_headers={
                             'Accept-Language': browser_features['accept_lang']
                         }

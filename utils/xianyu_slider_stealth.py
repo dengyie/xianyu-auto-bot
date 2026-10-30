@@ -2043,7 +2043,7 @@ class XianyuSliderStealth(SliderVerificationMixin, SliderHarvestMixin, SliderTra
                 persistent_launch_options.update(context_options)
                 persistent_launch_options.update({
                     'accept_downloads': True,
-                    'ignore_https_errors': True,
+                    'ignore_https_errors': False,
                 })
                 logger.info(f"【{self.pure_user_id}】token_refresh滑块优先复用账号级浏览器目录: {user_data_dir}")
                 try:
@@ -5152,7 +5152,7 @@ class XianyuSliderStealth(SliderVerificationMixin, SliderHarvestMixin, SliderTra
             user_agent=browser_features['user_agent'],
             locale=browser_features['locale'],
             accept_downloads=True,
-            ignore_https_errors=True,
+            ignore_https_errors=False,
             extra_http_headers={
                 'Accept-Language': browser_features['accept_lang']
             }
