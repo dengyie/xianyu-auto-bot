@@ -88,7 +88,9 @@ zstandard>=0.22.0
 # 安装命令（生产、CI 和镜像使用 requirements.lock）:
 # pip install --upgrade pip
 # pip install --require-hashes -r requirements.lock
-# 重新生成: uv pip compile requirements.txt --python-version 3.11 --python-platform x86_64-unknown-linux-gnu --generate-hashes --no-emit-package slidex --output-file requirements.lock
+# 重新生成: uvx uv@0.11.28 pip compile requirements.txt --python-version 3.11 --python-platform x86_64-unknown-linux-gnu --generate-hashes --no-emit-package slidex --output-file requirements.lock
+# 注意: uv 版本必须与 CI 钉版一致（docker-image.yml/test.yml 用 0.11.28）。
+# 不同版本的 via 注释格式不同（如 0.12.5 输出多行），CI「Verify dependency lock」零 diff 校验会失败。
 # playwright install chromium
 # playwright install-deps chromium  # Linux系统需要
 #
